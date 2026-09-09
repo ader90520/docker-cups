@@ -20,7 +20,8 @@ ader90520/cups:latest
 ```
 配置
 登录 CUPS 网页界面，连接端口 631（例如 https://localhost:631），并根据您的需求配置 CUPS。 默认凭证：管理员 / 管理员
-要更改管理员密码，请将环境变量 ADMIN_PASSWORD 设置为你的密码.
+要更改管理员密码，请将环境变量 ADMIN_PASSWORD 设置为你的密码
+现在的代码添加了privileged指令使得容器获取了root权限。现在容器能识别USB的热插拔动作，打印机断电通电容器都能识别了。.
 ```bash
 docker run -d \
 --name=cups \
