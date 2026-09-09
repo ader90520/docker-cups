@@ -17,6 +17,7 @@ docker run -d \
 -v /dev/bus/usb:/dev/bus/usb \
 -e ADMIN_PASSWORD=admin \
 ader90520/cups:latest
+
 ```
 配置
 登录 CUPS 网页界面，连接端口 631（例如 https://localhost:631），并根据您的需求配置 CUPS。 默认凭证：管理员 / 管理员
@@ -33,5 +34,6 @@ docker run -d \
 -v /dev/bus/usb:/dev/bus/usb \
 -e ADMIN_PASSWORD=admin \
 ader90520/cups:latest
+
 
 ```
