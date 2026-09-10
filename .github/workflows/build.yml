@@ -32,5 +32,5 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          # 下面这行的 username/cups 会自动变成您 Docker Hub 的真实用户名
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/cups:latest
+          provenance: false
+          tags: ader90520/cups:latest
