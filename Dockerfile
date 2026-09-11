@@ -1,48 +1,52 @@
-ARG ARCH=amd64
-FROM debian:bookworm-slim
+FROM debian:12-slim
 
-ENV ADMIN_PASSWORD=admin
+ENV DEBIAN_FRONTEND=noninteractive
 
-# 安装 CUPS、全套打印驱动以及 Python 依赖
-RUN apt-get update && apt-get install -y \
-    sudo cups cups-bsd cups-filters foomatic-db-compressed-ppds \
-    printer-driver-all openprinting-ppds hplip \
-    python3 python3-requests \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# 安装 CUPS 2.4.x、基础驱动库及 Python 运行环境
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cups \
+    cups-client \
+    cups-filters \
+    cups-ipp-utils \
+    printer-driver-all \
+    printer-driver-gutenprint \
+    hplip \
+    foomatic-db-compressed-ppds \
+    openprinting-ppds \
+    avahi-daemon \
+    avahi-utils \
+    dbus \
+    libnss-mdns \
+    locales \
+    python3 \
+    python3-requests \
+    procps \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# 创建管理用户
-RUN adduser --home /home/admin --shell /bin/bash --gecos "admin" --disabled-password admin \
-  && adduser admin sudo \
-  && adduser admin lp \
-  && adduser admin lpadmin
+# 配置系统语言与字符编码
+RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
+    sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
+    locale-gen
 
-RUN echo 'admin ALL=(ALL:ALL) NOPASSWD:ALL' >> /etc/sudoers
+ENV LANG=zh_CN.UTF-8 \
+    LC_ALL=zh_CN.UTF-8
 
-# 预设中文语言与允许任意访问
-RUN /usr/sbin/cupsd \
-  && while [ ! -f /var/run/cups/cupsd.pid ]; do sleep 1; done \
-  && cupsctl --remote-admin --remote-any --share-printers \
-  && kill $(cat /var/run/cups/cupsd.pid) \
-  && echo "ServerAlias *" >> /etc/cups/cupsd.conf \
-  && echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf \
-  && echo "DefaultLanguage zh_CN" >> /etc/cups/cupsd.conf
+# 修复中文字符集模板缺失导致的白屏与不跳转
+RUN mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/doc-root/zh_CN
 
-# 拷贝汉化文件
+# 先把系统原生英文模板无损拷贝至 zh_CN 兜底，再用汉化包覆盖
+RUN cp -r /usr/share/cups/templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
 COPY ./i18/zh_CN/zh_CN/ /usr/share/cups/templates/zh_CN/
-RUN mkdir -p /usr/share/cups/doc-root/zh_CN
 COPY ./i18/zh_CN/index.html /usr/share/cups/doc-root/zh_CN/index.html
 
-# 拷贝后台打印脚本
-COPY mail_print.py /usr/local/bin/mail_print.py
-RUN chmod +x /usr/local/bin/mail_print.py
+# 放置邮件打印守护程序与启动脚本
+COPY mail_print.py /opt/mail_print.py
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh /opt/mail_print.py
 
-# 备份初始配置
-RUN cp -rp /etc/cups /etc/cups-skel
+EXPOSE 631 5353/udp
 
-ADD docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-ENTRYPOINT [ "docker-entrypoint.sh" ]
-CMD ["cupsd", "-f"]
 VOLUME ["/etc/cups"]
-EXPOSE 631
+
+ENTRYPOINT ["/entrypoint.sh"]
