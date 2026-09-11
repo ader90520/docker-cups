@@ -5,13 +5,13 @@ import os
 import time
 import subprocess
 import requests
+from PIL import Image
 
 IMAP_SERVER = os.getenv("IMAP_SERVER", "").strip()
 EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
 EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 NOTIFY_URL = os.getenv("NOTIFY_URL", "").strip()
 
-# 内置智能白名单关键词
 DEFAULT_KEYWORDS = (
     "打,print,作业,试卷,练习,复习,打卡,"
     "语文,数学,英语,物理,化学,生物,历史,地理,政治,科学,"
@@ -20,8 +20,20 @@ DEFAULT_KEYWORDS = (
 )
 TRIGGER_KEYWORD = os.getenv("TRIGGER_KEYWORD", DEFAULT_KEYWORDS).strip()
 
-SAVE_DIR = "/tmp/print_jobs"
+SAVE_DIR = "/var/spool/cups/tmp_jobs"
 os.makedirs(SAVE_DIR, exist_ok=True)
+
+def get_system_profile():
+    """读取启动脚本探测出的硬件档位"""
+    try:
+        if os.path.exists("/tmp/cups_profile"):
+            with open("/tmp/cups_profile", "r") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return "LOW_MEM"
+
+SYSTEM_PROFILE = get_system_profile()
 
 def send_notification(title, content):
     if not NOTIFY_URL:
@@ -33,7 +45,7 @@ def send_notification(title, content):
             payload = {"title": title, "content": content}
         requests.post(NOTIFY_URL, json=payload, timeout=5)
     except Exception as e:
-        print(f"[Notice] 微信通知推送异常: {e}", flush=True)
+        print(f"[Notice] 微信通知异常: {e}", flush=True)
 
 def decode_mime_words(s):
     if not s:
@@ -56,6 +68,29 @@ def is_valid_trigger(text_to_check):
     keywords = [k.strip().lower() for k in TRIGGER_KEYWORD.split(",") if k.strip()]
     target = text_to_check.lower()
     return any(k in target for k in keywords)
+
+def process_image(image_path):
+    """
+    大内存设备：保留原图，追求极致画质
+    小内存盒子：等比重采样，防止爆 RAM 崩溃
+    """
+    if SYSTEM_PROFILE == "HIGH_PERF":
+        print(f"[Quality] 高性能模式：保留原图超高清分辨率渲染输出 -> {image_path}", flush=True)
+        return
+
+    try:
+        with Image.open(image_path) as img:
+            if img.mode not in ("L", "RGB"):
+                img = img.convert("RGB")
+            
+            # 小内存环境限制长边为 2480px (300DPI 极速模式)
+            max_dim = 2480
+            if max(img.size) > max_dim:
+                img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+                img.save(image_path, quality=85, optimize=True)
+                print(f"[Opt] 低功耗模式：图像已自适应轻量化 -> {image_path}", flush=True)
+    except Exception as e:
+        print(f"[Opt Warning] 图片处理跳过: {e}", flush=True)
 
 def check_and_print():
     mail = None
@@ -98,7 +133,7 @@ def check_and_print():
                     if not payload:
                         continue
 
-                    # 拦截小于 40KB 的小图标/签名图片
+                    # 拦截小于 40KB 的小图标
                     if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
                         print(f"[Filter] 忽略内嵌广告图标: {filename} ({len(payload)//1024} KB)", flush=True)
                         continue
@@ -109,14 +144,13 @@ def check_and_print():
                 mail.store(num, "+FLAGS", "\\Deleted")
                 continue
 
-            # 主题或附件名命中任一关键词即放行
             all_names_to_check = subject + " " + " ".join([att[0] for att in valid_attachments])
             if not is_valid_trigger(all_names_to_check):
-                print(f"[Ignore] 未命中打印关键词，跳过: 《{subject}》 来自: {sender}", flush=True)
+                print(f"[Ignore] 未命中打印指令，跳过: 《{subject}》", flush=True)
                 mail.store(num, "+FLAGS", "\\Deleted")
                 continue
 
-            print(f"[Print Job] 命中打印指令: 《{subject}》 来自: {sender}", flush=True)
+            print(f"[Print Job] 开始处理打印任务: 《{subject}》", flush=True)
 
             for filename, ext, payload in valid_attachments:
                 safe_filename = "".join([c for c in filename if c.isalnum() or c in "._- "]).strip()
@@ -127,14 +161,22 @@ def check_and_print():
                 with open(filepath, "wb") as f:
                     f.write(payload)
 
-                cmd = ["lp", "-o", "fit-to-page", filepath]
+                if ext in [".jpg", ".jpeg", ".png"]:
+                    process_image(filepath)
+
+                # 动态分配打印参数
+                cmd = ["lp", "-o", "fit-to-page"]
+                if SYSTEM_PROFILE == "LOW_MEM":
+                    cmd.extend(["-o", "Resolution=600dpi"])
+
+                cmd.append(filepath)
                 result = subprocess.run(cmd, capture_output=True, text=True)
 
                 if result.returncode == 0:
-                    send_notification("🖨️ 打印成功", f"文件: {filename}\n来源: {sender}\n主题: {subject}")
+                    send_notification("🖨️ 打印成功", f"文件: {filename}\n来源: {sender}\n模式: {SYSTEM_PROFILE}")
                 else:
                     err_msg = result.stderr.strip()
-                    send_notification("❌ 打印失败", f"文件: {filename}\n来源: {sender}\n原因: {err_msg}")
+                    send_notification("❌ 打印失败", f"文件: {filename}\n原因: {err_msg}")
 
                 if os.path.exists(filepath):
                     os.remove(filepath)
@@ -155,13 +197,12 @@ def check_and_print():
 if __name__ == "__main__":
     time.sleep(5)
 
-    # 未配置邮箱时自动进入低功耗挂起，不消耗 CPU
     if not (IMAP_SERVER and EMAIL_USER and EMAIL_PASS):
-        print("[System] 未检测到邮箱配置，进入深度休眠（作为纯局域网 AirPrint 服务器运行）。", flush=True)
+        print(f"[System] 运行模式: {SYSTEM_PROFILE} | 局域网 AirPrint 已就绪，无邮箱配置进入休眠。", flush=True)
         while True:
             time.sleep(3600)
 
-    print("[System] 邮件云打印监听服务已就绪...", flush=True)
+    print(f"[System] 运行模式: {SYSTEM_PROFILE} | 邮件监听已就绪...", flush=True)
     while True:
         try:
             check_and_print()
