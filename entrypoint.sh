@@ -32,11 +32,23 @@ if [ ! -f /etc/cups/cupsd.conf ]; then
     cp -rp /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
 fi
 
-# 4. 确保静态资源权限正常
+# 4. 确保静态资源与模板权限正常
 chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates 2>/dev/null || true
 
-# 5. 网页访问放行与全局局域网广播（解决电脑端自动发现）
-sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
+# 5. 网页访问放行、极速响应优化与局域网广播
+# 显式绑定 IPv4 端口，避免 IPv6 寻址超时卡顿
+sed -i 's/Listen localhost:631//' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i 's/Port 631//' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i '/^Listen 0.0.0.0:631/d' /etc/cups/cupsd.conf 2>/dev/null || true
+echo "Listen 0.0.0.0:631" >> /etc/cups/cupsd.conf
+
+# 【核心提速】：关闭客户端 DNS 反向查询，彻底根治网页卡顿 5~10 秒
+sed -i '/^HostNameLookups/d' /etc/cups/cupsd.conf 2>/dev/null || true
+echo "HostNameLookups Off" >> /etc/cups/cupsd.conf
+
+# 优化请求超时时间
+sed -i '/^Timeout/d' /etc/cups/cupsd.conf 2>/dev/null || true
+echo "Timeout 30" >> /etc/cups/cupsd.conf
 
 # 开启 CUPS 局域网服务发现与广播 (DNS-SD / mDNS)
 sed -i '/^Browsing/d' /etc/cups/cupsd.conf 2>/dev/null || true
@@ -44,7 +56,7 @@ sed -i '/^BrowseLocalProtocols/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "Browsing Yes" >> /etc/cups/cupsd.conf
 echo "BrowseLocalProtocols dnssd" >> /etc/cups/cupsd.conf
 
-# 允许局域网内所有设备访问后台与打印队列
+# 允许局域网内所有设备访问管理后台与任务队列
 grep -q "Allow All" /etc/cups/cupsd.conf || {
     sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
     sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
@@ -58,7 +70,7 @@ sed -i '/SetEnv CUPS_NO_BLOCK/d' /etc/cups/cups-files.conf
 echo "SetEnv USB_GATE_WAY 1" >> /etc/cups/cups-files.conf
 echo "SetEnv CUPS_NO_BLOCK 1" >> /etc/cups/cups-files.conf
 
-# 7. 根据硬件环境动态调控
+# 7. 根据硬件环境动态生效策略
 if [ "$DEVICE_PROFILE" = "LOW_MEM" ]; then
     sed -i '/^MaxJobTime/d' /etc/cups/cupsd.conf
     echo "MaxJobTime 180" >> /etc/cups/cupsd.conf
@@ -92,7 +104,7 @@ rm -f /var/run/dbus/pid /var/run/avahi-daemon/pid
 if [ -f /etc/avahi/avahi-daemon.conf ]; then
     sed -i 's/^#enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
     sed -i 's/^enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
-    # 禁用 IPv6 单独干扰，解决部分 Windows 搜不到打印机的问题
+    # 禁用 IPv6 单独干扰，避免 Windows 客户端探测超时
     sed -i 's/^use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
 fi
 
