@@ -35,22 +35,21 @@ RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
 ENV LANG=zh_CN.UTF-8 \
     LC_ALL=zh_CN.UTF-8
 
-# 3. 模板与静态资源修复（仅复制 *.tmpl 文件，严禁使用 * 递归导致 zh_CN 目录自我嵌套）
+# 3. 中文模板与主页（坚决不混入英文底包，确保原厂 CSS 与排版 100% 正常）
 RUN mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/doc-root/zh_CN
-RUN cp /usr/share/cups/templates/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-
-# 覆盖自定义中文模板与主页
 COPY ./i18/zh_CN/zh_CN/ /usr/share/cups/templates/zh_CN/
 COPY ./i18/zh_CN/index.html /usr/share/cups/doc-root/zh_CN/index.html
+# 同步一份中文主页到根目录，确保任何浏览器直接打开 IP:631 都是中文
+COPY ./i18/zh_CN/index.html /usr/share/cups/doc-root/index.html
 
-# 制作官方出厂配置备份（供宿主机空挂载时初始化）
+# 制作官方初始配置备份（供持久化卷首次初始化）
 RUN cp -rp /etc/cups /etc/cups.orig
 
-# 4. 拷贝启动脚本与守护脚本
+# 4. 拷贝启动脚本与云打印守护脚本
 COPY [eE]ntrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 
-# 5. 清洗换行符并赋予可执行权限
+# 5. 清理换行符并授权
 RUN dos2unix /entrypoint.sh /opt/mail_print.py 2>/dev/null || true && \
     chmod +x /entrypoint.sh /opt/mail_print.py
 
