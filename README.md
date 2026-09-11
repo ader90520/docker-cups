@@ -27,8 +27,8 @@ docker run -d \
   -e ADMIN_PASSWORD=admin \
   -e IMAP_SERVER=imap.qq.com \
   -e EMAIL_USER=your_email@qq.com \
-  -e EMAIL_PASS=xxxxxxxxxxxxxxxx \
-  -e NOTIFY_URL="[http://www.pushplus.plus/send?token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx](http://www.pushplus.plus/send?token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)" \
+  -e EMAIL_PASS=******** \
+  -e NOTIFY_URL="[http://www.pushplus.plus/send?token=******](http://www.pushplus.plus/send?token=******)" \
   ader90520/cups:latest
 ```
 
@@ -55,8 +55,8 @@ docker run -d \
 | :--- | :---: | :--- | :--- |
 | `ADMIN_PASSWORD` | **必填** | `admin` | CUPS 网页后台登录密码（管理账号固定为 `admin`） |
 | `IMAP_SERVER` | 选填 | `imap.qq.com` | 邮箱 IMAP 接收服务器（不填则云打印自动进入休眠） |
-| `EMAIL_USER` | 选填 | `your_email@qq.com` | 接收打印任务的专用邮箱账号 |
-| `EMAIL_PASS` | 选填 | `xxxxxxxxxxxxxxxx` | 邮箱第三方客户端授权码（**注意：非网页登录密码**） |
+| `EMAIL_USER` | 选填 | `********@qq.com` | 接收打印任务的专用邮箱账号 |
+| `EMAIL_PASS` | 选填 | `********` | 邮箱第三方客户端授权码（**注意：非网页登录密码**） |
 | `NOTIFY_URL` | 选填 | `http://www.pushplus.plus/...` | 微信出纸结果推送接口（支持 PushPlus / 企业微信 Webhook） |
 | `TRIGGER_KEYWORD` | 选填 | *内置预设关键词* | 触发词白名单（默认包含打印、作业、试卷、各学科及年级词汇） |
 
