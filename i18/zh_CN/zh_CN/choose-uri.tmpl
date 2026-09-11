@@ -1,4 +1,4 @@
-<H2 CLASS="title">{op=modify-printer?修改 {printer_name}:添加打印机}</H2>
+<H2 CLASS="title">{op=modify-printer?打印机修改： {printer_name}:添加打印机}</H2>
 
 <FORM METHOD="POST" ACTION="/admin">
 <INPUT TYPE="HIDDEN" NAME="org.cups.sid" VALUE="{$org.cups.sid}">
@@ -13,7 +13,7 @@
 </TR>
 <TR>
 <TD></TD>
-<TD>例如:
+<TD>例:
 <PRE>
     http://hostname:631/ipp/
     http://hostname:631/ipp/port1
@@ -27,7 +27,7 @@
     socket://hostname:9100
 </PRE>
 
-<P>查看 <A HREF="/help/network.html" TARGET="_blank">"网络打印机"</A> 的正确 URI.</P>
+<P>See <A HREF="/help/network.html" TARGET="_blank">"网络打印机"</A> 的正确 URI.</P>
 
 </TD>
 </TR>
