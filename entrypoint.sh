@@ -35,8 +35,16 @@ fi
 # 4. 确保静态资源权限正常
 chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates 2>/dev/null || true
 
-# 5. 网页访问放行（幂等配置，杜绝重复写入导致 cupsd.conf 膨胀）
+# 5. 网页访问放行与全局局域网广播（解决电脑端自动发现）
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
+
+# 开启 CUPS 局域网服务发现与广播 (DNS-SD / mDNS)
+sed -i '/^Browsing/d' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i '/^BrowseLocalProtocols/d' /etc/cups/cupsd.conf 2>/dev/null || true
+echo "Browsing Yes" >> /etc/cups/cupsd.conf
+echo "BrowseLocalProtocols dnssd" >> /etc/cups/cupsd.conf
+
+# 允许局域网内所有设备访问后台与打印队列
 grep -q "Allow All" /etc/cups/cupsd.conf || {
     sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
     sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
@@ -77,9 +85,17 @@ else
     echo "ErrorPolicy retry-job" >> /etc/cups/cupsd.conf
 fi
 
-# 8. 启动 D-Bus 与 Avahi（AirPrint 广播免驱）
+# 8. 启动 D-Bus 与 Avahi 增强广播（针对软路由与多网卡环境强化）
 mkdir -p /var/run/dbus
 rm -f /var/run/dbus/pid /var/run/avahi-daemon/pid
+
+if [ -f /etc/avahi/avahi-daemon.conf ]; then
+    sed -i 's/^#enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
+    sed -i 's/^enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
+    # 禁用 IPv6 单独干扰，解决部分 Windows 搜不到打印机的问题
+    sed -i 's/^use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
+fi
+
 service dbus start || true
 service avahi-daemon start || true
 
