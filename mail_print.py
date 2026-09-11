@@ -6,13 +6,12 @@ import time
 import subprocess
 import requests
 
-# 1. 读取环境变量
 IMAP_SERVER = os.getenv("IMAP_SERVER", "").strip()
 EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
 EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 NOTIFY_URL = os.getenv("NOTIFY_URL", "").strip()
 
-# 2. 触发关键词（内置打印、全学科、各年级、作业相关词）
+# 内置智能白名单关键词
 DEFAULT_KEYWORDS = (
     "打,print,作业,试卷,练习,复习,打卡,"
     "语文,数学,英语,物理,化学,生物,历史,地理,政治,科学,"
@@ -25,26 +24,18 @@ SAVE_DIR = "/tmp/print_jobs"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def send_notification(title, content):
-    """推送通知（支持企业微信机器人与 PushPlus）"""
     if not NOTIFY_URL:
         return
     try:
         if "qyapi.weixin.qq.com" in NOTIFY_URL:
-            payload = {
-                "msgtype": "text",
-                "text": {"content": f"【{title}】\n{content}"}
-            }
+            payload = {"msgtype": "text", "text": {"content": f"【{title}】\n{content}"}}
         else:
-            payload = {
-                "title": title,
-                "content": content
-            }
+            payload = {"title": title, "content": content}
         requests.post(NOTIFY_URL, json=payload, timeout=5)
     except Exception as e:
         print(f"[Notice] 微信通知推送异常: {e}", flush=True)
 
 def decode_mime_words(s):
-    """防止文件名或主题中文乱码"""
     if not s:
         return ""
     decoded_fragments = []
@@ -60,7 +51,6 @@ def decode_mime_words(s):
     return "".join(decoded_fragments)
 
 def is_valid_trigger(text_to_check):
-    """主题或附件名包含任一关键词即放行"""
     if not TRIGGER_KEYWORD:
         return True
     keywords = [k.strip().lower() for k in TRIGGER_KEYWORD.split(",") if k.strip()]
@@ -68,14 +58,12 @@ def is_valid_trigger(text_to_check):
     return any(k in target for k in keywords)
 
 def check_and_print():
-    """邮件拉取与打印核心任务"""
     mail = None
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, timeout=15)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("INBOX")
 
-        # 仅查询未读邮件
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK" or not messages or not messages[0]:
             mail.logout()
@@ -93,7 +81,6 @@ def check_and_print():
             subject = decode_mime_words(msg.get("Subject", "无主题"))
             sender = decode_mime_words(msg.get("From", "未知发件人"))
 
-            # 筛选附件
             valid_attachments = []
             for part in msg.walk():
                 if part.get_content_maintype() == "multipart":
@@ -113,7 +100,7 @@ def check_and_print():
 
                     # 拦截小于 40KB 的小图标/签名图片
                     if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
-                        print(f"[Filter] 忽略内嵌广告图标/签名: {filename} ({len(payload)//1024} KB)", flush=True)
+                        print(f"[Filter] 忽略内嵌广告图标: {filename} ({len(payload)//1024} KB)", flush=True)
                         continue
 
                     valid_attachments.append((filename, ext, payload))
@@ -122,16 +109,15 @@ def check_and_print():
                 mail.store(num, "+FLAGS", "\\Deleted")
                 continue
 
-            # 智能判断：主题或附件名任意命中关键词即出纸
-            all_text = subject + " " + " ".join([att[0] for att in valid_attachments])
-            if not is_valid_trigger(all_text):
-                print(f"[Ignore] 邮件未命中打印关键词，跳过: 《{subject}》 来自: {sender}", flush=True)
+            # 主题或附件名命中任一关键词即放行
+            all_names_to_check = subject + " " + " ".join([att[0] for att in valid_attachments])
+            if not is_valid_trigger(all_names_to_check):
+                print(f"[Ignore] 未命中打印关键词，跳过: 《{subject}》 来自: {sender}", flush=True)
                 mail.store(num, "+FLAGS", "\\Deleted")
                 continue
 
             print(f"[Print Job] 命中打印指令: 《{subject}》 来自: {sender}", flush=True)
 
-            # 送入打印队列
             for filename, ext, payload in valid_attachments:
                 safe_filename = "".join([c for c in filename if c.isalnum() or c in "._- "]).strip()
                 if not safe_filename:
@@ -141,9 +127,6 @@ def check_and_print():
                 with open(filepath, "wb") as f:
                     f.write(payload)
 
-                print(f"[Processing] 正在送入 CUPS 打印队列: {safe_filename}", flush=True)
-
-                # 调用 lp 打印命令
                 cmd = ["lp", "-o", "fit-to-page", filepath]
                 result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -156,7 +139,6 @@ def check_and_print():
                 if os.path.exists(filepath):
                     os.remove(filepath)
 
-            # 标记已读并清理已处理邮件
             mail.store(num, "+FLAGS", "\\Deleted")
 
         mail.expunge()
@@ -171,17 +153,15 @@ def check_and_print():
                 pass
 
 if __name__ == "__main__":
-    # 容器启动时缓冲 5 秒，等待宿主机 CUPS 守护进程彻底就绪
     time.sleep(5)
 
-    # 检查环境变量配置：未配置完整则进入深度休眠，确保不占 CPU，同时局域网打印完全不受影响
+    # 未配置邮箱时自动进入低功耗挂起，不消耗 CPU
     if not (IMAP_SERVER and EMAIL_USER and EMAIL_PASS):
-        print("[System] 未检测到完整的邮箱环境变量（IMAP_SERVER/EMAIL_USER/EMAIL_PASS）。", flush=True)
-        print("[System] 云打印监听已进入深度休眠等待状态，容器当前作为【纯局域网打印服务器】正常运行！", flush=True)
+        print("[System] 未检测到邮箱配置，进入深度休眠（作为纯局域网 AirPrint 服务器运行）。", flush=True)
         while True:
-            time.sleep(3600)  # 每小时轻量休眠唤醒一次，0% CPU 占用
+            time.sleep(3600)
 
-    print("[System] 邮件云打印监听服务已就绪 (支持局域网 + 微信云端双模打印)...", flush=True)
+    print("[System] 邮件云打印监听服务已就绪...", flush=True)
     while True:
         try:
             check_and_print()
