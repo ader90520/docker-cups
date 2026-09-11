@@ -35,14 +35,18 @@ fi
 # 4. 确保静态资源与模板权限正常
 chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates 2>/dev/null || true
 
-# 5. 网页访问放行、极速响应优化与局域网广播
+# 5. 网页访问放行、极速响应与【彻底杜绝 426 升级页面】
 # 显式绑定 IPv4 端口，避免 IPv6 寻址超时卡顿
 sed -i 's/Listen localhost:631//' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/Port 631//' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i '/^Listen 0.0.0.0:631/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "Listen 0.0.0.0:631" >> /etc/cups/cupsd.conf
 
-# 【核心提速】：关闭客户端 DNS 反向查询，彻底根治网页卡顿 5~10 秒
+# 【核心修复1】：彻底禁用强制 SSL 升级拦截，从根源杜绝“升级页面”和样式崩塌
+sed -i '/^DefaultEncryption/d' /etc/cups/cupsd.conf 2>/dev/null || true
+echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
+
+# 【核心修复2】：关闭客户端 DNS 反向查询，彻底根治网页卡顿 5~10 秒
 sed -i '/^HostNameLookups/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "HostNameLookups Off" >> /etc/cups/cupsd.conf
 
