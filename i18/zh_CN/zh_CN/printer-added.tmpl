@@ -1,3 +1,6 @@
 <H2 CLASS="title">添加打印机</H2>
 
-<P>打印机 <A HREF="/printers/{printer_name}">{printer_name}</A> 添加成功.
+<P>打印机 <A HREF="/printers/{printer_name}">{printer_name}</A> 添加成功。</P>
+<P>正在自动跳转到默认选项设置页面，若未跳转请点击：<A HREF="{admin_uri}?op=set-printer-options&amp;printer_name={printer_name}">设置默认选项</A>。</P>
+
+<META HTTP-EQUIV="Refresh" CONTENT="1;URL={admin_uri}?op=set-printer-options&amp;printer_name={printer_name}">
