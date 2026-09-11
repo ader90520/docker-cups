@@ -6,15 +6,15 @@ function update_options() {
 setTimeout("update_options()", 2000);
 --></SCRIPT>
 
-<META HTTP-EQUIV="Refresh" CONTENT="2;URL=/admin/?op=set-printer-options&printer_name={printer_name}">
+<META HTTP-EQUIV="Refresh" CONTENT="2;URL=/admin/?op=default-options&printer_name={printer_name}">
 
 <H2 CLASS="title">添加打印机 {printer_name}</H2>
 
 <P>打印机 <A HREF="/printers/{printer_name}">{printer_name}</A> 已成功添加。</P>
 
-<P><A HREF="/admin/?op=set-printer-options&printer_name={printer_name}">页面将在 2 秒后自动跳转至默认选项设置（纸张大小等）。如果您的浏览器没有自动跳转，请点击此处。</A></P>
+<P><A HREF="/admin/?op=default-options&printer_name={printer_name}">页面将在 2 秒后自动跳转至设置默认选项（纸张大小等）。如果您的浏览器没有自动跳转，请点击此处。</A></P>
 
 <FORM ACTION="/admin/" METHOD="GET" ID="refresh">
-<INPUT TYPE="HIDDEN" NAME="op" VALUE="set-printer-options">
+<INPUT TYPE="HIDDEN" NAME="op" VALUE="default-options">
 <INPUT TYPE="HIDDEN" NAME="printer_name" VALUE="{printer_name}">
 </FORM>
