@@ -25,7 +25,6 @@ SAVE_DIR = "/var/spool/cups/tmp_jobs"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def get_system_profile():
-    """读取启动脚本探测出的硬件档位"""
     try:
         if os.path.exists("/tmp/cups_profile"):
             with open("/tmp/cups_profile", "r") as f:
@@ -54,7 +53,7 @@ def send_notification(title, content):
 
         requests.post(NOTIFY_URL, json=payload, timeout=8)
     except Exception as e:
-        print(f"[Notice] 微信通知异常: {e}", flush=True)
+        print(f"[Notice] 微信通知推送异常: {e}", flush=True)
 
 def decode_mime_words(s):
     if not s:
@@ -79,12 +78,8 @@ def is_valid_trigger(text_to_check):
     return any(k in target for k in keywords)
 
 def process_image(image_path):
-    """
-    大内存设备：保留原图，追求极致画质
-    小内存盒子：等比重采样，防止爆 RAM 崩溃
-    """
     if SYSTEM_PROFILE == "HIGH_PERF":
-        print(f"[Quality] 高性能模式：保留原图超高清分辨率渲染输出 -> {image_path}", flush=True)
+        print(f"[Quality] 高性能模式：保留原图超高清分辨率渲染 -> {image_path}", flush=True)
         return
 
     try:
@@ -92,7 +87,6 @@ def process_image(image_path):
             if img.mode not in ("L", "RGB"):
                 img = img.convert("RGB")
             
-            # 小内存环境限制长边为 2480px (300DPI 极速模式)
             max_dim = 2480
             if max(img.size) > max_dim:
                 img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
@@ -142,9 +136,8 @@ def check_and_print():
                     if not payload:
                         continue
 
-                    # 拦截小于 40KB 的小图标
                     if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
-                        print(f"[Filter] 忽略内嵌广告图标: {filename} ({len(payload)//1024} KB)", flush=True)
+                        print(f"[Filter] 忽略广告/签名图标: {filename} ({len(payload)//1024} KB)", flush=True)
                         continue
 
                     valid_attachments.append((filename, ext, payload))
@@ -173,7 +166,6 @@ def check_and_print():
                 if ext in [".jpg", ".jpeg", ".png"]:
                     process_image(filepath)
 
-                # 动态分配打印参数
                 cmd = ["lp", "-o", "fit-to-page"]
                 if SYSTEM_PROFILE == "LOW_MEM":
                     cmd.extend(["-o", "Resolution=600dpi"])
