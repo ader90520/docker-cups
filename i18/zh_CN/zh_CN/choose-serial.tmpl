@@ -1,4 +1,4 @@
-<H2 CLASS="title">{op=modify-printer?打印机修改：{printer_name}:添加打印机}</H2>
+<H2 CLASS="title">{op=modify-printer?修改 {printer_name}:添加打印机}</H2>
 
 <FORM METHOD="POST" ACTION="/admin">
 <INPUT TYPE="HIDDEN" NAME="org.cups.sid" VALUE="{$org.cups.sid}">
@@ -19,9 +19,9 @@
 <TR>
 <TH CLASS="label">电平:</TH>
 <TD><SELECT NAME="PARITY">
-<OPTION VALUE="none" {?parity=none?SELECTED:}>None
-<OPTION VALUE="even" {?parity=even?SELECTED:}>Even
-<OPTION VALUE="odd" {?parity=odd?SELECTED:}>Odd
+<OPTION VALUE="none" {?parity=none?SELECTED:}>无
+<OPTION VALUE="even" {?parity=even?SELECTED:}>偶
+<OPTION VALUE="odd" {?parity=odd?SELECTED:}>奇
 </SELECT></TD>
 </TR>
 <TR>
@@ -34,7 +34,7 @@
 <TR>
 <TH CLASS="label">流量控制:</TH>
 <TD><SELECT NAME="FLOW">
-<OPTION VALUE="none" {?flow=none?SELECTED:}>None
+<OPTION VALUE="none" {?flow=none?SELECTED:}>无
 <OPTION VALUE="soft" {?flow=soft?SELECTED:}>XON/XOFF (Software)
 <OPTION VALUE="hard" {?flow=hard?SELECTED:}>RTS/CTS (Hardware)
 <OPTION VALUE="dtrdsr" {?flow=dtrdsr?SELECTED:}>DTR/DSR (Hardware)

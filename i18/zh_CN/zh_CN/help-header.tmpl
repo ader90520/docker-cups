@@ -11,10 +11,10 @@ AUTOSAVE="org.cups.help" RESULTS="20">
 </FORM>
 
 <!-- Bookmarks -->
-<DIV CLASS="sidebar"><TABLE CLASS="inset" SUMMARY="目录">
+<DIV CLASS="sidebar"><TABLE CLASS="inset" SUMMARY="Contents">
 <TR><TD>
 
-<H3 CLASS="title">在线帮助文档</H3>
+<H3 CLASS="title">联机帮助文档</H3>
 
 <P CLASS="l0"><A HREF="/help/{QUERY??QUERY={QUERY}:}">所有文档</A></P>
 <HR>
@@ -24,7 +24,7 @@ AUTOSAVE="org.cups.help" RESULTS="20">
 </TD></TR>
 </TABLE></DIV>
 
-{QUERY?<P>{HELPFILE?{HELPTITLE}:{TOPIC?{TOPIC}:所有文档搜索结果}}\:</P>
+{QUERY?<P>搜索结果 {HELPFILE?{HELPTITLE}:{TOPIC?{TOPIC}:所有文档}}\:</P>
 {QTEXT?<UL>
 {[QTEXT]<LI><A HREF="{QLINK}">{QTEXT}</A>{QPTEXT? (in <I><A HREF="{QPLINK}">{QPTEXT}</A></I>):}</LI>}
 {QTEXT?</UL>:}
@@ -34,8 +34,8 @@ AUTOSAVE="org.cups.help" RESULTS="20">
 
 <H1>在线帮助</H1>
 
-<P>这是CUPS 在线帮助界面。 在上面输入搜索词或单击文档链接显示联机帮助信息。</P>
+<P>CUPS 在线帮助界面。 在上面输入搜索词或单击文档链接显示联机帮助信息。</P>
 
 <P>如果您不熟悉 CUPS，请阅读"<a href="/help/overview.html">CUPS概述</a>"页.</P>
 
-<P><A HREF="https://openprinting.github.io/cups/">CUPS 主页</A> 还提供许多资源，包括用户论坛、常见问题解答以及用于提交报告和功能请求的表单.</P>}
+<P><A HREF="http://www.cups.org/">CUPS 主页</A> 还提供许多资源，包括用户论坛、常见问题解答以及用于提交错误报告和功能请求的表单.</P>}

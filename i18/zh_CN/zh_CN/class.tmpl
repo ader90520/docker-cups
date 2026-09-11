@@ -9,9 +9,9 @@
 <OPTION VALUE="">维护</OPTION>
 <OPTION VALUE="print-test-page">打印测试页</OPTION>
 {printer_state=5?<OPTION VALUE="start-class">恢复类</OPTION>:<OPTION VALUE="stop-class">暂停类</OPTION>}
-{printer_is_accepting_jobs=0?<OPTION VALUE="accept-jobs">接受任务</OPTION>:<OPTION VALUE="reject-jobs">拒绝任务</OPTION>}
+{printer_is_accepting_jobs=0?<OPTION VALUE="accept-jobs">就绪</OPTION>:<OPTION VALUE="reject-jobs">拒绝任务</OPTION>}
 <OPTION VALUE="move-jobs">移动所有任务</OPTION>
-<OPTION VALUE="cancel-jobs">取消所有任务</OPTION>
+<OPTION VALUE="purge-jobs">取消所有任务</OPTION>
 </SELECT>
 <INPUT TYPE="SUBMIT" VALUE="Go" STYLE="display: none;">
 </FORM>
@@ -34,8 +34,8 @@
 <TABLE SUMMARY="{printer_name}">
 <TR><TH ALIGN="RIGHT" VALIGN="TOP">描述:</TH><TD>{printer_info}</TD></TR>
 <TR><TH ALIGN="RIGHT" VALIGN="TOP">位置:</TH><TD>{printer_location}</TD></TR>
-<TR><TH ALIGN="RIGHT" VALIGN="TOP">成员:</TH><TD>{?member_uris=?None:{member_uris}}</TD></TR>
+<TR><TH ALIGN="RIGHT" VALIGN="TOP">成员:</TH><TD>{?member_uris=?无:{member_uris}}</TD></TR>
 <TR><TH ALIGN="RIGHT" VALIGN="TOP">默认:</TH><TD>job-sheets={job_sheets_default}
-media={media_default?{media_default}:unknown}
+media={media_default?{media_default}:未知}
 {sides_default?sides={sides_default}:}</TD></TR>
 </TABLE>
