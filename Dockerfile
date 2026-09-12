@@ -2,11 +2,12 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 安装基础运行依赖与 CUPS 核心组件
+# 1. 安装基础运行依赖与 CUPS 核心组件（补齐 cups-server-common 确保完整样式）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     cups-filters \
+    cups-server-common \
     printer-driver-all \
     printer-driver-foo2zjs \
     foomatic-db-compressed-ppds \
@@ -35,7 +36,7 @@ COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 
-# 4. 核心修复：先用 msguniq 自动去重修复重复定义，再编译为 mo 文件
+# 4. 汉化处理：去重编译 mo 文件，并建立实体静态目录（杜绝软链死循环）
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
