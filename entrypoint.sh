@@ -5,12 +5,18 @@ echo "=========================================="
 echo "      启动 CUPS 打印服务与优化环境        "
 echo "=========================================="
 
-# 1. 显式锁定环境变量为中文
+# 1. 显式锁定中文环境变量
 export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
 
-# 2. 系统用户与权限
+# 2. 清理陈旧 PID 锁文件（防止小盒子意外断电或重启导致服务卡死挂起）
+rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid 2>/dev/null || true
+mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups
+chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
+chown -R avahi:avahi /var/run/avahi-daemon 2>/dev/null || true
+
+# 3. 系统管理账户初始化
 ADMIN_USER=${CUPS_USER:-admin}
 ADMIN_PASS=${CUPS_PASSWORD:-admin}
 
@@ -20,29 +26,35 @@ if ! id "$ADMIN_USER" &>/dev/null; then
     echo ">>> 已创建管理用户: $ADMIN_USER"
 fi
 
-# 3. CUPS 核心配置、默认中文与防白屏
+# 4. CUPS 核心配置与轻量化防护（保护小内存与小磁盘）
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-# 强制默认语言为 zh_CN
+# 默认语言锁定中文，禁用强制 SSL 防止 CGI 堵塞白屏
 sed -i "/^DefaultLanguage/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultLanguage zh_CN" >> /etc/cups/cupsd.conf
 
-# 彻底禁用强制 SSL，防止管理面板与添加打印机白屏
 sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-# 显式锁定静态文件绝对根路径
+# 限制日志与缓存大小（防止海纳思/N1 存储满载卡死）
+sed -i "/^MaxLogSize/d" /etc/cups/cupsd.conf 2>/dev/null || true
+echo "MaxLogSize 1m" >> /etc/cups/cupsd.conf
+
+sed -i "/^PreserveJobFiles/d" /etc/cups/cupsd.conf 2>/dev/null || true
+echo "PreserveJobFiles No" >> /etc/cups/cupsd.conf
+
+# 锁定静态根目录绝对路径
 sed -i "/^DocumentRoot/d" /etc/cups/cups-files.conf 2>/dev/null || true
 echo "DocumentRoot /usr/share/cups/doc-root" >> /etc/cups/cups-files.conf
 
-# 4. 规整 HTML 模板中的样式表引用路径
+# 5. 规整 HTML 模板中的样式表引用路径
 find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
   "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-# 5. 写入深蓝通栏导航栏与固定吸底样式补丁
+# 6. 注入深蓝通栏导航栏与固定吸底样式补丁
 sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
 
 cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
@@ -57,7 +69,6 @@ body {
     box-sizing: border-box !important;
 }
 
-/* 顶部深蓝通栏长条背景 */
 .header, div.header {
     width: 100% !important;
     background-color: #004b87 !important;
@@ -74,7 +85,6 @@ body {
 .header h1, div.header h1 { margin: 0 !important; font-size: 20px !important; color: #ffffff !important; }
 .header h1 a, div.header h1 a { color: #ffffff !important; text-decoration: none !important; }
 
-/* 导航项横向排列 */
 .header ul, div.header ul, ul.nav {
     display: flex !important;
     flex-direction: row !important;
@@ -102,7 +112,6 @@ body {
     background-color: rgba(255, 255, 255, 0.25) !important;
 }
 
-/* 底部固定深蓝吸底长条背景 */
 .trailer, div.trailer, .footer, div.footer {
     position: fixed !important;
     left: 0 !important;
@@ -128,7 +137,7 @@ body {
 .trailer a, div.trailer a, .footer a, div.footer a { color: #b8d9f7 !important; text-decoration: underline !important; }
 CSSEOF
 
-# 6. 实体物理拷贝至各语言目录，杜绝软链沙箱拦截
+# 7. 实体物理同步给各语言目录（防止沙箱软链失效）
 for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans; do
     mkdir -p "$dir"
     cp -f /usr/share/cups/doc-root/cups.css "$dir/cups.css"
@@ -136,16 +145,17 @@ for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share
     [ -d /usr/share/cups/doc-root/images ] && cp -rf /usr/share/cups/doc-root/images "$dir/" 2>/dev/null || true
 done
 
-# 权限放行
+# 放行基础权限
 chown -R root:lp /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/locale /etc/cups
 chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/locale
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 7. 启动广播与邮件云打印服务
+# 8. 启动系统总线与局域网广播
 service dbus start 2>/dev/null || true
 service avahi-daemon start 2>/dev/null || true
 
+# 9. 启动邮件云打印后台服务
 if [ -f /opt/mail_print.py ]; then
     python3 /opt/mail_print.py > /var/log/mail_print.log 2>&1 &
     echo ">>> 邮件云打印监控服务已在后台启动"
