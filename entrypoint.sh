@@ -10,7 +10,7 @@ export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
 
-# 2. 清理陈旧 PID 锁文件（防止海纳思/N1等小盒子意外断电重启后服务卡死挂起）
+# 2. 清理陈旧 PID 与 Socket 锁（防止小盒子断电重启后 D-Bus/CUPS 卡死）
 rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid 2>/dev/null || true
 mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups
 chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
@@ -165,17 +165,20 @@ chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 9. 启动 Avahi 与 D-Bus（用于 AirPrint 隔空打印发现）
-service dbus start 2>/dev/null || true
-service avahi-daemon start 2>/dev/null || true
+# 9. 按顺序启动系统总线与局域网广播（ AirPrint 隔空打印发现）
+dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
+avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 
-# 10. 启动邮件云打印后台监听进程（自动兼容两个常见脚本路径）
-if [ -f /opt/mail_print.py ]; then
-    python3 /opt/mail_print.py > /var/log/mail_print.log 2>&1 &
-    echo ">>> 邮件云打印监控已从 /opt/mail_print.py 启动"
-elif [ -f /usr/local/bin/mail_print.py ]; then
-    python3 /usr/local/bin/mail_print.py > /var/log/mail_print.log 2>&1 &
-    echo ">>> 邮件云打印监控已从 /usr/local/bin/mail_print.py 启动"
+# 10. 智能启动邮件云打印后台服务（仅在配置了邮箱账号时启动，避免无谓报错和刷日志）
+MAIL_SCRIPT=""
+[ -f /opt/mail_print.py ] && MAIL_SCRIPT="/opt/mail_print.py"
+[ -f /usr/local/bin/mail_print.py ] && MAIL_SCRIPT="/usr/local/bin/mail_print.py"
+
+if [ -n "$MAIL_SCRIPT" ] && [ -n "$EMAIL_USER" ]; then
+    python3 "$MAIL_SCRIPT" > /var/log/mail_print.log 2>&1 &
+    echo ">>> 邮件云打印监控已启动 ($MAIL_SCRIPT)"
+else
+    echo ">>> 未配置 EMAIL_USER 或未找到脚本，邮件云打印进入休眠状态"
 fi
 
 # 11. 启动 CUPS 主进程
