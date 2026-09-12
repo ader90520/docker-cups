@@ -2,7 +2,7 @@ FROM debian:bullseye-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 安装基础运行依赖与 CUPS 核心组件
+# 1. 安装基础运行依赖与 CUPS 核心组件
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -23,19 +23,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置系统中文编码支持
+# 2. 生成并配置 UTF-8 中文环境
 RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
     locale-gen
 ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 复制配置文件和汉化语言包
-COPY cups_zh.po /tmp/cups_zh.po
+# 3. 复制启动脚本、云打印脚本与对应目录下的汉化字典
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
+COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 
-# 核心修复：先创建全部完整的多级目录，再编译部署语言包
+# 4. 预建完整目录树并编译多语言包
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -52,7 +52,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     ln -sfn /usr/share/cups/locale/zh_CN /usr/share/cups/locale/zh-Hans && \
     rm -f /tmp/cups_zh.po
 
-# 备份初始配置并赋予权限
+# 5. 备份基础配置并赋予执行权限
 RUN cp -rp /etc/cups /etc/cups.orig && \
     chmod +x /entrypoint.sh /opt/mail_print.py
 
