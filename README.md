@@ -27,7 +27,7 @@ docker run -d \
   -e ADMIN_PASSWORD=admin \
   -e IMAP_SERVER=imap.qq.com \
   -e EMAIL_USER=your_email@qq.com \
-  -e EMAIL_PASS=thqkfccyippubigh \
+  -e EMAIL_PASS=邮箱授权码 \
   -e NOTIFY_URL=[http://www.pushplus.plus/send](http://www.pushplus.plus/send) \
   -e PUSHPLUS_TOKEN=your_token_here \
   ader90520/cups:latest
