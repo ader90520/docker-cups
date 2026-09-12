@@ -1,160 +1,160 @@
 #!/bin/bash
 set -e
 
-ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-
-# 1. 硬件探针：低算力小闪存与大机器自适应
-TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
-
 echo "=========================================="
-echo " [Hardware Probe] 检测到系统内存: ${TOTAL_MEM_MB} MB"
-if [ "$TOTAL_MEM_MB" -lt 1536 ]; then
-    DEVICE_PROFILE="LOW_MEM"
-    echo " [Hardware Profile] 模式: 轻量节能模式 (海纳思低内存/防爆盘优化)"
-else
-    DEVICE_PROFILE="HIGH_PERF"
-    echo " [Hardware Profile] 模式: 高性能模式"
-fi
+echo "      启动 CUPS 打印服务与优化环境        "
 echo "=========================================="
 
-export DEVICE_PROFILE
-echo "$DEVICE_PROFILE" > /tmp/cups_profile
+# 1. 确保系统用户与权限就绪
+ADMIN_USER=${CUPS_USER:-admin}
+ADMIN_PASS=${CUPS_PASSWORD:-admin}
 
-# 2. 账号初始化
-if ! id "admin" &>/dev/null; then
-    useradd -r -G lpadmin -M -s /usr/sbin/nologin admin
-fi
-echo "admin:${ADMIN_PASSWORD}" | chpasswd
-
-# 3. 持久化数据还原
-if [ ! -f /etc/cups/cupsd.conf ]; then
-    cp -rp /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
+if ! id "$ADMIN_USER" &>/dev/null; then
+    useradd -m -s /bin/bash -G lpadmin,lp "$ADMIN_USER"
+    echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
+    echo ">>> 已创建管理用户: $ADMIN_USER"
 fi
 
-# 4. 【核心修复：彻底根治排版竖列错位与 CSS 404】
-mkdir -p /usr/share/cups/doc-root/zh_CN \
-         /usr/share/cups/doc-root/zh \
-         /usr/share/cups/doc-root/zh-Hans \
-         /usr/share/cups/templates/zh_CN \
-         /usr/share/cups/templates/zh
+# 2. CUPS 核心配置文件安全与监听设置
+sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
+sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-REAL_CSS=$(find /usr/share/cups -name "cups.css" | head -n 1)
-if [ -n "$REAL_CSS" ]; then
-    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/cups.css 2>/dev/null || true
-    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh_CN/cups.css 2>/dev/null || true
-    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh/cups.css 2>/dev/null || true
-    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh-Hans/cups.css 2>/dev/null || true
-fi
-
-# 静态资源与模板补齐
-if [ -d /usr/share/cups/doc-root/images ]; then
-    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh_CN/images 2>/dev/null || true
-    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh/images 2>/dev/null || true
-    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh-Hans/images 2>/dev/null || true
-fi
-
-if [ -d /usr/share/cups/doc-root/help ]; then
-    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh_CN/help 2>/dev/null || true
-    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh/help 2>/dev/null || true
-    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh-Hans/help 2>/dev/null || true
-fi
-
-# 核心强力注入：扫描所有 HTML 模板头部，将相对路径 cups.css 强制修正为根目录绝对路径 /cups.css
-find /usr/share/cups/templates -type f -name "*.tmpl" -exec sed -i 's|href="cups.css"|href="/cups.css"|g' {} + 2>/dev/null || true
-find /usr/share/cups/templates -type f -name "*.tmpl" -exec sed -i 's|href="\.\./cups.css"|href="/cups.css"|g' {} + 2>/dev/null || true
-
-chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates 2>/dev/null || true
-
-# 5. 【核心修复：防止小闪存爆盘机制】
-mkdir -p /tmp/cups_spool_tmp /var/spool/cups
-chmod 1777 /tmp/cups_spool_tmp
-rm -rf /var/spool/cups/tmp 2>/dev/null || true
-ln -sfn /tmp/cups_spool_tmp /var/spool/cups/tmp
-
-if [ "$DEVICE_PROFILE" = "LOW_MEM" ]; then
-    sed -i '/^PreserveJobFiles/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i '/^PreserveJobHistory/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i '/^MaxJobs/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    echo "PreserveJobFiles No" >> /etc/cups/cupsd.conf
-    echo "PreserveJobHistory No" >> /etc/cups/cupsd.conf
-    echo "MaxJobs 30" >> /etc/cups/cupsd.conf
-
-    sed -i '/^MaxJobTime/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    echo "MaxJobTime 180" >> /etc/cups/cupsd.conf
-
-    # 保持 600dpi 分辨率，降低光栅占用
-    (
-        while true; do
-            for ppd in /etc/cups/ppd/*.ppd; do
-                if [ -f "$ppd" ]; then
-                    if grep -q "FastRes1200" "$ppd" || grep -q "\*DefaultResolution: 1200dpi" "$ppd"; then
-                        sed -i 's/*DefaultResolution: 1200dpi/*DefaultResolution: 600dpi/g' "$ppd" 2>/dev/null || true
-                        sed -i 's/*DefaultPrintQuality: FastRes1200/*DefaultPrintQuality: FastRes600/g' "$ppd" 2>/dev/null || true
-                    fi
-                fi
-            done
-            sleep 30
-        done
-    ) &
-else
-    sed -i '/^PreserveJobFiles/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i '/^PreserveJobHistory/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i '/^MaxJobs/d' /etc/cups/cupsd.conf 2>/dev/null || true
-    echo "PreserveJobFiles Yes" >> /etc/cups/cupsd.conf
-    echo "PreserveJobHistory Yes" >> /etc/cups/cupsd.conf
-    echo "MaxJobs 100" >> /etc/cups/cupsd.conf
-fi
-
-sed -i '/^ErrorPolicy/d' /etc/cups/cupsd.conf 2>/dev/null || true
-echo "ErrorPolicy retry-job" >> /etc/cups/cupsd.conf
-
-# 6. 基础网络监听、提速与防 426 升级拦截
-sed -i 's/Listen localhost:631//' /etc/cups/cupsd.conf 2>/dev/null || true
-sed -i 's/Port 631//' /etc/cups/cupsd.conf 2>/dev/null || true
-sed -i '/^Listen 0.0.0.0:631/d' /etc/cups/cupsd.conf 2>/dev/null || true
-echo "Listen 0.0.0.0:631" >> /etc/cups/cupsd.conf
-
-sed -i '/^DefaultEncryption/d' /etc/cups/cupsd.conf 2>/dev/null || true
+# 彻底禁用强制 SSL，防止管理面板与添加打印机白屏/426错误
+sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-sed -i '/^HostNameLookups/d' /etc/cups/cupsd.conf 2>/dev/null || true
-echo "HostNameLookups Off" >> /etc/cups/cupsd.conf
+# 显式锁定静态文件绝对根路径
+sed -i "/^DocumentRoot/d" /etc/cups/cups-files.conf 2>/dev/null || true
+echo "DocumentRoot /usr/share/cups/doc-root" >> /etc/cups/cups-files.conf
 
-sed -i '/^Timeout/d' /etc/cups/cupsd.conf 2>/dev/null || true
-echo "Timeout 30" >> /etc/cups/cupsd.conf
+# 3. 规整 HTML 模板中的样式表引用路径
+find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
+  "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-sed -i '/^Browsing/d' /etc/cups/cupsd.conf 2>/dev/null || true
-sed -i '/^BrowseLocalProtocols/d' /etc/cups/cupsd.conf 2>/dev/null || true
-echo "Browsing Yes" >> /etc/cups/cupsd.conf
-echo "BrowseLocalProtocols dnssd" >> /etc/cups/cupsd.conf
+# 4. 写入深蓝通栏导航栏与固定吸底样式补丁
+# 先清理旧的追加内容，防止多次重启重复堆叠
+sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
 
-grep -q "Allow All" /etc/cups/cupsd.conf || {
-    sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
+cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
+
+/* ====== CUPS 现代化通栏与吸底补丁 ====== */
+html { height: 100% !important; }
+body {
+    min-height: 100% !important;
+    margin: 0 !important;
+    padding: 0 0 60px 0 !important;
+    position: relative !important;
+    box-sizing: border-box !important;
 }
 
-# 7. USB 底层防卡纸与挂起配置
-touch /etc/cups/cups-files.conf
-sed -i '/SetEnv USB_GATE_WAY/d' /etc/cups/cups-files.conf
-sed -i '/SetEnv CUPS_NO_BLOCK/d' /etc/cups/cups-files.conf
-echo "SetEnv USB_GATE_WAY 1" >> /etc/cups/cups-files.conf
-echo "SetEnv CUPS_NO_BLOCK 1" >> /etc/cups/cups-files.conf
+/* 顶部深蓝通栏长条背景 */
+.header, div.header {
+    width: 100% !important;
+    background-color: #004b87 !important;
+    color: #ffffff !important;
+    padding: 12px 24px !important;
+    margin: 0 0 20px 0 !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+}
 
-# 8. 启动 D-Bus 与 Avahi
-mkdir -p /var/run/dbus
-rm -f /var/run/dbus/pid /var/run/avahi-daemon/pid
+.header h1, div.header h1 {
+    margin: 0 !important;
+    font-size: 20px !important;
+    color: #ffffff !important;
+}
 
-if [ -f /etc/avahi/avahi-daemon.conf ]; then
-    sed -i 's/^#enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
-    sed -i 's/^enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
-    sed -i 's/^use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
+.header h1 a, div.header h1 a {
+    color: #ffffff !important;
+    text-decoration: none !important;
+}
+
+/* 导航项横向排列 */
+.header ul, div.header ul, ul.nav {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 8px !important;
+}
+
+.header ul li, div.header ul li, ul.nav li {
+    display: inline-block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+.header ul li a, div.header ul li a, ul.nav li a {
+    display: inline-block !important;
+    padding: 6px 14px !important;
+    background-color: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
+    text-decoration: none !important;
+    border-radius: 4px !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    transition: background-color 0.2s ease !important;
+}
+
+.header ul li a:hover, div.header ul li a:hover, ul.nav li a:hover {
+    background-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+/* 底部固定深蓝吸底长条背景 */
+.trailer, div.trailer, .footer, div.footer {
+    position: fixed !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    background-color: #004b87 !important;
+    color: #ffffff !important;
+    font-size: 12px !important;
+    text-align: center !important;
+    margin: 0 !important;
+    padding: 0 15px !important;
+    border-top: 1px solid #003366 !important;
+    box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.1) !important;
+    z-index: 9999 !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.trailer a, div.trailer a, .footer a, div.footer a {
+    color: #b8d9f7 !important;
+    text-decoration: underline !important;
+}
+CSSEOF
+
+# 5. 实体物理拷贝至各语言目录，杜绝软链死循环与沙箱拦截
+for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans; do
+    mkdir -p "$dir"
+    cp -f /usr/share/cups/doc-root/cups.css "$dir/cups.css"
+    [ -f /usr/share/cups/doc-root/cups-printable.css ] && cp -f /usr/share/cups/doc-root/cups-printable.css "$dir/"
+    [ -d /usr/share/cups/doc-root/images ] && cp -rf /usr/share/cups/doc-root/images "$dir/" 2>/dev/null || true
+done
+
+# 统一放行文件权限
+chown -R root:lp /usr/share/cups/doc-root /usr/share/cups/templates /etc/cups
+chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates
+chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
+chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
+
+# 6. 后台启动邮件云打印轮询服务（如果有云打印脚本）
+if [ -f /app/cloud_print.py ]; then
+    python3 /app/cloud_print.py > /var/log/cloud_print.log 2>&1 &
+    echo ">>> 邮件云打印监控进程已启动"
 fi
 
-service dbus start || true
-service avahi-daemon start || true
-
-# 9. 启动云打印守护进程与 CUPS 主服务
-python3 -u /opt/mail_print.py &
+echo ">>> CUPS 服务正在前台启动运行..."
 exec /usr/sbin/cupsd -f
