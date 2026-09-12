@@ -33,7 +33,6 @@ if [ ! -f /etc/cups/cupsd.conf ]; then
 fi
 
 # 4. 【核心修复：彻底根治排版竖列错位与 CSS 404】
-# 创建所有可能命中的语言静态根目录
 mkdir -p /usr/share/cups/doc-root/zh_CN \
          /usr/share/cups/doc-root/zh \
          /usr/share/cups/doc-root/zh-Hans \
@@ -42,17 +41,23 @@ mkdir -p /usr/share/cups/doc-root/zh_CN \
 
 REAL_CSS=$(find /usr/share/cups -name "cups.css" | head -n 1)
 if [ -n "$REAL_CSS" ]; then
-    # 多路径兜底软链接
     ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/cups.css 2>/dev/null || true
     ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh_CN/cups.css 2>/dev/null || true
     ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh/cups.css 2>/dev/null || true
     ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh-Hans/cups.css 2>/dev/null || true
 fi
 
-# 静态静态资源与模板补全
+# 静态资源与模板补齐
 if [ -d /usr/share/cups/doc-root/images ]; then
     ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh_CN/images 2>/dev/null || true
     ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh/images 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh-Hans/images 2>/dev/null || true
+fi
+
+if [ -d /usr/share/cups/doc-root/help ]; then
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh_CN/help 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh/help 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh-Hans/help 2>/dev/null || true
 fi
 
 # 核心强力注入：扫描所有 HTML 模板头部，将相对路径 cups.css 强制修正为根目录绝对路径 /cups.css
@@ -78,7 +83,7 @@ if [ "$DEVICE_PROFILE" = "LOW_MEM" ]; then
     sed -i '/^MaxJobTime/d' /etc/cups/cupsd.conf 2>/dev/null || true
     echo "MaxJobTime 180" >> /etc/cups/cupsd.conf
 
-    # 后台微守护：将 PPD 驱动强压在 600dpi，降低 75% 光栅数据体积
+    # 保持 600dpi 分辨率，降低光栅占用
     (
         while true; do
             for ppd in /etc/cups/ppd/*.ppd; do
@@ -110,11 +115,9 @@ sed -i 's/Port 631//' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i '/^Listen 0.0.0.0:631/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "Listen 0.0.0.0:631" >> /etc/cups/cupsd.conf
 
-# 核心：关闭强制加密，杜绝 426 升级提示
 sed -i '/^DefaultEncryption/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-# 核心：关闭 DNS 反向查询，提速 5-10 秒
 sed -i '/^HostNameLookups/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "HostNameLookups Off" >> /etc/cups/cupsd.conf
 
