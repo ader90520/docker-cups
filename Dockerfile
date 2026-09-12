@@ -31,12 +31,12 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 3. 复制启动脚本、云打印脚本与全部汉化资产（使用 entrypoint.sh）
+# 3. 复制启动脚本、云打印脚本与全部汉化资产（使用确认正确的 i18/zh_CN/zh_CN 路径）
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
-COPY i18/zh_CN/zh_CH/ /tmp/zh_templates/
+COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
 # 4. 彻底汉化：编译 mo 并将中文模板与中文首页覆盖到系统生效目录
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
@@ -48,6 +48,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/doc-root/zh-Hans \
              /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh && \
+    # 编译字典并双重命名铺设
     msguniq --use-first /tmp/cups_zh.po -o /tmp/cups_zh_clean.po && \
     msgfmt -o /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /tmp/cups_zh_clean.po && \
     cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /usr/share/locale/zh_CN/LC_MESSAGES/cups_zh_CN.mo && \
@@ -55,13 +56,16 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
         cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo "$d/cups.mo" && \
         cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo "$d/cups_zh_CN.mo"; \
     done && \
+    # 将实际汉化好的模板覆盖到全局默认模板与各中文分支
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ && \
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ && \
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ && \
+    # 将中文 index.html 覆盖到首页与各语言目录
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
+    # 清理构建临时产物
     rm -rf /tmp/cups_zh.po /tmp/cups_zh_clean.po /tmp/index.html /tmp/zh_templates
 
 # 5. 备份初始配置并赋予执行权限
