@@ -16,25 +16,38 @@ mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups
 chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
 chown -R avahi:avahi /var/run/avahi-daemon 2>/dev/null || true
 
-# 3. 系统管理账户初始化
+# 3. 挂载持久化自愈检查（核心防护：防止 -v 挂载空目录导致配置丢失启动崩溃）
+if [ ! -f /etc/cups/cupsd.conf ]; then
+    echo ">>> 检测到 /etc/cups 缺少核心配置，正在从初始备份自愈还原..."
+    mkdir -p /etc/cups
+    cp -rpn /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
+fi
+
+# 4. 系统管理账户初始化（双向兼容 CUPS_PASSWORD 与 ADMIN_PASSWORD）
 ADMIN_USER=${CUPS_USER:-admin}
-ADMIN_PASS=${CUPS_PASSWORD:-admin}
+ADMIN_PASS=${CUPS_PASSWORD:-${ADMIN_PASSWORD:-admin}}
 
 if ! id "$ADMIN_USER" &>/dev/null; then
     useradd -m -s /bin/bash -G lpadmin,lp "$ADMIN_USER"
     echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
     echo ">>> 已创建管理用户: $ADMIN_USER"
+else
+    # 容器若复用挂载，强制更新一次传入的新密码
+    echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 fi
 
-# 4. CUPS 核心配置与轻量化防护（保护小内存与小磁盘）
+# 5. CUPS 核心配置与轻量化防护（保护小内存与小磁盘）
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-# 默认语言锁定中文，禁用强制 SSL 防止 CGI 堵塞白屏
+# 默认语言锁定中文，禁用强制 SSL 防止 CGI 堵塞白屏，声明 UTF-8 防乱码
 sed -i "/^DefaultLanguage/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultLanguage zh_CN" >> /etc/cups/cupsd.conf
+
+sed -i "/^AddDefaultCharset/d" /etc/cups/cupsd.conf 2>/dev/null || true
+echo "AddDefaultCharset UTF-8" >> /etc/cups/cupsd.conf
 
 sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
@@ -50,11 +63,11 @@ echo "PreserveJobFiles No" >> /etc/cups/cupsd.conf
 sed -i "/^DocumentRoot/d" /etc/cups/cups-files.conf 2>/dev/null || true
 echo "DocumentRoot /usr/share/cups/doc-root" >> /etc/cups/cups-files.conf
 
-# 5. 规整 HTML 模板中的样式表引用路径
+# 6. 规整 HTML 模板中的样式表引用路径
 find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
   "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-# 6. 注入深蓝通栏导航栏与固定吸底样式补丁
+# 7. 注入深蓝通栏导航栏与固定吸底样式补丁
 sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
 
 cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
@@ -137,7 +150,7 @@ body {
 .trailer a, div.trailer a, .footer a, div.footer a { color: #b8d9f7 !important; text-decoration: underline !important; }
 CSSEOF
 
-# 7. 实体物理同步给各语言目录（防止沙箱软链失效）
+# 8. 实体物理同步给各语言目录（防止沙箱软链失效）
 for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans; do
     mkdir -p "$dir"
     cp -f /usr/share/cups/doc-root/cups.css "$dir/cups.css"
@@ -151,11 +164,11 @@ chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 8. 启动系统总线与局域网广播
+# 9. 启动系统总线与局域网广播
 service dbus start 2>/dev/null || true
 service avahi-daemon start 2>/dev/null || true
 
-# 9. 启动邮件云打印后台服务
+# 10. 启动邮件云打印后台服务
 if [ -f /opt/mail_print.py ]; then
     python3 /opt/mail_print.py > /var/log/mail_print.log 2>&1 &
     echo ">>> 邮件云打印监控服务已在后台启动"
