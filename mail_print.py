@@ -1,212 +1,212 @@
-import imaplib
-import email
-from email.header import decode_header
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
+import sys
 import time
+import email
+import imaplib
 import subprocess
 import requests
+from email.header import decode_header
 from PIL import Image
 
-IMAP_SERVER = os.getenv("IMAP_SERVER", "").strip()
-EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
-EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
-NOTIFY_URL = os.getenv("NOTIFY_URL", "").strip()
-PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "").strip()
+# 环境变量读取
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.qq.com")
+EMAIL_USER = os.getenv("EMAIL_USER", "")
+EMAIL_PASS = os.getenv("EMAIL_PASS", "")
+NOTIFY_URL = os.getenv("NOTIFY_URL", "http://www.pushplus.plus/send")
+PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 
-DEFAULT_KEYWORDS = (
-    "打,print,作业,试卷,练习,复习,打卡,"
-    "语文,数学,英语,物理,化学,生物,历史,地理,政治,科学,"
-    "一年级,二年级,三年级,四年级,五年级,六年级,"
-    "初一,初二,初三,七年级,八年级,九年级,高一,高二,高三"
-)
-TRIGGER_KEYWORD = os.getenv("TRIGGER_KEYWORD", DEFAULT_KEYWORDS).strip()
+# 触发关键词定义（标题或附件名中包含即触发打印）
+TRIGGER_KEYWORDS = [
+    "打", "print", "作业", "试卷", "练习", "复习", "打卡",
+    "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
+    "一年级", "二年级", "三年级", "四年级", "五年级", "六年级",
+    "初一", "初二", "初三", "七年级", "八年级", "九年级", "高一", "高二", "高三"
+]
 
-SAVE_DIR = "/var/spool/cups/tmp_jobs"
-os.makedirs(SAVE_DIR, exist_ok=True)
+TEMP_DIR = "/tmp/mail_print_tasks"
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-def get_system_profile():
-    try:
-        if os.path.exists("/tmp/cups_profile"):
+def get_hardware_profile():
+    """获取 entrypoint.sh 探测出的硬件模式"""
+    if os.path.exists("/tmp/cups_profile"):
+        try:
             with open("/tmp/cups_profile", "r") as f:
                 return f.read().strip()
-    except Exception:
-        pass
-    return "LOW_MEM"
+        except Exception:
+            pass
+    return "HIGH_PERF"
 
-SYSTEM_PROFILE = get_system_profile()
-
-def send_notification(title, content):
-    if not NOTIFY_URL:
+def send_pushplus_notice(title, content):
+    """微信服务号通知推送"""
+    if not PUSHPLUS_TOKEN:
         return
     try:
-        if "pushplus.plus" in NOTIFY_URL:
-            payload = {
-                "token": PUSHPLUS_TOKEN,
-                "title": title,
-                "content": content.replace("\n", "<br>"),
-                "template": "html"
-            }
-        elif "qyapi.weixin.qq.com" in NOTIFY_URL:
-            payload = {"msgtype": "text", "text": {"content": f"【{title}】\n{content}"}}
-        else:
-            payload = {"title": title, "content": content}
-
-        requests.post(NOTIFY_URL, json=payload, timeout=8)
+        data = {
+            "token": PUSHPLUS_TOKEN,
+            "title": title,
+            "content": content,
+            "template": "html"
+        }
+        requests.post(NOTIFY_URL, json=data, timeout=10)
     except Exception as e:
-        print(f"[Notice] 微信通知推送异常: {e}", flush=True)
+        print(f" [PushPlus Error] 推送失败: {e}")
 
-def decode_mime_words(s):
-    if not s:
+def decode_str(header_text):
+    """解码邮件头部字段"""
+    if not header_text:
         return ""
-    decoded_fragments = []
-    for fragment, encoding in decode_header(s):
+    decoded_fragments = decode_header(header_text)
+    text_result = []
+    for fragment, charset in decoded_fragments:
         if isinstance(fragment, bytes):
-            enc = encoding or "utf-8"
-            try:
-                decoded_fragments.append(fragment.decode(enc, errors="ignore"))
-            except LookupError:
-                decoded_fragments.append(fragment.decode("utf-8", errors="ignore"))
+            text_result.append(fragment.decode(charset or 'utf-8', errors='ignore'))
         else:
-            decoded_fragments.append(str(fragment))
-    return "".join(decoded_fragments)
+            text_result.append(str(fragment))
+    return "".join(text_result)
 
-def is_valid_trigger(text_to_check):
-    if not TRIGGER_KEYWORD:
-        return True
-    keywords = [k.strip().lower() for k in TRIGGER_KEYWORD.split(",") if k.strip()]
-    target = text_to_check.lower()
-    return any(k in target for k in keywords)
+def optimize_image_for_print(filepath):
+    """
+    根据设备硬件档次自适应缩放大图：
+    - LOW_MEM（海纳思）：最长边限制 1800 像素，防止栅格化把磁盘/内存撑爆
+    - HIGH_PERF（大设备）：上限放宽到 4000 像素，极致清晰
+    """
+    try:
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in ['.jpg', '.jpeg', '.png']:
+            profile = get_hardware_profile()
+            max_limit = 1800 if profile == "LOW_MEM" else 4000
 
-def process_image(image_path):
-    if SYSTEM_PROFILE == "HIGH_PERF":
-        print(f"[Quality] 高性能模式：保留原图超高清分辨率渲染 -> {image_path}", flush=True)
+            with Image.open(filepath) as img:
+                w, h = img.size
+                max_edge = max(w, h)
+                if max_edge > max_limit:
+                    scale = max_limit / float(max_edge)
+                    new_size = (int(w * scale), int(h * scale))
+                    resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
+                    if resized_img.mode != 'RGB':
+                        resized_img = resized_img.convert('RGB')
+                    resized_img.save(filepath, "JPEG", quality=85)
+                    print(f" [Optimizer] 触发自适应降采样 ({profile}): {w}x{h} -> {new_size[0]}x{new_size[1]}")
+    except Exception as e:
+        print(f" [Optimizer Warning] 图片预处理跳过: {e}")
+
+def print_file(filepath, filename):
+    """调用系统默认打印机执行打印"""
+    try:
+        # 执行图片防爆盘预处理
+        optimize_image_for_print(filepath)
+
+        # 提交系统打印任务（强制使用默认打印机，并自适应纸张大小）
+        cmd = ["lp", "-o", "fit-to-page", filepath]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        if res.returncode == 0:
+            print(f" [Print Success] 已提交打印任务: {filename} ({res.stdout.strip()})")
+            send_pushplus_notice("🖨️ 打印机出纸提醒", f"已成功提交打印文件：<br><b>{filename}</b><br>正在出纸，请在打印机旁等待。")
+            return True
+        else:
+            print(f" [Print Error] 打印指令执行失败: {res.stderr.strip()}")
+            send_pushplus_notice("❌ 打印失败提醒", f"尝试打印 <b>{filename}</b> 时失败：<br>{res.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f" [System Error] 提交任务出现异常: {e}")
+        return False
+    finally:
+        # 即刻销毁收件临时文件，保持磁盘零占用
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+
+def process_email():
+    """主轮询逻辑：拉取未读邮件并解析附件"""
+    if not EMAIL_USER or not EMAIL_PASS:
         return
 
-    try:
-        with Image.open(image_path) as img:
-            if img.mode not in ("L", "RGB"):
-                img = img.convert("RGB")
-            
-            max_dim = 2480
-            if max(img.size) > max_dim:
-                img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-                img.save(image_path, quality=85, optimize=True)
-                print(f"[Opt] 低功耗模式：图像已自适应轻量化 -> {image_path}", flush=True)
-    except Exception as e:
-        print(f"[Opt Warning] 图片处理跳过: {e}", flush=True)
-
-def check_and_print():
     mail = None
     try:
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER, timeout=15)
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER, 993)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("INBOX")
 
-        status, messages = mail.search(None, "UNSEEN")
-        if status != "OK" or not messages or not messages[0]:
-            mail.logout()
+        status, messages = mail.search(None, 'UNSEEN')
+        if status != 'OK' or not messages[0]:
             return
 
-        msg_ids = messages[0].split()
-        for num in msg_ids:
-            res, data = mail.fetch(num, "(RFC822)")
-            if res != "OK" or not data:
+        for num in messages[0].split():
+            status, data = mail.fetch(num, '(RFC822)')
+            if status != 'OK':
                 continue
 
-            raw_email = data[0][1]
-            msg = email.message_from_bytes(raw_email)
+            msg = email.message_from_bytes(data[0][1])
+            subject = decode_str(msg.get("Subject", ""))
+            sender = decode_str(msg.get("From", ""))
 
-            subject = decode_mime_words(msg.get("Subject", "无主题"))
-            sender = decode_mime_words(msg.get("From", "未知发件人"))
+            print(f" [New Mail] 收到来自 {sender} 的邮件: 《{subject}》")
 
-            valid_attachments = []
+            attachments_to_print = []
             for part in msg.walk():
-                if part.get_content_maintype() == "multipart":
+                if part.get_content_maintype() == 'multipart':
                     continue
-
                 filename = part.get_filename()
-                if not filename:
-                    continue
+                if filename:
+                    filename = decode_str(filename)
+                    ext = os.path.splitext(filename)[1].lower()
+                    
+                    # 支持的打印格式：PDF、常见文档和图片
+                    if ext in ['.pdf', '.jpg', '.jpeg', '.png', '.txt']:
+                        payload = part.get_payload(decode=True)
+                        # 忽略小于 40KB 的小图标或邮件签名图片
+                        if ext in ['.jpg', '.jpeg', '.png'] and len(payload) < 40 * 1024:
+                            print(f" [Filter] 过滤邮箱签名/小图标: {filename}")
+                            continue
+                        
+                        save_path = os.path.join(TEMP_DIR, f"{int(time.time())}_{filename}")
+                        with open(save_path, "wb") as f:
+                            f.write(payload)
+                        attachments_to_print.append((save_path, filename))
 
-                filename = decode_mime_words(filename)
-                ext = os.path.splitext(filename)[1].lower()
+            # 命中关键词或标题含有附件匹配则执行打印
+            should_print = any(k in subject for k in TRIGGER_KEYWORDS) or any(
+                any(k in fname for k in TRIGGER_KEYWORDS) for _, fname in attachments_to_print
+            )
 
-                if ext in [".pdf", ".jpg", ".jpeg", ".png"]:
-                    payload = part.get_payload(decode=True)
-                    if not payload:
-                        continue
+            if should_print and attachments_to_print:
+                for fpath, fname in attachments_to_print:
+                    print_file(fpath, fname)
+            elif attachments_to_print:
+                print(f" [Ignore] 邮件未包含打印触发词，已跳过打印: 《{subject}》")
+                for fpath, _ in attachments_to_print:
+                    if os.path.exists(fpath):
+                        os.remove(fpath)
 
-                    if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
-                        print(f"[Filter] 忽略广告/签名图标: {filename} ({len(payload)//1024} KB)", flush=True)
-                        continue
-
-                    valid_attachments.append((filename, ext, payload))
-
-            if not valid_attachments:
-                mail.store(num, "+FLAGS", "\\Deleted")
-                continue
-
-            all_names_to_check = subject + " " + " ".join([att[0] for att in valid_attachments])
-            if not is_valid_trigger(all_names_to_check):
-                print(f"[Ignore] 未命中打印指令，跳过: 《{subject}》", flush=True)
-                mail.store(num, "+FLAGS", "\\Deleted")
-                continue
-
-            print(f"[Print Job] 开始处理打印任务: 《{subject}》", flush=True)
-
-            for filename, ext, payload in valid_attachments:
-                safe_filename = "".join([c for c in filename if c.isalnum() or c in "._- "]).strip()
-                if not safe_filename:
-                    safe_filename = f"task_{int(time.time())}{ext}"
-
-                filepath = os.path.join(SAVE_DIR, safe_filename)
-                with open(filepath, "wb") as f:
-                    f.write(payload)
-
-                if ext in [".jpg", ".jpeg", ".png"]:
-                    process_image(filepath)
-
-                cmd = ["lp", "-o", "fit-to-page"]
-                if SYSTEM_PROFILE == "LOW_MEM":
-                    cmd.extend(["-o", "Resolution=600dpi"])
-
-                cmd.append(filepath)
-                result = subprocess.run(cmd, capture_output=True, text=True)
-
-                if result.returncode == 0:
-                    send_notification("🖨️ 打印成功", f"文件: {filename}\n来源: {sender}\n模式: {SYSTEM_PROFILE}")
-                else:
-                    err_msg = result.stderr.strip()
-                    send_notification("❌ 打印失败", f"文件: {filename}\n原因: {err_msg}")
-
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-
-            mail.store(num, "+FLAGS", "\\Deleted")
+            # 标记邮件已读并删除，保持收件箱精简
+            mail.store(num, '+FLAGS', '\\Deleted')
 
         mail.expunge()
-        mail.logout()
 
     except Exception as e:
-        print(f"[Error] 邮件轮询异常: {e}", flush=True)
+        print(f" [Mail Loop Error] 邮件轮询异常: {e}")
+    finally:
         if mail:
             try:
+                mail.close()
                 mail.logout()
             except Exception:
                 pass
 
-if __name__ == "__main__":
-    time.sleep(5)
-
-    if not (IMAP_SERVER and EMAIL_USER and EMAIL_PASS):
-        print(f"[System] 运行模式: {SYSTEM_PROFILE} | 局域网 AirPrint 已就绪，无邮箱配置进入休眠。", flush=True)
-        while True:
-            time.sleep(3600)
-
-    print(f"[System] 运行模式: {SYSTEM_PROFILE} | 邮件监听已就绪...", flush=True)
+def main():
+    print("==========================================")
+    print(" [Cloud Print Daemon] 云打印守护进程已就绪...")
+    print(f" 当前硬件匹配策略: {get_hardware_profile()}")
+    print("==========================================")
     while True:
-        try:
-            check_and_print()
-        except Exception as e:
-            print(f"[Loop Exception] {e}", flush=True)
+        process_email()
         time.sleep(10)
+
+if __name__ == "__main__":
+    main()
