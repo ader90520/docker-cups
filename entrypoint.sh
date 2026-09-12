@@ -5,7 +5,12 @@ echo "=========================================="
 echo "      启动 CUPS 打印服务与优化环境        "
 echo "=========================================="
 
-# 1. 系统用户与权限
+# 1. 显式锁定环境变量为中文
+export LANG=zh_CN.UTF-8
+export LANGUAGE=zh_CN:zh
+export LC_ALL=zh_CN.UTF-8
+
+# 2. 系统用户与权限
 ADMIN_USER=${CUPS_USER:-admin}
 ADMIN_PASS=${CUPS_PASSWORD:-admin}
 
@@ -15,23 +20,29 @@ if ! id "$ADMIN_USER" &>/dev/null; then
     echo ">>> 已创建管理用户: $ADMIN_USER"
 fi
 
-# 2. CUPS 核心配置与防白屏
+# 3. CUPS 核心配置、默认中文与防白屏
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
+# 强制默认语言为 zh_CN
+sed -i "/^DefaultLanguage/d" /etc/cups/cupsd.conf 2>/dev/null || true
+echo "DefaultLanguage zh_CN" >> /etc/cups/cupsd.conf
+
+# 彻底禁用强制 SSL，防止管理面板与添加打印机白屏
 sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
+# 显式锁定静态文件绝对根路径
 sed -i "/^DocumentRoot/d" /etc/cups/cups-files.conf 2>/dev/null || true
 echo "DocumentRoot /usr/share/cups/doc-root" >> /etc/cups/cups-files.conf
 
-# 3. 规整 HTML 模板中的样式表引用路径
+# 4. 规整 HTML 模板中的样式表引用路径
 find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
   "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-# 4. 写入深蓝通栏导航栏与固定吸底样式补丁
+# 5. 写入深蓝通栏导航栏与固定吸底样式补丁
 sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
 
 cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
@@ -117,7 +128,7 @@ body {
 .trailer a, div.trailer a, .footer a, div.footer a { color: #b8d9f7 !important; text-decoration: underline !important; }
 CSSEOF
 
-# 5. 实体物理拷贝至各语言目录，杜绝软链沙箱拦截
+# 6. 实体物理拷贝至各语言目录，杜绝软链沙箱拦截
 for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans; do
     mkdir -p "$dir"
     cp -f /usr/share/cups/doc-root/cups.css "$dir/cups.css"
@@ -126,16 +137,15 @@ for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share
 done
 
 # 权限放行
-chown -R root:lp /usr/share/cups/doc-root /usr/share/cups/templates /etc/cups
-chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates
+chown -R root:lp /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/locale /etc/cups
+chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/locale
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 6. 启动 Avahi 与 D-Bus（用于 AirPrint 局域网广播）
+# 7. 启动广播与邮件云打印服务
 service dbus start 2>/dev/null || true
 service avahi-daemon start 2>/dev/null || true
 
-# 7. 启动邮件云打印后台服务
 if [ -f /opt/mail_print.py ]; then
     python3 /opt/mail_print.py > /var/log/mail_print.log 2>&1 &
     echo ">>> 邮件云打印监控服务已在后台启动"
