@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 安装基础依赖与驱动套件
+# 1. 安装基础运行依赖与 CUPS 核心组件
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -31,8 +31,8 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 3. 复制启动脚本、云打印脚本与全部汉化资产
-COPY docker-entrypoint.sh /docker-entrypoint.sh
+# 3. 复制启动脚本、云打印脚本与全部汉化资产（使用 entrypoint.sh）
+COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
@@ -66,9 +66,9 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
 
 # 5. 备份初始配置并赋予执行权限
 RUN cp -rp /etc/cups /etc/cups.orig && \
-    chmod +x /docker-entrypoint.sh /opt/mail_print.py
+    chmod +x /entrypoint.sh /opt/mail_print.py
 
 EXPOSE 631
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cupsd", "-f"]
