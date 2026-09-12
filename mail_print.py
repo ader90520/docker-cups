@@ -19,7 +19,6 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 NOTIFY_URL = os.getenv("NOTIFY_URL", "http://www.pushplus.plus/send")
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 
-# 触发关键词
 TRIGGER_KEYWORDS = [
     "打", "print", "作业", "试卷", "练习", "复习", "打卡",
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
@@ -64,10 +63,7 @@ def decode_str(header_text):
         return str(header_text)
 
 def clean_filename(filename):
-    """
-    健壮的附件文件名清洗器：彻底杜绝 empty separator 报错
-    支持 RFC2231 及 URL 编码解码，完美提取中英文长文件名
-    """
+    """纯净健壮的文件名清洗器：杜绝 empty separator 报错"""
     if not filename:
         return f"doc_{int(time.time())}.pdf"
     try:
@@ -79,7 +75,7 @@ def clean_filename(filename):
         clean_name = filename.strip().replace("/", "_").replace("\\", "_")
         return clean_name if clean_name else f"doc_{int(time.time())}.pdf"
     except Exception as e:
-        print(f" [Filename Parse Warning] 解析微调: {e}")
+        print(f" [Filename Parse Warning] 解析警告: {e}")
         return f"doc_{int(time.time())}.pdf"
 
 def optimize_image_for_print(filepath):
@@ -105,7 +101,6 @@ def optimize_image_for_print(filepath):
 def print_file(filepath, filename):
     try:
         optimize_image_for_print(filepath)
-        # 显式使用 -c (克隆作业文件防止竞态删除) 和 -d (锁定 M126a 物理队列)
         cmd = ["lp", "-c", "-d", "HP_LaserJet_Pro_MFP_M126a", "-o", "fit-to-page", filepath]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.returncode == 0:
@@ -168,7 +163,7 @@ def process_email():
                         if not payload:
                             continue
 
-                        # 过滤小于 40KB 的小图片，PDF 文件无论多小一律放行
+                        # 图片过滤小于 40KB 签名图标；PDF 一律保留
                         if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
                             print(f" [Filter] 过滤小图标/签名: {filename}")
                             continue
