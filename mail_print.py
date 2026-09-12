@@ -8,17 +8,18 @@ import email
 import imaplib
 import subprocess
 import requests
+import urllib.parse
 from email.header import decode_header
+from email.utils import collapse_rfc2231_value
 from PIL import Image
 
-# 环境变量读取
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.qq.com")
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 NOTIFY_URL = os.getenv("NOTIFY_URL", "http://www.pushplus.plus/send")
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 
-# 触发关键词定义（标题或附件名中包含即触发打印）
+# 触发关键词
 TRIGGER_KEYWORDS = [
     "打", "print", "作业", "试卷", "练习", "复习", "打卡",
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
@@ -30,7 +31,6 @@ TEMP_DIR = "/tmp/mail_print_tasks"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 def get_hardware_profile():
-    """获取 entrypoint.sh 探测出的硬件模式"""
     if os.path.exists("/tmp/cups_profile"):
         try:
             with open("/tmp/cups_profile", "r") as f:
@@ -40,45 +40,54 @@ def get_hardware_profile():
     return "HIGH_PERF"
 
 def send_pushplus_notice(title, content):
-    """微信服务号通知推送"""
     if not PUSHPLUS_TOKEN:
         return
     try:
-        data = {
-            "token": PUSHPLUS_TOKEN,
-            "title": title,
-            "content": content,
-            "template": "html"
-        }
+        data = {"token": PUSHPLUS_TOKEN, "title": title, "content": content, "template": "html"}
         requests.post(NOTIFY_URL, json=data, timeout=10)
     except Exception as e:
         print(f" [PushPlus Error] 推送失败: {e}")
 
 def decode_str(header_text):
-    """解码邮件头部字段"""
     if not header_text:
         return ""
-    decoded_fragments = decode_header(header_text)
-    text_result = []
-    for fragment, charset in decoded_fragments:
-        if isinstance(fragment, bytes):
-            text_result.append(fragment.decode(charset or 'utf-8', errors='ignore'))
-        else:
-            text_result.append(str(fragment))
-    return "".join(text_result)
+    try:
+        decoded_fragments = decode_header(header_text)
+        text_result = []
+        for fragment, charset in decoded_fragments:
+            if isinstance(fragment, bytes):
+                text_result.append(fragment.decode(charset or "utf-8", errors="ignore"))
+            else:
+                text_result.append(str(fragment))
+        return "".join(text_result)
+    except Exception:
+        return str(header_text)
+
+def clean_filename(filename):
+    """
+    健壮的附件文件名清洗器：彻底杜绝 empty separator 报错
+    支持 RFC2231 及 URL 编码解码，完美提取中英文长文件名
+    """
+    if not filename:
+        return f"doc_{int(time.time())}.pdf"
+    try:
+        if isinstance(filename, tuple):
+            filename = collapse_rfc2231_value(filename)
+        filename = decode_str(str(filename))
+        if "%" in filename:
+            filename = urllib.parse.unquote(filename)
+        clean_name = filename.strip().replace("/", "_").replace("\\", "_")
+        return clean_name if clean_name else f"doc_{int(time.time())}.pdf"
+    except Exception as e:
+        print(f" [Filename Parse Warning] 解析微调: {e}")
+        return f"doc_{int(time.time())}.pdf"
 
 def optimize_image_for_print(filepath):
-    """
-    根据设备硬件档次自适应缩放大图：
-    - LOW_MEM（海纳思）：最长边限制 1800 像素，防止栅格化把磁盘/内存撑爆
-    - HIGH_PERF（大设备）：上限放宽到 4000 像素，极致清晰
-    """
     try:
         ext = os.path.splitext(filepath)[1].lower()
-        if ext in ['.jpg', '.jpeg', '.png']:
+        if ext in [".jpg", ".jpeg", ".png"]:
             profile = get_hardware_profile()
             max_limit = 1800 if profile == "LOW_MEM" else 4000
-
             with Image.open(filepath) as img:
                 w, h = img.size
                 max_edge = max(w, h)
@@ -86,36 +95,31 @@ def optimize_image_for_print(filepath):
                     scale = max_limit / float(max_edge)
                     new_size = (int(w * scale), int(h * scale))
                     resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
-                    if resized_img.mode != 'RGB':
-                        resized_img = resized_img.convert('RGB')
+                    if resized_img.mode != "RGB":
+                        resized_img = resized_img.convert("RGB")
                     resized_img.save(filepath, "JPEG", quality=85)
-                    print(f" [Optimizer] 触发自适应降采样 ({profile}): {w}x{h} -> {new_size[0]}x{new_size[1]}")
+                    print(f" [Optimizer] 图片自适应降维 ({profile}): {w}x{h} -> {new_size[0]}x{new_size[1]}")
     except Exception as e:
-        print(f" [Optimizer Warning] 图片预处理跳过: {e}")
+        print(f" [Optimizer Warning] 图片优化跳过: {e}")
 
 def print_file(filepath, filename):
-    """调用系统默认打印机执行打印"""
     try:
-        # 执行图片防爆盘预处理
         optimize_image_for_print(filepath)
-
-        # 提交系统打印任务（强制使用默认打印机，并自适应纸张大小）
-        cmd = ["lp", "-o", "fit-to-page", filepath]
+        # 显式使用 -c (克隆作业文件防止竞态删除) 和 -d (锁定 M126a 物理队列)
+        cmd = ["lp", "-c", "-d", "HP_LaserJet_Pro_MFP_M126a", "-o", "fit-to-page", filepath]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
         if res.returncode == 0:
-            print(f" [Print Success] 已提交打印任务: {filename} ({res.stdout.strip()})")
+            print(f" [Print Success] 任务提交成功: {filename} ({res.stdout.strip()})")
             send_pushplus_notice("🖨️ 打印机出纸提醒", f"已成功提交打印文件：<br><b>{filename}</b><br>正在出纸，请在打印机旁等待。")
             return True
         else:
             print(f" [Print Error] 打印指令执行失败: {res.stderr.strip()}")
-            send_pushplus_notice("❌ 打印失败提醒", f"尝试打印 <b>{filename}</b> 时失败：<br>{res.stderr.strip()}")
+            send_pushplus_notice("❌ 打印失败提醒", f"打印 <b>{filename}</b> 失败：<br>{res.stderr.strip()}")
             return False
     except Exception as e:
-        print(f" [System Error] 提交任务出现异常: {e}")
+        print(f" [System Error] 提交异常: {e}")
         return False
     finally:
-        # 即刻销毁收件临时文件，保持磁盘零占用
         if os.path.exists(filepath):
             try:
                 os.remove(filepath)
@@ -123,54 +127,58 @@ def print_file(filepath, filename):
                 pass
 
 def process_email():
-    """主轮询逻辑：拉取未读邮件并解析附件"""
     if not EMAIL_USER or not EMAIL_PASS:
         return
-
     mail = None
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, 993)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("INBOX")
-
-        status, messages = mail.search(None, 'UNSEEN')
-        if status != 'OK' or not messages[0]:
+        status, messages = mail.search(None, "UNSEEN")
+        if status != "OK" or not messages[0]:
             return
 
         for num in messages[0].split():
-            status, data = mail.fetch(num, '(RFC822)')
-            if status != 'OK':
+            status, data = mail.fetch(num, "(RFC822)")
+            if status != "OK":
                 continue
 
             msg = email.message_from_bytes(data[0][1])
             subject = decode_str(msg.get("Subject", ""))
             sender = decode_str(msg.get("From", ""))
-
-            print(f" [New Mail] 收到来自 {sender} 的邮件: 《{subject}》")
+            print(f" [New Mail] 收到邮件: 《{subject}》 来自: {sender}")
 
             attachments_to_print = []
             for part in msg.walk():
-                if part.get_content_maintype() == 'multipart':
+                if part.get_content_maintype() == "multipart":
                     continue
-                filename = part.get_filename()
-                if filename:
-                    filename = decode_str(filename)
+
+                raw_filename = part.get_filename()
+                content_type = part.get_content_type().lower()
+
+                if not raw_filename and "pdf" in content_type:
+                    raw_filename = f"document_{int(time.time())}.pdf"
+
+                if raw_filename:
+                    filename = clean_filename(raw_filename)
                     ext = os.path.splitext(filename)[1].lower()
-                    
-                    # 支持的打印格式：PDF、常见文档和图片
-                    if ext in ['.pdf', '.jpg', '.jpeg', '.png', '.txt']:
+
+                    if ext in [".pdf", ".jpg", ".jpeg", ".png", ".txt"] or "pdf" in content_type:
                         payload = part.get_payload(decode=True)
-                        # 忽略小于 40KB 的小图标或邮件签名图片
-                        if ext in ['.jpg', '.jpeg', '.png'] and len(payload) < 40 * 1024:
-                            print(f" [Filter] 过滤邮箱签名/小图标: {filename}")
+                        if not payload:
                             continue
-                        
+
+                        # 过滤小于 40KB 的小图片，PDF 文件无论多小一律放行
+                        if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
+                            print(f" [Filter] 过滤小图标/签名: {filename}")
+                            continue
+
                         save_path = os.path.join(TEMP_DIR, f"{int(time.time())}_{filename}")
                         with open(save_path, "wb") as f:
                             f.write(payload)
                         attachments_to_print.append((save_path, filename))
+                        print(f" [Found Attachment] 成功捕获待打印文件: {filename} (大小: {len(payload)} 字节)")
 
-            # 命中关键词或标题含有附件匹配则执行打印
             should_print = any(k in subject for k in TRIGGER_KEYWORDS) or any(
                 any(k in fname for k in TRIGGER_KEYWORDS) for _, fname in attachments_to_print
             )
@@ -179,18 +187,16 @@ def process_email():
                 for fpath, fname in attachments_to_print:
                     print_file(fpath, fname)
             elif attachments_to_print:
-                print(f" [Ignore] 邮件未包含打印触发词，已跳过打印: 《{subject}》")
+                print(f" [Ignore] 邮件未包含触发关键词，跳过打印: 《{subject}》")
                 for fpath, _ in attachments_to_print:
                     if os.path.exists(fpath):
                         os.remove(fpath)
 
-            # 标记邮件已读并删除，保持收件箱精简
-            mail.store(num, '+FLAGS', '\\Deleted')
-
+            mail.store(num, "+FLAGS", "\\Deleted")
         mail.expunge()
 
     except Exception as e:
-        print(f" [Mail Loop Error] 邮件轮询异常: {e}")
+        print(f" [Mail Loop Error] 邮件处理异常: {e}")
     finally:
         if mail:
             try:
