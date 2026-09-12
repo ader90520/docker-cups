@@ -32,21 +32,43 @@ if [ ! -f /etc/cups/cupsd.conf ]; then
     cp -rp /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
 fi
 
-# 4. 确保静态资源与模板权限正常
+# 4. 自动探测并强绑 cups.css 与静态资源（彻底解决任何语言环境下的排版错位与 404）
+mkdir -p /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans
+
+REAL_CSS=$(find /usr/share/cups -name "cups.css" | head -n 1)
+if [ -n "$REAL_CSS" ]; then
+    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/cups.css 2>/dev/null || true
+    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh_CN/cups.css 2>/dev/null || true
+    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh/cups.css 2>/dev/null || true
+    ln -sfn "$REAL_CSS" /usr/share/cups/doc-root/zh-Hans/cups.css 2>/dev/null || true
+fi
+
+# 强绑图片与帮助静态目录
+if [ -d /usr/share/cups/doc-root/images ]; then
+    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh_CN/images 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh/images 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/images /usr/share/cups/doc-root/zh-Hans/images 2>/dev/null || true
+fi
+
+if [ -d /usr/share/cups/doc-root/help ]; then
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh_CN/help 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh/help 2>/dev/null || true
+    ln -sfn /usr/share/cups/doc-root/help /usr/share/cups/doc-root/zh-Hans/help 2>/dev/null || true
+fi
+
 chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates 2>/dev/null || true
 
-# 5. 网页访问放行、极速响应与【彻底杜绝 426 升级页面】
-# 显式绑定 IPv4 端口，避免 IPv6 寻址超时卡顿
+# 5. 网页访问放行、极速响应与杜绝 426 升级拦截
 sed -i 's/Listen localhost:631//' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/Port 631//' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i '/^Listen 0.0.0.0:631/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "Listen 0.0.0.0:631" >> /etc/cups/cupsd.conf
 
-# 【核心修复1】：彻底禁用强制 SSL 升级拦截，从根源杜绝“升级页面”和样式崩塌
+# 禁用强制 SSL 升级，杜绝 426 升级页面引发排版崩塌
 sed -i '/^DefaultEncryption/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-# 【核心修复2】：关闭客户端 DNS 反向查询，彻底根治网页卡顿 5~10 秒
+# 关闭客户端 DNS 反向查询，杜绝管理页转圈 5~10 秒
 sed -i '/^HostNameLookups/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "HostNameLookups Off" >> /etc/cups/cupsd.conf
 
@@ -60,14 +82,14 @@ sed -i '/^BrowseLocalProtocols/d' /etc/cups/cupsd.conf 2>/dev/null || true
 echo "Browsing Yes" >> /etc/cups/cupsd.conf
 echo "BrowseLocalProtocols dnssd" >> /etc/cups/cupsd.conf
 
-# 允许局域网内所有设备访问管理后台与任务队列
+# 允许局域网内所有设备访问后台
 grep -q "Allow All" /etc/cups/cupsd.conf || {
     sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
     sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
     sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 }
 
-# 6. USB 底层无阻塞传输（彻底根治打印机队列显示 Processing 却卡死不吐纸）
+# 6. USB 底层无阻塞传输（杜绝 Processing 挂起卡纸）
 touch /etc/cups/cups-files.conf
 sed -i '/SetEnv USB_GATE_WAY/d' /etc/cups/cups-files.conf
 sed -i '/SetEnv CUPS_NO_BLOCK/d' /etc/cups/cups-files.conf
@@ -81,7 +103,6 @@ if [ "$DEVICE_PROFILE" = "LOW_MEM" ]; then
     sed -i '/^ErrorPolicy/d' /etc/cups/cupsd.conf
     echo "ErrorPolicy retry-job" >> /etc/cups/cupsd.conf
 
-    # 小盒子微守护：将 PPD 默认分辨率压制为 600dpi 防 OOM
     (
         while true; do
             for ppd in /etc/cups/ppd/*.ppd; do
@@ -101,14 +122,13 @@ else
     echo "ErrorPolicy retry-job" >> /etc/cups/cupsd.conf
 fi
 
-# 8. 启动 D-Bus 与 Avahi 增强广播（针对软路由与多网卡环境强化）
+# 8. 启动 D-Bus 与 Avahi 增强广播
 mkdir -p /var/run/dbus
 rm -f /var/run/dbus/pid /var/run/avahi-daemon/pid
 
 if [ -f /etc/avahi/avahi-daemon.conf ]; then
     sed -i 's/^#enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
     sed -i 's/^enable-dbus=.*/enable-dbus=yes/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
-    # 禁用 IPv6 单独干扰，避免 Windows 客户端探测超时
     sed -i 's/^use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf 2>/dev/null || true
 fi
 
