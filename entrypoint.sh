@@ -2,28 +2,28 @@
 set -e
 
 echo "=========================================="
-echo "      启动 CUPS 打印服务与优化环境        "
+echo "      启动 CUPS 打印服务 (高稳定优化版)   "
 echo "=========================================="
 
-# 1. 显式锁定中文环境变量
+# 1. 显式锁定中文与时区环境
 export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
 
-# 2. 清理陈旧 PID 与 Socket 锁（防止海纳思/N1等断电重启后卡死挂起）
-rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid 2>/dev/null || true
-mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups
+# 2. 清理陈旧 PID 与 Socket 锁（防止断电异常关机导致服务挂起）
+rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid /var/run/cups/cups.sock 2>/dev/null || true
+mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups /tmp/mail_print_tasks
 chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
 chown -R avahi:avahi /var/run/avahi-daemon 2>/dev/null || true
 
-# 3. 挂载持久化自愈检查（防止 -v 挂载空目录导致配置丢失崩溃）
+# 3. 挂载持久化自愈检查（防止 -v 挂载空目录引发 CUPS 启动崩溃）
 if [ ! -f /etc/cups/cupsd.conf ]; then
     echo ">>> 检测到 /etc/cups 为空挂载，正在从初始备份自愈还原..."
     mkdir -p /etc/cups
     [ -d /etc/cups.orig ] && cp -rpn /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
 fi
 
-# 4. 系统管理账户初始化（双向兼容 ADMIN_PASSWORD 与 CUPS_PASSWORD）
+# 4. 系统管理账户初始化
 ADMIN_USER=${CUPS_USER:-admin}
 ADMIN_PASS=${ADMIN_PASSWORD:-${CUPS_PASSWORD:-admin}}
 
@@ -35,40 +35,40 @@ else
     echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 fi
 
-# 5. CUPS 核心网络与轻量化防护（保护小内存与小磁盘，防白屏）
+# 5. 内存感知与光栅化渲染缓存限制（彻底防范 Ghostscript 爆内存）
+TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+if [ "$TOTAL_MEM_KB" -lt 1500000 ]; then
+    RIP_CACHE="32m"
+    echo ">>> 检测到系统内存 <= 1GB，设置光栅渲染缓存安全上限: 32MB"
+else
+    RIP_CACHE="128m"
+    echo ">>> 检测到系统内存充裕，设置光栅渲染缓存安全上限: 128MB"
+fi
+
+# 6. CUPS 核心参数稳健调优（网络、字符集、防爆内存与日志截断）
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-# 强制默认中文、UTF-8 字符集与禁用强制 SSL
-sed -i "/^DefaultLanguage/d" /etc/cups/cupsd.conf 2>/dev/null || true
-echo "DefaultLanguage zh_CN" >> /etc/cups/cupsd.conf
+# 清理并追加核心参数
+sed -i -E "/^(DefaultLanguage|AddDefaultCharset|DefaultEncryption|MaxLogSize|PreserveJobFiles|MaxJobs|RIPCache)/d" /etc/cups/cupsd.conf 2>/dev/null || true
+cat << CUPSCFG >> /etc/cups/cupsd.conf
+DefaultLanguage zh_CN
+AddDefaultCharset UTF-8
+DefaultEncryption Never
+MaxLogSize 1m
+PreserveJobFiles No
+MaxJobs 20
+RIPCache $RIP_CACHE
+CUPSCFG
 
-sed -i "/^AddDefaultCharset/d" /etc/cups/cupsd.conf 2>/dev/null || true
-echo "AddDefaultCharset UTF-8" >> /etc/cups/cupsd.conf
-
-sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
-echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
-
-# 限制日志大小防止撑爆 eMMC
-sed -i "/^MaxLogSize/d" /etc/cups/cupsd.conf 2>/dev/null || true
-echo "MaxLogSize 1m" >> /etc/cups/cupsd.conf
-
-sed -i "/^PreserveJobFiles/d" /etc/cups/cupsd.conf 2>/dev/null || true
-echo "PreserveJobFiles No" >> /etc/cups/cupsd.conf
-
-# 锁定静态根目录绝对路径
-sed -i "/^DocumentRoot/d" /etc/cups/cups-files.conf 2>/dev/null || true
-echo "DocumentRoot /usr/share/cups/doc-root" >> /etc/cups/cups-files.conf
-
-# 6. 规整 HTML 模板中的样式表引用路径
+# 7. 规整 HTML 模板中的样式表引用路径
 find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
   "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-# 7. 写入深蓝通栏导航栏与固定吸底样式补丁
+# 8. 写入深蓝通栏导航栏与固定吸底样式补丁
 sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
-
 cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
 
 /* ====== CUPS 现代化通栏与吸底补丁 ====== */
@@ -151,7 +151,7 @@ body {
 .trailer a, div.trailer a, .footer a, div.footer a { color: #b8d9f7 !important; text-decoration: underline !important; }
 CSSEOF
 
-# 8. 实体同步各语言目录（防止沙箱软链失效）
+# 9. 实体同步各语言目录（杜绝白屏与样式丢失）
 for dir in /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-Hans; do
     mkdir -p "$dir"
     cp -f /usr/share/cups/doc-root/cups.css "$dir/cups.css"
@@ -165,74 +165,94 @@ chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 9. HP GDI 打印机固件自动注入函数（覆盖常见热门 GDI 设备）
+# 10. HP GDI 固件防冲突智能注入函数（防卡纸、防重刷）
+LOADED_FW_TAG="/tmp/loaded_hp_firmware"
+mkdir -p "$LOADED_FW_TAG"
+
 load_hp_firmware() {
     for lp in /dev/usb/lp*; do
         [ -e "$lp" ] || continue
-        # HP LaserJet 1000 (03f0:0517)
-        if lsusb 2>/dev/null | grep -qi "03f0:0517"; then
-            [ -f /usr/share/foo2zjs/firmware/sihp1000.dl ] && cat /usr/share/foo2zjs/firmware/sihp1000.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1000 固件"
-        # HP LaserJet 1005 (03f0:1317)
-        elif lsusb 2>/dev/null | grep -qi "03f0:1317"; then
-            [ -f /usr/share/foo2zjs/firmware/sihp1005.dl ] && cat /usr/share/foo2zjs/firmware/sihp1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1005 固件"
-        # HP LaserJet 1018 (03f0:4117)
-        elif lsusb 2>/dev/null | grep -qi "03f0:4117"; then
-            [ -f /usr/share/foo2zjs/firmware/sihp1018.dl ] && cat /usr/share/foo2zjs/firmware/sihp1018.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1018 固件"
-        # HP LaserJet 1020 (03f0:2b17)
-        elif lsusb 2>/dev/null | grep -qi "03f0:2b17"; then
-            [ -f /usr/share/foo2zjs/firmware/sihp1020.dl ] && cat /usr/share/foo2zjs/firmware/sihp1020.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1020 固件"
-        # HP LaserJet P1005 (03f0:3d17)
-        elif lsusb 2>/dev/null | grep -qi "03f0:3d17"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpP1005.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1005 固件"
-        # HP LaserJet P1006 (03f0:3e17)
-        elif lsusb 2>/dev/null | grep -qi "03f0:3e17"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpP1006.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1006.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1006 固件"
-        # HP LaserJet P1007 (03f0:4817)
+        lp_name=$(basename "$lp")
+
+        # 检查是否已对该端口成功注入过
+        if [ -f "$LOADED_FW_TAG/$lp_name" ]; then
+            continue
+        fi
+
+        # 关键防护：如果打印机端口正被占用（正在打印中），禁止注入，防止卡纸！
+        if fuser "$lp" >/dev/null 2>&1; then
+            continue
+        fi
+
+        FW_FILE=""
+        MODEL_NAME=""
+
+        if lsusb 2>/dev/null | grep -qi "03f0:2b17"; then
+            FW_FILE="/usr/share/foo2zjs/firmware/sihp1020.dl"; MODEL_NAME="HP LaserJet 1020"
         elif lsusb 2>/dev/null | grep -qi "03f0:4817"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpP1007.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1007.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1007 固件"
-        # HP LaserJet P1008 (03f0:4917)
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpP1007.dl"; MODEL_NAME="HP LaserJet P1007"
         elif lsusb 2>/dev/null | grep -qi "03f0:4917"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpP1008.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1008.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1008 固件"
-        # HP LaserJet P1505 (03f0:3f17)
-        elif lsusb 2>/dev/null | grep -qi "03f0:3f17"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpP1505.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1505.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1505 固件"
-        # HP LaserJet M1005 MFP (03f0:3b17)
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpP1008.dl"; MODEL_NAME="HP LaserJet P1008"
+        elif lsusb 2>/dev/null | grep -qi "03f0:1317"; then
+            FW_FILE="/usr/share/foo2zjs/firmware/sihp1005.dl"; MODEL_NAME="HP LaserJet 1005"
         elif lsusb 2>/dev/null | grep -qi "03f0:3b17"; then
-            [ -f /usr/share/foo2zjs/firmware/sihpM1005.dl ] && cat /usr/share/foo2zjs/firmware/sihpM1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet M1005 固件"
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpM1005.dl"; MODEL_NAME="HP LaserJet M1005 MFP"
+        elif lsusb 2>/dev/null | grep -qi "03f0:3d17"; then
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpP1005.dl"; MODEL_NAME="HP LaserJet P1005"
+        elif lsusb 2>/dev/null | grep -qi "03f0:3e17"; then
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpP1006.dl"; MODEL_NAME="HP LaserJet P1006"
+        elif lsusb 2>/dev/null | grep -qi "03f0:3f17"; then
+            FW_FILE="/usr/share/foo2zjs/firmware/sihpP1505.dl"; MODEL_NAME="HP LaserJet P1505"
+        fi
+
+        if [ -n "$FW_FILE" ] && [ -f "$FW_FILE" ]; then
+            echo ">>> [固件注入] 检测到 $MODEL_NAME，正在向 $lp 推送固件..."
+            cat "$FW_FILE" > "$lp" 2>/dev/null || true
+            touch "$LOADED_FW_TAG/$lp_name"
+            echo ">>> [固件注入] $MODEL_NAME 固件装填完毕，设备已就绪！"
+        fi
+    done
+
+    # 拔出端口时自动注销标记，以便下次插入再次热加载
+    for tag in "$LOADED_FW_TAG"/*; do
+        [ -e "$tag" ] || continue
+        dev_chk=$(basename "$tag")
+        if [ ! -e "/dev/usb/$dev_chk" ]; then
+            rm -f "$tag"
         fi
     done
 }
 
+# 启动时注入一次
 load_hp_firmware
 
-# 启动后台轻量守护，监听中途热插拔（每 5 秒轮询）
+# 后台低开销热插拔守护循环（每 6 秒探测一次，极轻量）
 (
     while true; do
-        sleep 5
+        sleep 6
         load_hp_firmware
     done
 ) >/dev/null 2>&1 &
 
-# 10. 启动系统总线与局域网广播（AirPrint 隔空打印发现）
+# 11. 启动系统总线与优化 AirPrint 广播响应
 dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 
-# 11. 智能启动邮件云打印后台服务
+# 12. 智能拉起邮件云打印后台守护
 MAIL_SCRIPT=""
 [ -f /opt/mail_print.py ] && MAIL_SCRIPT="/opt/mail_print.py"
-[ -f /usr/local/bin/mail_print.py ] && MAIL_SCRIPT="/usr/local/bin/mail_print.py"
 
 if [ -n "$MAIL_SCRIPT" ] && [ -n "$EMAIL_USER" ]; then
     python3 "$MAIL_SCRIPT" > /var/log/mail_print.log 2>&1 &
-    echo ">>> 邮件云打印监控已启动 ($MAIL_SCRIPT)"
+    echo ">>> 邮件云打印服务已启动 ($MAIL_SCRIPT)"
 else
-    echo ">>> 未配置 EMAIL_USER 或未找到脚本，邮件云打印进入休眠状态"
+    echo ">>> 未配置 EMAIL_USER，邮件云打印进入休眠状态"
 fi
 
-# 12. 启动 CUPS 主进程
+# 13. 前台启动 CUPS 主进程
 if [ $# -gt 0 ]; then
     exec "$@"
 else
-    echo ">>> CUPS 服务正在前台启动运行..."
+    echo ">>> CUPS 打印服务正在前台启动运行..."
     exec /usr/sbin/cupsd -f
 fi
