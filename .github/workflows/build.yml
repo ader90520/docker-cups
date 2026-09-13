@@ -1,4 +1,4 @@
-name: Build and Push Multi-Arch CUPS Image
+name: Build and Publish Multi-Arch Docker Image
 
 on:
   push:
@@ -21,16 +21,30 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push
+      # 1. 构建 Full 全驱动增强版 (供 1+8 盒子、N1 及常规主机)
+      - name: Build and Push Full Image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          provenance: false
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/cups:2.4.2
-            ${{ secrets.DOCKERHUB_USERNAME }}/cups:latest
+            ${{ secrets.DOCKER_USERNAME }}/cups:2.4.2
+            ${{ secrets.DOCKER_USERNAME }}/cups:full
+            ${{ secrets.DOCKER_USERNAME }}/cups:latest
+
+      # 2. 构建 Slim 深度瘦身版 (供 1+4 紧凑空间盒子)
+      - name: Build and Push Slim Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.slim
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/cups:slim
+            ${{ secrets.DOCKER_USERNAME }}/cups:latest-slim
