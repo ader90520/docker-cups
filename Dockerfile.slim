@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心驱动（剔除臃肿的 all 与无用针打元包），单层清理缓存
+# 1. 精准安装核心组件，剔除臃肿的 all 驱动，增加 psmisc (fuser) 确保端口探测
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -17,23 +17,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     gettext \
     python3 \
+    python3-pil \
     python3-requests \
     ca-certificates \
     curl \
     wget \
     usbutils \
+    psmisc \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 预下载最热门的 4 款惠普固件
-RUN mkdir -p /usr/share/foo2zjs/firmware && \
+# 2. 预下载最热门的 4 款惠普固件并做双向兼容
+RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for model in 1005 1007 1008 1020; do \
         getweb $model || true; \
     done && \
     cp -f *.dl /usr/share/foo2zjs/firmware/ 2>/dev/null || true && \
+    cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 3. 生成并配置 UTF-8 中文环境
+# 3. 锁定 UTF-8 中文环境
 RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
     locale-gen
 ENV LANG=zh_CN.UTF-8
@@ -47,7 +50,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 彻底汉化：编译 mo 并将中文模板与中文首页覆盖到系统生效目录
+# 5. 编译汉化并覆盖模板
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
