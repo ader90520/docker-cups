@@ -11,7 +11,13 @@ import requests
 import urllib.parse
 from email.header import decode_header
 from email.utils import collapse_rfc2231_value
-from PIL import Image
+
+# 容错引入 PIL：即使 slim 镜像未安装也不会崩溃
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.qq.com")
 EMAIL_USER = os.getenv("EMAIL_USER", "")
@@ -19,6 +25,7 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "")
 NOTIFY_URL = os.getenv("NOTIFY_URL", "http://www.pushplus.plus/send")
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 
+# 触发关键词
 TRIGGER_KEYWORDS = [
     "打", "print", "作业", "试卷", "练习", "复习", "打卡",
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
@@ -29,14 +36,35 @@ TRIGGER_KEYWORDS = [
 TEMP_DIR = "/tmp/mail_print_tasks"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-def get_hardware_profile():
-    if os.path.exists("/tmp/cups_profile"):
-        try:
-            with open("/tmp/cups_profile", "r") as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    return "HIGH_PERF"
+def get_system_memory_mb():
+    """直接探测宿主系统的总可用内存 (MB)"""
+    try:
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if 'MemTotal' in line:
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    return 1024
+
+def get_default_printer():
+    """动态获取 CUPS 默认打印机或第一台在线打印机，杜绝写死设备名"""
+    try:
+        # 1. 尝试获取系统默认打印机
+        res = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if "destination: " in res.stdout:
+            printer = res.stdout.split("destination: ")[-1].strip()
+            if printer:
+                return printer
+
+        # 2. 如果未设默认，获取当前注册的第一台打印机
+        res = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in res.stdout.splitlines():
+            if line.startswith("printer "):
+                return line.split()[1].strip()
+    except Exception as e:
+        print(f" [Printer Detect Warning] 打印机探测异常: {e}")
+    return None
 
 def send_pushplus_notice(title, content):
     if not PUSHPLUS_TOKEN:
@@ -63,7 +91,7 @@ def decode_str(header_text):
         return str(header_text)
 
 def clean_filename(filename):
-    """纯净健壮的文件名清洗器：杜绝 empty separator 报错"""
+    """文件名清洗：防止特殊字符与路径穿越"""
     if not filename:
         return f"doc_{int(time.time())}.pdf"
     try:
@@ -79,11 +107,14 @@ def clean_filename(filename):
         return f"doc_{int(time.time())}.pdf"
 
 def optimize_image_for_print(filepath):
+    """大图降维压缩，防止小盒子内存溢出崩溃"""
+    if not HAS_PIL:
+        return
     try:
         ext = os.path.splitext(filepath)[1].lower()
         if ext in [".jpg", ".jpeg", ".png"]:
-            profile = get_hardware_profile()
-            max_limit = 1800 if profile == "LOW_MEM" else 4000
+            mem = get_system_memory_mb()
+            max_limit = 1800 if mem <= 1200 else 3800
             with Image.open(filepath) as img:
                 w, h = img.size
                 max_edge = max(w, h)
@@ -94,18 +125,26 @@ def optimize_image_for_print(filepath):
                     if resized_img.mode != "RGB":
                         resized_img = resized_img.convert("RGB")
                     resized_img.save(filepath, "JPEG", quality=85)
-                    print(f" [Optimizer] 图片自适应降维 ({profile}): {w}x{h} -> {new_size[0]}x{new_size[1]}")
+                    print(f" [Optimizer] 图片自适应降维 (可用内存 {mem}M): {w}x{h} -> {new_size[0]}x{new_size[1]}")
     except Exception as e:
         print(f" [Optimizer Warning] 图片优化跳过: {e}")
 
 def print_file(filepath, filename):
+    printer_name = get_default_printer()
+    if not printer_name:
+        err_msg = "未检测到已添加的 CUPS 打印机，请先进入 Web 后台 (http://设备IP:631) 添加打印机。"
+        print(f" [Print Error] {err_msg}")
+        send_pushplus_notice("❌ 打印失败提醒", f"打印 <b>{filename}</b> 失败：<br>{err_msg}")
+        return False
+
     try:
         optimize_image_for_print(filepath)
-        cmd = ["lp", "-c", "-d", "HP_LaserJet_Pro_MFP_M126a", "-o", "fit-to-page", filepath]
+        # 动态绑定当前系统探测到的打印机
+        cmd = ["lp", "-c", "-d", printer_name, "-o", "fit-to-page", filepath]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.returncode == 0:
-            print(f" [Print Success] 任务提交成功: {filename} ({res.stdout.strip()})")
-            send_pushplus_notice("🖨️ 打印机出纸提醒", f"已成功提交打印文件：<br><b>{filename}</b><br>正在出纸，请在打印机旁等待。")
+            print(f" [Print Success] 任务提交成功 -> 目标设备: [{printer_name}] 文件: {filename}")
+            send_pushplus_notice("🖨️ 打印机出纸提醒", f"已向打印机 <b>{printer_name}</b> 提交任务：<br><b>{filename}</b><br>正在出纸，请在设备旁等待。")
             return True
         else:
             print(f" [Print Error] 打印指令执行失败: {res.stderr.strip()}")
@@ -163,7 +202,7 @@ def process_email():
                         if not payload:
                             continue
 
-                        # 图片过滤小于 40KB 签名图标；PDF 一律保留
+                        # 图片过滤小于 40KB 签名图标；PDF 保留
                         if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
                             print(f" [Filter] 过滤小图标/签名: {filename}")
                             continue
@@ -202,8 +241,10 @@ def process_email():
 
 def main():
     print("==========================================")
-    print(" [Cloud Print Daemon] 云打印守护进程已就绪...")
-    print(f" 当前硬件匹配策略: {get_hardware_profile()}")
+    print(" [Cloud Print Daemon] 邮件云打印服务运行中...")
+    printer = get_default_printer()
+    print(f" 当前默认出纸设备: [{printer or '暂无，请在Web后台绑定'}]")
+    print(f" 运行硬件状态: 总内存 {get_system_memory_mb()} MB")
     print("==========================================")
     while True:
         process_email()
