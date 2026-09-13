@@ -22,7 +22,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ader90520
-          password: ${{ secrets.DOCKER_TOKEN }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       # 1. 构建 Full 全驱动增强版（稳定覆盖 x86 与 64位 ARM: N1 / 主流海纳思 / 树莓派4/5）
       - name: Build and Push Full Image
