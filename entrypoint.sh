@@ -10,13 +10,13 @@ export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
 
-# 2. 清理陈旧 PID 与 Socket 锁（防止小盒子断电重启后 D-Bus/CUPS 卡死）
+# 2. 清理陈旧 PID 与 Socket 锁（防止海纳思/N1等断电重启后卡死挂起）
 rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid 2>/dev/null || true
 mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups
 chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
 chown -R avahi:avahi /var/run/avahi-daemon 2>/dev/null || true
 
-# 3. 挂载持久化自愈检查（防止 -v 挂载空目录导致配置丢失启动崩溃）
+# 3. 挂载持久化自愈检查（防止 -v 挂载空目录导致配置丢失崩溃）
 if [ ! -f /etc/cups/cupsd.conf ]; then
     echo ">>> 检测到 /etc/cups 为空挂载，正在从初始备份自愈还原..."
     mkdir -p /etc/cups
@@ -51,7 +51,7 @@ echo "AddDefaultCharset UTF-8" >> /etc/cups/cupsd.conf
 sed -i "/^DefaultEncryption/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-# 限制日志大小防止撑爆 8GB eMMC
+# 限制日志大小防止撑爆 eMMC
 sed -i "/^MaxLogSize/d" /etc/cups/cupsd.conf 2>/dev/null || true
 echo "MaxLogSize 1m" >> /etc/cups/cupsd.conf
 
@@ -165,11 +165,59 @@ chmod -R 755 /usr/share/cups/doc-root /usr/share/cups/templates /usr/share/cups/
 chmod 644 /usr/share/cups/doc-root/*.css 2>/dev/null || true
 chmod 644 /usr/share/cups/doc-root/*/*.css 2>/dev/null || true
 
-# 9. 按顺序启动系统总线与局域网广播（ AirPrint 隔空打印发现）
+# 9. HP GDI 打印机固件自动注入函数（覆盖常见热门 GDI 设备）
+load_hp_firmware() {
+    for lp in /dev/usb/lp*; do
+        [ -e "$lp" ] || continue
+        # HP LaserJet 1000 (03f0:0517)
+        if lsusb 2>/dev/null | grep -qi "03f0:0517"; then
+            [ -f /usr/share/foo2zjs/firmware/sihp1000.dl ] && cat /usr/share/foo2zjs/firmware/sihp1000.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1000 固件"
+        # HP LaserJet 1005 (03f0:1317)
+        elif lsusb 2>/dev/null | grep -qi "03f0:1317"; then
+            [ -f /usr/share/foo2zjs/firmware/sihp1005.dl ] && cat /usr/share/foo2zjs/firmware/sihp1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1005 固件"
+        # HP LaserJet 1018 (03f0:4117)
+        elif lsusb 2>/dev/null | grep -qi "03f0:4117"; then
+            [ -f /usr/share/foo2zjs/firmware/sihp1018.dl ] && cat /usr/share/foo2zjs/firmware/sihp1018.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1018 固件"
+        # HP LaserJet 1020 (03f0:2b17)
+        elif lsusb 2>/dev/null | grep -qi "03f0:2b17"; then
+            [ -f /usr/share/foo2zjs/firmware/sihp1020.dl ] && cat /usr/share/foo2zjs/firmware/sihp1020.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet 1020 固件"
+        # HP LaserJet P1005 (03f0:3d17)
+        elif lsusb 2>/dev/null | grep -qi "03f0:3d17"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpP1005.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1005 固件"
+        # HP LaserJet P1006 (03f0:3e17)
+        elif lsusb 2>/dev/null | grep -qi "03f0:3e17"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpP1006.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1006.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1006 固件"
+        # HP LaserJet P1007 (03f0:4817)
+        elif lsusb 2>/dev/null | grep -qi "03f0:4817"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpP1007.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1007.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1007 固件"
+        # HP LaserJet P1008 (03f0:4917)
+        elif lsusb 2>/dev/null | grep -qi "03f0:4917"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpP1008.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1008.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1008 固件"
+        # HP LaserJet P1505 (03f0:3f17)
+        elif lsusb 2>/dev/null | grep -qi "03f0:3f17"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpP1505.dl ] && cat /usr/share/foo2zjs/firmware/sihpP1505.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet P1505 固件"
+        # HP LaserJet M1005 MFP (03f0:3b17)
+        elif lsusb 2>/dev/null | grep -qi "03f0:3b17"; then
+            [ -f /usr/share/foo2zjs/firmware/sihpM1005.dl ] && cat /usr/share/foo2zjs/firmware/sihpM1005.dl > "$lp" 2>/dev/null && echo ">>> [固件注入] 已向 $lp 推送 HP LaserJet M1005 固件"
+        fi
+    done
+}
+
+load_hp_firmware
+
+# 启动后台轻量守护，监听中途热插拔（每 5 秒轮询）
+(
+    while true; do
+        sleep 5
+        load_hp_firmware
+    done
+) >/dev/null 2>&1 &
+
+# 10. 启动系统总线与局域网广播（AirPrint 隔空打印发现）
 dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 
-# 10. 智能启动邮件云打印后台服务（仅在配置了邮箱账号时启动，避免无谓报错和刷日志）
+# 11. 智能启动邮件云打印后台服务
 MAIL_SCRIPT=""
 [ -f /opt/mail_print.py ] && MAIL_SCRIPT="/opt/mail_print.py"
 [ -f /usr/local/bin/mail_print.py ] && MAIL_SCRIPT="/usr/local/bin/mail_print.py"
@@ -181,7 +229,7 @@ else
     echo ">>> 未配置 EMAIL_USER 或未找到脚本，邮件云打印进入休眠状态"
 fi
 
-# 11. 启动 CUPS 主进程
+# 12. 启动 CUPS 主进程
 if [ $# -gt 0 ]; then
     exec "$@"
 else
