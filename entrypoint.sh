@@ -2,7 +2,7 @@
 set -e
 
 echo "=========================================="
-echo "      启动 CUPS 打印服务 (高稳定优化版)   "
+echo "      启动 CUPS 打印服务 (高稳定自适应版) "
 echo "=========================================="
 
 # 1. 显式锁定中文与时区环境
@@ -51,7 +51,7 @@ sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev
 sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-# 清理并追加核心参数
+# 清理并追加核心调优参数
 sed -i -E "/^(DefaultLanguage|AddDefaultCharset|DefaultEncryption|MaxLogSize|PreserveJobFiles|MaxJobs|RIPCache)/d" /etc/cups/cupsd.conf 2>/dev/null || true
 cat << CUPSCFG >> /etc/cups/cupsd.conf
 DefaultLanguage zh_CN
@@ -59,7 +59,7 @@ AddDefaultCharset UTF-8
 DefaultEncryption Never
 MaxLogSize 1m
 PreserveJobFiles No
-MaxJobs 20
+MaxJobs 10
 RIPCache $RIP_CACHE
 CUPSCFG
 
@@ -238,12 +238,12 @@ load_hp_firmware
 dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 
-# 12. 智能拉起邮件云打印后台守护
+# 12. 智能拉起邮件云打印后台守护（增加 -u 参数禁用输出缓冲，确保日志实时落盘）
 MAIL_SCRIPT=""
 [ -f /opt/mail_print.py ] && MAIL_SCRIPT="/opt/mail_print.py"
 
 if [ -n "$MAIL_SCRIPT" ] && [ -n "$EMAIL_USER" ]; then
-    python3 "$MAIL_SCRIPT" > /var/log/mail_print.log 2>&1 &
+    python3 -u "$MAIL_SCRIPT" > /var/log/mail_print.log 2>&1 &
     echo ">>> 邮件云打印服务已启动 ($MAIL_SCRIPT)"
 else
     echo ">>> 未配置 EMAIL_USER，邮件云打印进入休眠状态"
