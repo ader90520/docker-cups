@@ -5,7 +5,7 @@ echo "=========================================="
 echo "      启动 CUPS 打印服务 (高稳定自适应版) "
 echo "=========================================="
 
-# 1. 锁定中文与默认时区环境（解决时间相差 8 小时）
+# 1. 锁定中文与默认时区环境（彻底解决时间偏差 8 小时）
 export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
@@ -249,7 +249,7 @@ MAIL_SCRIPT=""
 [ -f /opt/mail_print.py ] && MAIL_SCRIPT="/opt/mail_print.py"
 
 if [ -n "$MAIL_SCRIPT" ] && [ -n "$EMAIL_USER" ]; then
-    python3 -u "$MAIL_SCRIPT" > /var/log/mail_print.log 2>&1 &
+    python3 -u "$MAIL_SCRIPT" >> /var/log/mail_print.log 2>&1 &
     echo ">>> 邮件云打印服务已启动 ($MAIL_SCRIPT)"
 else
     echo ">>> 未配置 EMAIL_USER，邮件云打印进入休眠状态"
