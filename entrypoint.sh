@@ -5,10 +5,16 @@ echo "=========================================="
 echo "      启动 CUPS 打印服务 (高稳定自适应版) "
 echo "=========================================="
 
-# 1. 显式锁定中文与时区环境
+# 1. 锁定中文与默认时区环境（解决时间相差 8 小时）
 export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_ALL=zh_CN.UTF-8
+export TZ=${TZ:-Asia/Shanghai}
+
+if [ -f /usr/share/zoneinfo/$TZ ]; then
+    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+    echo "$TZ" > /etc/timezone
+fi
 
 # 2. 清理陈旧 PID 与 Socket 锁（防止断电异常关机导致服务挂起）
 rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid /var/run/cups/cups.sock 2>/dev/null || true
@@ -234,7 +240,7 @@ load_hp_firmware
     done
 ) >/dev/null 2>&1 &
 
-# 11. 启动系统总线与优化 AirPrint 广播响应
+# 11. 启动系统总线与 AirPrint 广播
 dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 
