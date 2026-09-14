@@ -14,7 +14,7 @@ import gc
 from email.header import decode_header
 from email.utils import collapse_rfc2231_value
 
-# 容错引入 PIL，避免 slim 精简镜像未装 pillow 时崩溃
+# 容错引入 PIL，避免 slim 镜像未装 pillow 时报错
 try:
     from PIL import Image
     HAS_PIL = True
@@ -33,18 +33,18 @@ TRIGGER_KEYWORDS = [
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
     "一年级", "二年级", "三年级", "四年级", "五年级", "六年级",
     "初一", "初二", "初三", "七年级", "八年级", "九年级", "高一", "高二", "高三",
-    "doc", "pdf"
+    "doc", "pdf", "img", "png", "jpg"
 ]
 
 TEMP_DIR = "/tmp/mail_print_tasks"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 def get_system_memory_mb():
-    """实时读取系统总可用内存 (MB)"""
+    """实时读取系统总可用物理内存 (MB)"""
     try:
-        with open('/proc/meminfo', 'r') as f:
+        with open("/proc/meminfo", "r") as f:
             for line in f:
-                if 'MemTotal' in line:
+                if "MemTotal" in line:
                     return int(line.split()[1]) // 1024
     except Exception:
         pass
@@ -52,8 +52,8 @@ def get_system_memory_mb():
 
 def get_active_printers():
     """
-    获取 CUPS 默认打印机或第一台可用打印机
-    【关键修复】：强行注入 LC_ALL=C，彻底杜绝中文环境导致匹配失败的致命 Bug
+    动态获取 CUPS 默认打印机或第一台可用打印机
+    注入 LC_ALL=C，彻底杜绝中文环境匹配失败 Bug
     """
     default_printer = None
     all_printers = []
@@ -61,12 +61,10 @@ def get_active_printers():
         env = os.environ.copy()
         env["LC_ALL"] = "C"
 
-        # 1. 探测默认设备
         res_d = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=5)
         if "destination: " in res_d.stdout:
             default_printer = res_d.stdout.split("destination: ")[-1].strip()
 
-        # 2. 探测所有已安装设备
         res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=5)
         for line in res_p.stdout.splitlines():
             if line.startswith("printer "):
@@ -75,10 +73,8 @@ def get_active_printers():
     except Exception as e:
         print(f" [Printer Detect Warning] 探测异常: {e}", flush=True)
 
-    # 确定目标打印机
     target = default_printer if default_printer else (all_printers[0] if all_printers else None)
     if not target:
-        # 保底设置（如果为空时兜底默认型号）
         target = "HP_LaserJet_Pro_MFP_M126a"
     return target, all_printers
 
@@ -114,7 +110,7 @@ def decode_str(header_text):
         return str(header_text)
 
 def clean_filename(filename):
-    """文件名安全清洗，去除空格及异常字符，确保命令行接收无误"""
+    """文件名安全清洗，过滤特殊字符与空格"""
     if not filename:
         return f"doc_{int(time.time())}.pdf"
     try:
@@ -128,14 +124,13 @@ def clean_filename(filename):
         return f"doc_{int(time.time())}.pdf"
 
 def optimize_image_for_print(filepath):
-    """自适应降维大图，打印前强制释放内存，防止小内存设备崩溃"""
+    """自适应降维大图，打印前强制释放内存，防止小内存设备 OOM"""
     if not HAS_PIL:
         return
     try:
         ext = os.path.splitext(filepath)[1].lower()
         if ext in [".jpg", ".jpeg", ".png"]:
             mem = get_system_memory_mb()
-            # 1G 内存（海纳思）设定 1800 像素阈值，2G（N1）设定 3600 像素
             max_limit = 1800 if mem <= 1200 else 3600
             with Image.open(filepath) as img:
                 w, h = img.size
@@ -156,15 +151,13 @@ def print_file(filepath, filename):
     """向系统 CUPS 发送打印任务并进行真实状态监控"""
     printer_name, _ = get_active_printers()
     if not printer_name:
-        err_msg = "未找到可用打印机，请先访问 Web 控制台 (http://设备IP:631) 添加打印机。"
+        err_msg = "未找到可用打印机，请先访问 Web 控制台添加打印机。"
         print(f" [Print Error] {err_msg}", flush=True)
         send_pushplus_notice("❌ 打印失败提醒", f"文件 <b>{filename}</b> 提交失败：<br>{err_msg}")
         return False
 
     try:
         optimize_image_for_print(filepath)
-
-        # 核心出纸指令：适配 A4 页面居中
         cmd = [
             "lp",
             "-d", printer_name,
@@ -200,7 +193,6 @@ def print_file(filepath, filename):
         print(f" [System Error] 提交异常: {e}", flush=True)
         return False
     finally:
-        # 无论成功失败，立即销毁临时文件，彻底保护 eMMC 存储
         if os.path.exists(filepath):
             try:
                 os.remove(filepath)
@@ -277,10 +269,10 @@ def process_email():
                         except Exception:
                             pass
 
-            # 无论是否打印，处理完成后对邮件打上删除标记
+            # 标记删除
             mail.store(num, "+FLAGS", "\\Deleted")
 
-        # 物理彻底清除所有标记删除的邮件，防止邮箱与内存堆积
+        # 物理清除已删除标记的邮件
         mail.expunge()
 
     except Exception as e:
