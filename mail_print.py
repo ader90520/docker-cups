@@ -9,11 +9,12 @@ import imaplib
 import subprocess
 import requests
 import urllib.parse
+import re
 import gc
 from email.header import decode_header
 from email.utils import collapse_rfc2231_value
 
-# 容错引入 PIL，避免 slim 精简镜像缺失依赖报错
+# 容错引入 PIL，避免 slim 精简镜像未装 pillow 时崩溃
 try:
     from PIL import Image
     HAS_PIL = True
@@ -31,7 +32,8 @@ TRIGGER_KEYWORDS = [
     "打", "print", "作业", "试卷", "练习", "复习", "打卡",
     "语文", "数学", "英语", "物理", "化学", "生物", "历史", "地理", "政治", "科学",
     "一年级", "二年级", "三年级", "四年级", "五年级", "六年级",
-    "初一", "初二", "初三", "七年级", "八年级", "九年级", "高一", "高二", "高三"
+    "初一", "初二", "初三", "七年级", "八年级", "九年级", "高一", "高二", "高三",
+    "doc", "pdf"
 ]
 
 TEMP_DIR = "/tmp/mail_print_tasks"
@@ -48,22 +50,37 @@ def get_system_memory_mb():
         pass
     return 1024
 
-def get_target_printer():
-    """动态获取 CUPS 默认打印机或第一台可用打印机"""
+def get_active_printers():
+    """
+    获取 CUPS 默认打印机或第一台可用打印机
+    【关键修复】：强行注入 LC_ALL=C，彻底杜绝中文环境导致匹配失败的致命 Bug
+    """
+    default_printer = None
+    all_printers = []
     try:
-        res = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        if "destination: " in res.stdout:
-            printer = res.stdout.split("destination: ")[-1].strip()
-            if printer:
-                return printer
+        env = os.environ.copy()
+        env["LC_ALL"] = "C"
 
-        res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+        # 1. 探测默认设备
+        res_d = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=5)
+        if "destination: " in res_d.stdout:
+            default_printer = res_d.stdout.split("destination: ")[-1].strip()
+
+        # 2. 探测所有已安装设备
+        res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=5)
         for line in res_p.stdout.splitlines():
             if line.startswith("printer "):
-                return line.split()[1].strip()
+                p_name = line.split()[1].strip()
+                all_printers.append(p_name)
     except Exception as e:
         print(f" [Printer Detect Warning] 探测异常: {e}", flush=True)
-    return "HP_LaserJet_Pro_MFP_M126a"
+
+    # 确定目标打印机
+    target = default_printer if default_printer else (all_printers[0] if all_printers else None)
+    if not target:
+        # 保底设置（如果为空时兜底默认型号）
+        target = "HP_LaserJet_Pro_MFP_M126a"
+    return target, all_printers
 
 def send_pushplus_notice(title, content):
     """PushPlus 微信结果通知"""
@@ -81,7 +98,7 @@ def send_pushplus_notice(title, content):
         print(f" [Push Error] 推送失败: {e}", flush=True)
 
 def decode_str(header_text):
-    """邮件标题/发送人编码深度解码"""
+    """邮件标题/发送人深度解码"""
     if not header_text:
         return ""
     try:
@@ -97,23 +114,21 @@ def decode_str(header_text):
         return str(header_text)
 
 def clean_filename(filename):
-    """文件名安全清洗，防止路径穿越与特殊符号导致命令行解析失败"""
+    """文件名安全清洗，去除空格及异常字符，确保命令行接收无误"""
     if not filename:
         return f"doc_{int(time.time())}.pdf"
     try:
         if isinstance(filename, tuple):
             filename = collapse_rfc2231_value(filename)
         filename = decode_str(str(filename))
-        if "%" in filename:
-            filename = urllib.parse.unquote(filename)
-        clean_name = filename.strip().replace("/", "_").replace("\\", "_").replace(" ", "_")
+        clean_name = re.sub(r"[^\w\.-]", "_", filename)
         return clean_name if clean_name else f"doc_{int(time.time())}.pdf"
     except Exception as e:
         print(f" [Filename Parse Warning] 解析警告: {e}", flush=True)
         return f"doc_{int(time.time())}.pdf"
 
 def optimize_image_for_print(filepath):
-    """自适应降维大图，打印前强制释放内存，绝不让小盒子死机"""
+    """自适应降维大图，打印前强制释放内存，防止小内存设备崩溃"""
     if not HAS_PIL:
         return
     try:
@@ -138,10 +153,10 @@ def optimize_image_for_print(filepath):
         print(f" [Optimizer Warning] 图片优化跳过: {e}", flush=True)
 
 def print_file(filepath, filename):
-    """提交打印任务，包含真实结果校验与超时中断"""
-    printer_name = get_target_printer()
+    """向系统 CUPS 发送打印任务并进行真实状态监控"""
+    printer_name, _ = get_active_printers()
     if not printer_name:
-        err_msg = "未找到可用打印机，请先访问 Web 后台 (http://盒子IP:631) 添加并启用打印机。"
+        err_msg = "未找到可用打印机，请先访问 Web 控制台 (http://设备IP:631) 添加打印机。"
         print(f" [Print Error] {err_msg}", flush=True)
         send_pushplus_notice("❌ 打印失败提醒", f"文件 <b>{filename}</b> 提交失败：<br>{err_msg}")
         return False
@@ -149,7 +164,7 @@ def print_file(filepath, filename):
     try:
         optimize_image_for_print(filepath)
 
-        # 核心出纸指令：移除不稳定参数，加入 fit-to-page 与 A4 锁定
+        # 核心出纸指令：适配 A4 页面居中
         cmd = [
             "lp",
             "-d", printer_name,
@@ -158,11 +173,11 @@ def print_file(filepath, filename):
             filepath
         ]
 
-        # 60 秒超时控制，彻底防止任务死锁阻塞后续任务
+        print(f" [Exec] 正在向 [{printer_name}] 提交打印: {filename}", flush=True)
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         if res.returncode == 0:
             job_id = res.stdout.strip()
-            print(f" [Print Success] 任务提交成功 -> 目标设备: [{printer_name}] 文件: {filename} (编号: {job_id})", flush=True)
+            print(f" [Print Success] 出纸成功: {filename} -> {job_id}", flush=True)
             send_pushplus_notice(
                 "🖨️ 打印机出纸提醒",
                 f"已向打印机 <b>{printer_name}</b> 提交任务：<br>"
@@ -185,7 +200,7 @@ def print_file(filepath, filename):
         print(f" [System Error] 提交异常: {e}", flush=True)
         return False
     finally:
-        # 无论成功失败，立即销毁临时文件，彻底保护 eMMC 磁盘不被撑爆
+        # 无论成功失败，立即销毁临时文件，彻底保护 eMMC 存储
         if os.path.exists(filepath):
             try:
                 os.remove(filepath)
@@ -194,7 +209,7 @@ def print_file(filepath, filename):
         gc.collect()
 
 def process_email():
-    """邮件轮询核心：提取附件、匹配关键词、成功后永久删除邮件"""
+    """邮件轮询：读取、出纸、清除已读邮件"""
     if not EMAIL_USER or not EMAIL_PASS:
         return
     mail = None
@@ -216,7 +231,7 @@ def process_email():
             sender = decode_str(msg.get("From", ""))
             print(f" [New Mail] 收到邮件: 《{subject}》 来自: {sender}", flush=True)
 
-            attachments_to_print = []
+            attachments = []
             for part in msg.walk():
                 if part.get_content_maintype() == "multipart":
                     continue
@@ -225,56 +240,47 @@ def process_email():
                 content_type = part.get_content_type().lower()
 
                 if not raw_filename and "pdf" in content_type:
-                    raw_filename = f"document_{int(time.time())}.pdf"
+                    raw_filename = "doc.pdf"
 
                 if raw_filename:
-                    filename = clean_filename(raw_filename)
-                    ext = os.path.splitext(filename)[1].lower()
+                    fn = clean_filename(raw_filename)
+                    ext = os.path.splitext(fn)[1].lower()
 
                     if ext in [".pdf", ".jpg", ".jpeg", ".png", ".txt"] or "pdf" in content_type:
                         payload = part.get_payload(decode=True)
                         if not payload:
                             continue
 
-                        # 过滤小于 40KB 的小头像/邮件签名图标
+                        # 过滤小于 40KB 的小头像/签名图片
                         if ext in [".jpg", ".jpeg", ".png"] and len(payload) < 40 * 1024:
-                            print(f" [Filter] 过滤小图标: {filename}", flush=True)
+                            print(f" [Filter] 过滤小图标: {fn}", flush=True)
                             continue
 
-                        save_path = os.path.join(TEMP_DIR, f"{int(time.time())}_{filename}")
+                        save_path = os.path.join(TEMP_DIR, f"{int(time.time())}_{fn}")
                         with open(save_path, "wb") as f:
                             f.write(payload)
-                        attachments_to_print.append((save_path, filename))
-                        print(f" [Found Attachment] 提取待打印文件: {filename} (大小: {len(payload)} 字节)", flush=True)
+                        attachments.append((save_path, fn))
+                        print(f" [Found Attachment] 提取待打印文件: {fn} (大小: {len(payload)} 字节)", flush=True)
 
-            # 匹配邮件标题或附件名中是否含有触发词
             should_print = any(k in subject for k in TRIGGER_KEYWORDS) or any(
-                any(k in fname for k in TRIGGER_KEYWORDS) for _, fname in attachments_to_print
+                any(k in fname for k in TRIGGER_KEYWORDS) for _, fname in attachments
             )
 
-            if should_print and attachments_to_print:
-                all_success = True
-                for fpath, fname in attachments_to_print:
-                    success = print_file(fpath, fname)
-                    if not success:
-                        all_success = False
-
-                # 打印处理完成，标记删除并在服务端永久清除该邮件
-                mail.store(num, "+FLAGS", "\\Deleted")
-                print(f" [Mail Clean] 邮件已处理完毕并标记清除: 《{subject}》", flush=True)
-
-            elif attachments_to_print:
-                print(f" [Ignore] 未匹配到打印关键词，忽略: 《{subject}》", flush=True)
-                for fpath, _ in attachments_to_print:
+            if should_print and attachments:
+                for fpath, fname in attachments:
+                    print_file(fpath, fname)
+            else:
+                for fpath, _ in attachments:
                     if os.path.exists(fpath):
                         try:
                             os.remove(fpath)
                         except Exception:
                             pass
-                # 未触发打印的邮件同样标记删除，防止邮件箱无限堆积
-                mail.store(num, "+FLAGS", "\\Deleted")
 
-        # 真正执行物理清除已删除标记的邮件
+            # 无论是否打印，处理完成后对邮件打上删除标记
+            mail.store(num, "+FLAGS", "\\Deleted")
+
+        # 物理彻底清除所有标记删除的邮件，防止邮箱与内存堆积
         mail.expunge()
 
     except Exception as e:
@@ -289,11 +295,12 @@ def process_email():
         gc.collect()
 
 def main():
+    target, printers = get_active_printers()
     print("==========================================", flush=True)
     print(" [Cloud Print Daemon] 邮件云打印服务已启动", flush=True)
-    target_printer = get_target_printer()
-    print(f" 默认出纸设备: [{target_printer}]", flush=True)
-    print(f" 系统可用内存: {get_system_memory_mb()} MB", flush=True)
+    print(f" 状态: 默认出纸设备 [{target}]", flush=True)
+    print(f" 系统内现存设备: {printers}", flush=True)
+    print(f" 系统可用物理内存: {get_system_memory_mb()} MB", flush=True)
     print("==========================================", flush=True)
     while True:
         process_email()
