@@ -208,7 +208,7 @@ def print_file(filepath, filename):
             send_pushplus_notice("❌ 打印失败（未出纸）", f"文件 <b>{filename}</b> 提交被拒：<br>{err_output}")
             return False
 
-        # 提取整洁的任务编号 (例如从 request id is HP_1020-5 提取 HP_1020-5)
+        # 提取整洁的任务编号
         match = re.search(r"request id is ([^\s]+)", res.stdout)
         job_id = match.group(1) if match else res.stdout.strip().split()[0]
         print(f" [Queue Success] 任务已进入硬件队列: {job_id}，正在监听物理出纸...", flush=True)
@@ -247,7 +247,7 @@ def print_file(filepath, filename):
         print(f" [System Error] 提交异常: {e}", flush=True)
         return False
     finally:
-        # 无论成功还是失败，均立刻销毁临时文件并强刷垃圾回收，确保小盒子连续打印不爆内存
+        # 无论成功还是失败，均立刻销毁临时文件并强刷垃圾回收
         if os.path.exists(filepath):
             try:
                 os.remove(filepath)
@@ -295,7 +295,7 @@ def fetch_and_print():
                     with open(filepath, "wb") as f:
                         f.write(part.get_payload(decode=True))
 
-                    # 顺序打印附件，确保大文件连续打印时不撞车
+                    # 顺序打印附件，确保连续打印不撞车
                     print_file(filepath, filename)
 
             # 标记邮件为已读
@@ -319,7 +319,6 @@ def main():
             fetch_and_print()
         except Exception as e:
             print(f" [Daemon Loop Error] 守护异常: {e}", flush=True)
-        # 轮询时间设为 8 秒，兼顾灵敏响应与系统节能
         time.sleep(8)
 
 if __name__ == "__main__":
