@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心组件 (保留轻量化，同时补齐扫描、透视拉正、极速出纸与 Office 依赖)
+# 1. 精准安装核心组件 (彻底剔除 LibreOffice，保留极轻量打印/扫描/图像处理套件)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -16,8 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     ghostscript \
     poppler-utils \
-    libreoffice-writer-nogui \
-    libreoffice-calc-nogui \
     fonts-wqy-zenhei \
     fonts-wqy-microhei \
     avahi-daemon \
@@ -63,7 +61,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并覆盖模板 + 【核心】彻底根除导航栏单字竖排
+# 5. 编译汉化并覆盖模板 + 修复导航栏单字竖排
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -88,21 +86,17 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
     \
-    # ================= 根治导航栏单字竖列排版补丁 =================
-    # 精准覆盖 CUPS 原生类名：.header, .nav, .nav a, 以及可能存在的列表结构
+    # 修复导航栏单字竖排样式补丁
     NAV_CSS_PATCH='/* 强制中文导航横向平铺，禁止单字竖排 */\n.header { clear: both !important; display: block !important; width: 100% !important; }\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 10px !important; }\n.header .nav a, .nav a, div.nav a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 6px 12px !important; }\n' && \
     for f in $(find /usr/share/cups/doc-root -name "*.css"); do \
         echo -e "\n$NAV_CSS_PATCH" >> "$f"; \
     done && \
-    \
-    # 同时在所有模板的 <head> 中直接嵌入内联样式，防范浏览器 CSS 缓存
     INLINE_STYLE='<style>\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; }\n.header .nav a, .nav a, div.nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; }\n</style>\n' && \
     find /usr/share/cups/templates -name "*.tmpl" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
     find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
-    \
     rm -rf /tmp/*
 
-# 6. 备份初始配置并赋予执行权限，创建所需工作目录
+# 6. 备份配置并授权
 RUN cp -rp /etc/cups /etc/cups.orig && \
     mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
