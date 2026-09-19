@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心组件 (完整保留 LibreOffice、中文字体、SANE 扫描与 OpenCV 图像处理)
+# 1. 完整组件安装：包含 LibreOffice、完整中文字库、OpenCV 视觉库及 SANE 扫描驱动
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -55,7 +55,7 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 4. 复制业务文件与汉化资产
+# 4. 复制启动脚本、云打印脚本与汉化资产
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -63,7 +63,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并覆盖模板 + 修复导航栏单字竖排
+# 5. 编译汉化并注入导航防折行补丁
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -88,7 +88,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
     \
-    # 彻底杜绝 CUPS 631 后台导航栏单字竖排换行
+    # 彻底杜绝 CUPS 导航单字竖排换行补丁
     NAV_CSS_PATCH='/* 强制中文导航横向平铺，禁止单字竖排 */\n.header { clear: both !important; display: block !important; width: 100% !important; }\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 10px !important; }\n.header .nav a, .nav a, div.nav a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 6px 12px !important; }\n' && \
     for f in $(find /usr/share/cups/doc-root -name "*.css"); do \
         echo -e "\n$NAV_CSS_PATCH" >> "$f"; \
@@ -98,15 +98,13 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 6. 权限与存储目录
+# 6. 初始化权限与持久化卷目录
 RUN cp -rp /etc/cups /etc/cups.orig && \
     mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
 EXPOSE 631 8000
-
 VOLUME ["/etc/cups", "/scans"]
-
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cupsd", "-f"]
