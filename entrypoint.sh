@@ -6,7 +6,6 @@ echo " 🖨️  CUPS 打印与扫描集成容器启动中..."
 echo "=================================================="
 
 # 1. 宿主机挂载卷数据自愈与目录权限初始化
-# 如果用户通过 -v 挂载了空的 /etc/cups，自动从备份的 /etc/cups.orig 复制基础配置文件
 if [ ! -f "/etc/cups/cupsd.conf" ]; then
     echo " [Init] 检测到全新的 /etc/cups 挂载卷，正在释放默认配置文件..."
     cp -rpn /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
@@ -15,6 +14,11 @@ fi
 # 确保运行时临时目录和持久化扫描目录存在并具备写入权限
 mkdir -p /var/log/cups /var/run/dbus /var/run/avahi-daemon /tmp/mail_print_tasks /tmp/cups_web_uploads /scans /etc/cups
 chmod 777 /tmp/mail_print_tasks /tmp/cups_web_uploads /scans
+
+# 动态确保 Web 根目录下 cups.css 带有防换行补丁
+if [ -f "/usr/share/cups/doc-root/cups.css" ] && ! grep -q "white-space: nowrap !important" /usr/share/cups/doc-root/cups.css; then
+    echo -e "\n/* 动态补丁: 中文防折行 */\nul.nav li a, ul.navbar li a, .nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; }\n" >> /usr/share/cups/doc-root/cups.css
+fi
 
 # 2. CUPS 631 端口后台管理员账号初始化
 CUPS_USER=${CUPS_USER:-admin}
@@ -30,7 +34,6 @@ echo " [Auth] CUPS 后台管理员账号已配置: $CUPS_USER"
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/Browsing Off/Browsing On/' /etc/cups/cupsd.conf 2>/dev/null || true
 
-# 确保根路径与管理员后台放行外网/局域网访问
 if ! grep -q "<Location />" /etc/cups/cupsd.conf; then
     echo "<Location />
   Order allow,deny
@@ -52,12 +55,11 @@ else
     sed -i '/<Location \/admin\/conf>/a \ \ Allow All' /etc/cups/cupsd.conf 2>/dev/null || true
 fi
 
-# 禁用默认 SSL 强制加密，避免局域网访问报证书错误阻断
 if ! grep -q "DefaultEncryption Never" /etc/cups/cupsd.conf; then
     echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 fi
 
-# 4. 启动 D-Bus 与 Avahi 广播（用于 iOS AirPrint / 局域网自动搜机）
+# 4. 启动 D-Bus 与 Avahi 广播
 if [ -x "/usr/bin/dbus-uuidgen" ]; then
     /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
 fi
@@ -65,22 +67,22 @@ rm -f /var/run/dbus/pid
 dbus-daemon --system --fork 2>/dev/null || true
 
 if command -v avahi-daemon &>/dev/null; then
-    rm -f /var/run/avahi-daemon//pid
+    rm -f /var/run/avahi-daemon/pid
     avahi-daemon -D 2>/dev/null || true
     echo " [Service] Avahi 局域网广播已启动 (AirPrint 就绪)"
 fi
 
-# 5. 启动 CUPS 系统底层打印服务
+# 5. 启动 CUPS 底层打印服务
 /usr/sbin/cupsd
 echo " [Service] CUPS 底层服务已就绪 (端口 631)"
 
-# 6. 后台启动 8000 端口极简 Web 控制台 (支持手机直接拖拽打印与 SANE 扫描)
+# 6. 后台启动 8000 端口快速控制台
 if [ -f "/opt/cups_web_app.py" ]; then
     python3 /opt/cups_web_app.py > /var/log/cups_web.log 2>&1 &
     echo " [Service] 网页快速打印与扫描控制台已启动 (端口 8000)"
 fi
 
-# 7. 前台启动邮件云打印守护进程（输出实时日志，维持容器主进程生命周期）
+# 7. 前台启动邮件云打印守护进程
 echo " [Service] 启动远程邮件云打印与微信推送守护..."
 echo "=================================================="
 exec python3 /opt/mail_print.py
