@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心组件 (补充 python3-opencv, python3-numpy, 扫描与转换依赖)
+# 1. 精准安装核心组件，剔除臃肿的 all 驱动，增加 psmisc (fuser) 确保端口探测
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 预下载 4 款热门惠普固件
+# 2. 预下载最热门的 4 款惠普固件并做双向兼容
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for model in 1005 1007 1008 1020; do \
@@ -55,7 +55,7 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 4. 复制启动脚本、服务与汉化资产
+# 4. 复制启动脚本、云打印脚本与汉化资产
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -63,7 +63,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化、覆盖模板并注入导航栏竖排修复补丁
+# 5. 编译汉化并覆盖模板 + 彻底修复导航竖列排版
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -87,11 +87,22 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
-    # === [核心修复] 彻底解决 CUPS 631 导航栏中文单字竖排换行 ===
-    echo -e "\n/* 修复中文导航横排防折行补丁 */\n.nav, ul.nav, ul.navbar, div.nav, nav ul { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; list-style: none !important; }\nul.nav li, ul.navbar li, .nav li { float: left !important; display: inline-block !important; margin-right: 8px !important; }\nul.nav li a, ul.navbar li a, .nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 5px 12px !important; }\n" >> /usr/share/cups/doc-root/cups.css && \
+    \
+    # ================= 核心排版修复：彻底解决中文导航竖列 =================
+    # 1. 向所有 cups.css 写入强力全局覆盖
+    CSS_FIX='/* CUPS中文导航横排修复 */\n.header, .nav, ul.nav, ul.navbar, div.nav, nav { display: block !important; width: 100% !important; clear: both !important; }\n.header a, .nav li, ul.nav li, ul.navbar li, div.nav a, nav a { display: inline-block !important; float: none !important; white-space: nowrap !important; word-break: keep-all !important; margin-right: 12px !important; min-width: max-content !important; }\n.nav li a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; padding: 4px 10px !important; }\n' && \
+    for css in $(find /usr/share/cups/doc-root -name "*.css"); do \
+        echo -e "\n$CSS_FIX" >> "$css"; \
+    done && \
+    \
+    # 2. 直接向所有 .tmpl 模板文件的头部（head 结束前）注入强制内联样式，杜绝外部 CSS 加载不到的情况
+    INLINE_STYLE='<style>\n.header a, .nav a, ul.nav li, ul.navbar li, .nav li { display: inline-block !important; float: none !important; white-space: nowrap !important; word-break: keep-all !important; min-width: max-content !important; }\nul.nav, ul.navbar, .nav { display: flex !important; flex-direction: row !important; flex-wrap: wrap !important; gap: 8px !important; list-style: none !important; padding: 0 !important; }\n</style>\n' && \
+    find /usr/share/cups/templates -name "*.tmpl" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + && \
+    find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + && \
+    \
     rm -rf /tmp/*
 
-# 6. 备份初始配置并赋予执行权限，创建扫描与工作目录
+# 6. 备份初始配置并赋予执行权限，创建持久化/临时目录
 RUN cp -rp /etc/cups /etc/cups.orig && \
     mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
@@ -102,3 +113,4 @@ EXPOSE 631 8000
 VOLUME ["/etc/cups", "/scans"]
 
 ENTRYPOINT ["/entrypoint.sh"]
+CMD ["cupsd", "-f"]
