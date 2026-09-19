@@ -2,9 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心组件
-# 增补：sane-utils/libsane-hpaio (硬件扫描), ghostscript (PDF合成),
-# poppler-utils (Cairo渲染), libreoffice极简无头版, 文泉驿中文字体, python3-tornado
+# 1. 精准安装核心组件 (补充 python3-opencv, python3-numpy, 扫描与转换依赖)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -30,14 +28,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pil \
     python3-requests \
     python3-tornado \
+    python3-opencv \
+    python3-numpy \
     ca-certificates \
     curl \
     wget \
     usbutils \
     psmisc \
+    sed \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 预下载最热门的 4 款惠普固件并做双向兼容
+# 2. 预下载 4 款热门惠普固件
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for model in 1005 1007 1008 1020; do \
@@ -54,7 +55,7 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 4. 复制启动脚本、云打印脚本、Web 控制台与原有汉化资产
+# 4. 复制启动脚本、服务与汉化资产
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -62,7 +63,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并覆盖模板 (保持原有汉化机制原汁原味)
+# 5. 编译汉化、覆盖模板并注入导航栏竖排修复补丁
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -86,15 +87,16 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
+    # === [核心修复] 彻底解决 CUPS 631 导航栏中文单字竖排换行 ===
+    echo -e "\n/* 修复中文导航横排防折行补丁 */\n.nav, ul.nav, ul.navbar, div.nav, nav ul { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; list-style: none !important; }\nul.nav li, ul.navbar li, .nav li { float: left !important; display: inline-block !important; margin-right: 8px !important; }\nul.nav li a, ul.navbar li a, .nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 5px 12px !important; }\n" >> /usr/share/cups/doc-root/cups.css && \
     rm -rf /tmp/*
 
-# 6. 备份初始配置并赋予执行权限，创建扫描挂载目录
+# 6. 备份初始配置并赋予执行权限，创建扫描与工作目录
 RUN cp -rp /etc/cups /etc/cups.orig && \
     mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
-# 暴露 631 后台与 8000 Web 控制台端口
 EXPOSE 631 8000
 
 VOLUME ["/etc/cups", "/scans"]
