@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 精准安装核心组件，剔除臃肿的 all 驱动，增加 psmisc (fuser) 确保端口探测
+# 1. 精准安装核心组件 (完整保留 LibreOffice、中文字体、SANE 扫描与 OpenCV 图像处理)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 预下载最热门的 4 款惠普固件并做双向兼容
+# 2. 预下载惠普固件
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for model in 1005 1007 1008 1020; do \
@@ -55,7 +55,7 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 4. 复制启动脚本、云打印脚本与汉化资产
+# 4. 复制业务文件与汉化资产
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -63,7 +63,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并覆盖模板 + 彻底修复导航竖列排版
+# 5. 编译汉化并覆盖模板 + 修复导航栏单字竖排
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -88,21 +88,17 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
     \
-    # ================= 核心排版修复：彻底解决中文导航竖列 =================
-    # 1. 向所有 cups.css 写入强力全局覆盖
-    CSS_FIX='/* CUPS中文导航横排修复 */\n.header, .nav, ul.nav, ul.navbar, div.nav, nav { display: block !important; width: 100% !important; clear: both !important; }\n.header a, .nav li, ul.nav li, ul.navbar li, div.nav a, nav a { display: inline-block !important; float: none !important; white-space: nowrap !important; word-break: keep-all !important; margin-right: 12px !important; min-width: max-content !important; }\n.nav li a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; padding: 4px 10px !important; }\n' && \
-    for css in $(find /usr/share/cups/doc-root -name "*.css"); do \
-        echo -e "\n$CSS_FIX" >> "$css"; \
+    # 彻底杜绝 CUPS 631 后台导航栏单字竖排换行
+    NAV_CSS_PATCH='/* 强制中文导航横向平铺，禁止单字竖排 */\n.header { clear: both !important; display: block !important; width: 100% !important; }\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 10px !important; }\n.header .nav a, .nav a, div.nav a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 6px 12px !important; }\n' && \
+    for f in $(find /usr/share/cups/doc-root -name "*.css"); do \
+        echo -e "\n$NAV_CSS_PATCH" >> "$f"; \
     done && \
-    \
-    # 2. 直接向所有 .tmpl 模板文件的头部（head 结束前）注入强制内联样式，杜绝外部 CSS 加载不到的情况
-    INLINE_STYLE='<style>\n.header a, .nav a, ul.nav li, ul.navbar li, .nav li { display: inline-block !important; float: none !important; white-space: nowrap !important; word-break: keep-all !important; min-width: max-content !important; }\nul.nav, ul.navbar, .nav { display: flex !important; flex-direction: row !important; flex-wrap: wrap !important; gap: 8px !important; list-style: none !important; padding: 0 !important; }\n</style>\n' && \
-    find /usr/share/cups/templates -name "*.tmpl" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + && \
-    find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + && \
-    \
+    INLINE_STYLE='<style>\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; }\n.header .nav a, .nav a, div.nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; }\n</style>\n' && \
+    find /usr/share/cups/templates -name "*.tmpl" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
+    find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 6. 备份初始配置并赋予执行权限，创建持久化/临时目录
+# 6. 权限与存储目录
 RUN cp -rp /etc/cups /etc/cups.orig && \
     mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
