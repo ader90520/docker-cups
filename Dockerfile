@@ -1,89 +1,49 @@
-FROM debian:bookworm-slim
+FROM debian:bullseye-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Shanghai
 
-# 1. 安装核心打印套件、主流打印机驱动库与运行环境
+# 安装 CUPS、驱动、SANE 扫描工具、无头转换工具及核心中文矢量字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
-    cups-client \
     cups-filters \
-    cups-server-common \
+    cups-bsd \
     printer-driver-all \
     printer-driver-foo2zjs \
-    printer-driver-splix \
-    printer-driver-brlaser \
-    printer-driver-gutenprint \
-    foomatic-db-compressed-ppds \
     hplip \
-    avahi-daemon \
-    dbus \
-    locales \
-    gettext \
+    sane-utils \
+    libsane-hpaio \
+    ghostscript \
+    poppler-utils \
+    libreoffice-writer-nogui \
+    libreoffice-calc-nogui \
+    fonts-wqy-zenhei \
+    fonts-wqy-microhei \
     python3 \
+    python3-pip \
     python3-pil \
     python3-requests \
+    python3-tornado \
+    tzdata \
     ca-certificates \
-    curl \
-    wget \
-    usbutils \
-    psmisc \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+    && rm -rf /var/lib/apt/lists/*
 
-# 2. 预下载惠普热门 GDI 固件并双向链接
-RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
-    cd /tmp && \
-    for model in 1000 1005 1018 1020 P1005 P1006 P1007 P1008 P1505; do \
-        getweb $model || true; \
-    done && \
-    cp -f *.dl /usr/share/foo2zjs/firmware/ 2>/dev/null || true && \
-    cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
-    rm -rf /tmp/*
+# 开启 CUPS 局域网远程共享与管理权限
+RUN sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf && \
+    sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf && \
+    sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf && \
+    sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf && \
+    echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 
-# 3. 锁定 UTF-8 中文环境
-RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
-    locale-gen
-ENV LANG=zh_CN.UTF-8
-ENV LANGUAGE=zh_CN:zh
-ENV LC_ALL=zh_CN.UTF-8
-
-# 4. 复制启动脚本、云打印脚本与汉化资产
-COPY entrypoint.sh /entrypoint.sh
+# 部署工作文件
+WORKDIR /opt
 COPY mail_print.py /opt/mail_print.py
-COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
-COPY i18/zh_CN/index.html /tmp/index.html
-COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
+COPY cups_web_app.py /opt/cups_web_app.py
+COPY entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
-# 5. 编译汉化 mo 字典并铺设中文模板与首页
-RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
-             /usr/share/cups/locale/zh_CN \
-             /usr/share/cups/locale/zh \
-             /usr/share/cups/locale/zh-Hans \
-             /usr/share/cups/doc-root/zh_CN \
-             /usr/share/cups/doc-root/zh \
-             /usr/share/cups/doc-root/zh-Hans \
-             /usr/share/cups/templates/zh_CN \
-             /usr/share/cups/templates/zh && \
-    msguniq --use-first /tmp/cups_zh.po -o /tmp/cups_zh_clean.po && \
-    msgfmt -o /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /tmp/cups_zh_clean.po && \
-    cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /usr/share/locale/zh_CN/LC_MESSAGES/cups_zh_CN.mo && \
-    for d in /usr/share/cups/locale/zh_CN /usr/share/cups/locale/zh /usr/share/cups/locale/zh-Hans; do \
-        cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo "$d/cups.mo" && \
-        cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo "$d/cups_zh_CN.mo"; \
-    done && \
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ && \
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ && \
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ && \
-    cp -f /tmp/index.html /usr/share/cups/doc-root/index.html && \
-    cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
-    cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
-    cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
-    rm -rf /tmp/*
+EXPOSE 631 8000
 
-# 6. 备份初始配置并赋予执行权限
-RUN cp -rp /etc/cups /etc/cups.orig && \
-    chmod +x /entrypoint.sh /opt/mail_print.py
+VOLUME ["/etc/cups", "/scans"]
 
-EXPOSE 631
-
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["cupsd", "-f"]
+ENTRYPOINT ["/opt/entrypoint.sh"]
