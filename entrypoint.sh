@@ -2,16 +2,15 @@
 set -e
 
 echo "=================================================="
-echo " 🖨️  CUPS 打印与扫描集成容器启动中..."
+echo " 🖨️  CUPS 打印与扫描服务启动中..."
 echo "=================================================="
 
-# 1. 宿主机挂载卷数据自愈与目录权限初始化
+# 1. 宿主机挂载卷数据自愈与目录初始化
 if [ ! -f "/etc/cups/cupsd.conf" ]; then
     echo " [Init] 检测到全新的 /etc/cups 挂载卷，正在释放默认配置文件..."
     cp -rpn /etc/cups.orig/* /etc/cups/ 2>/dev/null || true
 fi
 
-# 确保运行时临时目录和持久化扫描目录存在并具备写入权限
 mkdir -p /var/log/cups /var/run/dbus /var/run/avahi-daemon /tmp/mail_print_tasks /tmp/cups_web_uploads /scans /etc/cups
 chmod 777 /tmp/mail_print_tasks /tmp/cups_web_uploads /scans
 
@@ -20,7 +19,7 @@ if [ -f "/usr/share/cups/doc-root/cups.css" ] && ! grep -q "white-space: nowrap 
     echo -e "\n/* 动态补丁: 中文防折行 */\nul.nav li a, ul.navbar li a, .nav a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; }\n" >> /usr/share/cups/doc-root/cups.css
 fi
 
-# 2. CUPS 631 端口后台管理员账号初始化
+# 2. 后台管理员账号初始化
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 
@@ -30,7 +29,7 @@ fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 echo " [Auth] CUPS 后台管理员账号已配置: $CUPS_USER"
 
-# 3. 局域网访问授权与 AirPrint 共享权限放行
+# 3. 局域网访问授权与放行
 sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
 sed -i 's/Browsing Off/Browsing On/' /etc/cups/cupsd.conf 2>/dev/null || true
 
@@ -59,7 +58,7 @@ if ! grep -q "DefaultEncryption Never" /etc/cups/cupsd.conf; then
     echo "DefaultEncryption Never" >> /etc/cups/cupsd.conf
 fi
 
-# 4. 启动 D-Bus 与 Avahi 广播
+# 4. 启动 D-Bus 与 Avahi 广播 (AirPrint 支持)
 if [ -x "/usr/bin/dbus-uuidgen" ]; then
     /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
 fi
