@@ -6,7 +6,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 第一层：系统底座 + CUPS打印驱动 + SANE扫描仪驱动 + OpenCV Python + 中文字符集（单层高聚合并清理缓存）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -44,7 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen
 
-# 第二层：预载惠普常见热敏/GDI打印机固件
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for m in 1005 1007 1008 1020; do getweb $m || true; done && \
@@ -52,7 +50,6 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 复制脚本与汉化模板资源
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -60,7 +57,6 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 第三层：编译汉化 + 注入防折行补丁 + 权限初始化
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
