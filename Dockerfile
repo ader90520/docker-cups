@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 完整组件安装：包含 LibreOffice、完整中文字库、OpenCV 视觉库及 SANE 扫描驱动
+# 1. 大内存版完整组件：保留 LibreOffice、完整中文字库、OpenCV 视觉库与 SANE 扫描驱动
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -63,7 +63,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并注入导航防折行补丁
+# 5. 编译汉化并注入导航防折行补丁（彻底杜绝竖排单字）
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -104,7 +104,8 @@ RUN cp -rp /etc/cups /etc/cups.orig && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
-EXPOSE 631 8000
+# 端口更新为 631 与 8088
+EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cupsd", "-f"]
