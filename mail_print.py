@@ -33,8 +33,10 @@ SCAN_DIR = os.getenv("SCAN_DIR", "/scans")
 for d in (TEMP_DIR, SCAN_DIR):
     os.makedirs(d, exist_ok=True)
 
-# ==================== 1. 扫描级图像增强核心 (NumPy 纯矢量加速) ====================
+# ==================== 1. 扫描级图像增强核心 (NumPy 纯矢量计算) ====================
 def auto_scan_and_whiten_cv(image_path):
+    if not HAVE_OPENCV:
+        return True
     try:
         with Image.open(image_path) as pil_raw:
             orig = cv2.cvtColor(np.array(ImageOps.exif_transpose(pil_raw).convert("RGB")), cv2.COLOR_RGB2BGR)
@@ -61,12 +63,12 @@ def auto_scan_and_whiten_cv(image_path):
             M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
             warped = cv2.warpAffine(orig, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
-        # 2. 内切 2% 边框消除暗影与黑边
+        # 2. 内切 2% 边框消除边缘暗影与扫描器黑边
         wh, ww = warped.shape[:2]
         my, mx = int(wh * 0.02), int(ww * 0.02)
         warped = warped[my:wh-my, mx:ww-mx]
 
-        # 3. 提取彩色细线掩模（保住小动物、树叶叶脉与彩色题号）
+        # 3. 提取彩色细线掩模（保留彩色题号与图案线条）
         b, g, r = cv2.split(warped)
         color_mask = ((cv2.absdiff(r, g) // 2 + cv2.absdiff(r, b) // 2 + cv2.absdiff(g, b) // 2) > 12)
 
@@ -117,7 +119,7 @@ def images_to_single_pdf(image_paths, output_pdf_path):
 def convert_office_to_pdf(doc_path):
     return None
 
-# ==================== 2. 邮件守护与出纸监控 ====================
+# ==================== 2. 邮件接收与出纸监控 ====================
 def decode_mime(s):
     if not s:
         return ""
