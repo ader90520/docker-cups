@@ -73,7 +73,7 @@ CUPSCFG
 find /usr/share/cups/templates -type f -name "header.tmpl" -exec sed -i \
   "s|<link.*cups\.css.*>|<link rel=\"stylesheet\" href=\"/cups.css\" type=\"text/css\" media=\"all\">|g" {} + 2>/dev/null || true
 
-# 8. 写入深蓝通栏导航栏与固定吸底样式补丁 (【核心修复】：去除文件名多余字符并强制横排)
+# 8. 写入深蓝通栏导航栏与固定吸底样式补丁 (精确写入 cups.css，去除多余字)
 sed -i '/\/\* ====== CUPS 现代化通栏与吸底补丁 ======\*\//,$d' /usr/share/cups/doc-root/cups.css 2>/dev/null || true
 cat << "CSSEOF" >> /usr/share/cups/doc-root/cups.css
 
