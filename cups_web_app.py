@@ -27,7 +27,7 @@ os.makedirs(SCAN_DIR, exist_ok=True)
 PRINT_HISTORY = []
 
 def get_system_uptime_str():
-    """获取系统运行时间（格式化为：X天X小时）"""
+    """获取系统运行时间（如：78天7小时）"""
     try:
         with open('/proc/uptime', 'r') as f:
             total_seconds = float(f.readline().split()[0])
@@ -42,7 +42,7 @@ def get_system_uptime_str():
 
 def diagnose_printer_detail(p_name):
     """
-    深度诊断打印机硬件状态：
+    深度诊断打印机：
     识别 空闲 / 打印中 / 卡纸 / 缺纸 / 缺墨 / 机盖打开 / 脱机
     """
     status_text = "空闲"
@@ -53,7 +53,6 @@ def diagnose_printer_detail(p_name):
         res = subprocess.run(["lpstat", "-l", "-p", p_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=3)
         raw = (res.stdout + res.stderr).lower()
 
-        # 硬件状态优先级判断
         if any(k in raw for k in ["media-jam", "paper jam", "jam"]):
             status_text = "卡纸"
             status_type = "error"
@@ -82,7 +81,7 @@ def diagnose_printer_detail(p_name):
         status_text = "就绪"
         status_type = "idle"
 
-    # 统计该打印机的排队任务数
+    # 统计排队作业数
     job_count = 0
     try:
         env = dict(os.environ, LC_ALL="C")
@@ -135,6 +134,8 @@ HTML_PAGE = """<!DOCTYPE html>
             --text-main: #1e293b;
             --text-muted: #64748b;
             --blue: #0284c7;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text-main); font-size: 14px; }
@@ -167,8 +168,12 @@ HTML_PAGE = """<!DOCTYPE html>
         .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px 16px; text-align: center; cursor: pointer; background: #f8fafc; margin-bottom: 16px; transition: all 0.2s ease; }
         .upload-zone:hover { border-color: var(--primary); background: #f0fdf4; }
         .upload-zone.dragover { border-color: var(--primary); background: #dcfce7; transform: scale(1.01); }
-        .upload-info { display: flex; align-items: center; justify-content: space-between; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
         
+        /* 文件信息与删除按钮样式 */
+        .upload-info { display: flex; align-items: center; justify-content: space-between; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
+        .btn-delete-file { background: #fee2e2; color: var(--danger); border: 1px solid #fca5a5; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.2s; }
+        .btn-delete-file:hover { background: var(--danger); color: #fff; }
+
         /* 仿真纸张打印预览区域 */
         .preview-container { background: #e2e8f0; border-radius: 8px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 250px; overflow: hidden; }
         .paper-sheet { background: #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.12); border-radius: 4px; display: flex; justify-content: center; align-items: center; overflow: hidden; transition: all 0.3s ease; padding: 8px; box-sizing: border-box; }
@@ -185,7 +190,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         /* 状态徽标样式 */
         .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
-        .badge-idle { background: #dcfce7; color: #15803d; }     /* 空闲正常 */
+        .badge-idle { background: #dcfce7; color: #15803d; }     /* 空闲 */
         .badge-busy { background: #e0f2fe; color: #0369a1; }     /* 打印中 */
         .badge-warn { background: #fef9c3; color: #854d0e; }     /* 缺墨/开盖 */
         .badge-error { background: #fee2e2; color: #b91c1c; }    /* 卡纸/缺纸/脱机 */
@@ -223,7 +228,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="card">
                 <div class="card-header">
                     <span>🖨️ 目标打印机与文档</span>
-                    <a href="javascript:void(0)" onclick="openDriverModal()" style="font-size: 12px; color: var(--blue); text-decoration: none;">+ 添加/安装驱动</a>
+                    <a href="javascript:void(0)" onclick="openDriverModal()" style="font-size: 12px; color: var(--blue); text-decoration: none; font-weight: 500;">➕ 添加/安装驱动</a>
                 </div>
                 <div class="form-group" style="margin-bottom: 16px;">
                     <label class="form-label">选择打印机</label>
@@ -237,65 +242,69 @@ HTML_PAGE = """<!DOCTYPE html>
                     <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">支持 PDF, Word, Excel, JPG, PNG（自动纠偏去黑底）</div>
                 </div>
 
+                <!-- 选定文件提示卡片：增加删除/清空按钮 -->
                 <div id="fileInfoBox" class="upload-info" style="display: none;">
                     <div>
-                        <span id="fileNameDisplay" style="font-weight: 600;"></span>
+                        <span id="fileNameDisplay" style="font-weight: 600; color: #15803d;"></span>
                         <span id="fileSizeDisplay" style="color: var(--text-muted); margin-left: 8px;"></span>
                     </div>
-                    <span style="color: var(--primary); font-weight: 600;">✓ 已就绪</span>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: var(--primary); font-weight: 600;">✓ 已就绪</span>
+                        <button type="button" class="btn-delete-file" onclick="clearSelectedFile()" title="点击移除已选文件">❌ 删除</button>
+                    </div>
                 </div>
             </div>
 
             <!-- 打印参数核心卡片 -->
             <div class="card">
-                <div class="card-header"><span>⚲ 打印参数</span></div>[span_2](start_span)[span_2](end_span)
+                <div class="card-header"><span>⚲ 打印参数</span></div>
                 
                 <div class="form-row">
                     <div class="form-group">
-                        <label class="form-label">颜色模式</label>[span_3](start_span)[span_3](end_span)
+                        <label class="form-label">颜色模式</label>
                         <div class="pill-group">
-                            <button type="button" class="pill-btn active" id="btnColor" onclick="setColor('color')">🌈 彩色打印</button>[span_4](start_span)[span_4](end_span)
-                            <button type="button" class="pill-btn" id="btnGray" onclick="setColor('gray')">⚪ 黑白打印</button>[span_5](start_span)[span_5](end_span)
+                            <button type="button" class="pill-btn active" id="btnColor" onclick="setColor('color')">🌈 彩色打印</button>
+                            <button type="button" class="pill-btn" id="btnGray" onclick="setColor('gray')">⚪ 黑白打印</button>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">打印方向</label>[span_6](start_span)[span_6](end_span)
+                        <label class="form-label">打印方向</label>
                         <div class="pill-group">
-                            <button type="button" class="pill-btn active" id="btnPortrait" onclick="setOrient('portrait')">▯ 纵向</button>[span_7](start_span)[span_7](end_span)
-                            <button type="button" class="pill-btn" id="btnLandscape" onclick="setOrient('landscape')">▭ 横向</button>[span_8](start_span)[span_8](end_span)
+                            <button type="button" class="pill-btn active" id="btnPortrait" onclick="setOrient('portrait')">▯ 纵向</button>
+                            <button type="button" class="pill-btn" id="btnLandscape" onclick="setOrient('landscape')">▭ 横向</button>
                         </div>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label class="form-label">双面打印</label>[span_9](start_span)[span_9](end_span)
+                        <label class="form-label">双面打印</label>
                         <select id="duplexSelect" class="form-control">
-                            <option value="one-sided">单面打印</option>[span_10](start_span)[span_10](end_span)
+                            <option value="one-sided">单面打印</option>
                             <option value="two-sided-long-edge">双面打印 (长边翻转)</option>
                             <option value="two-sided-short-edge">双面打印 (短边翻转)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">份数</label>[span_11](start_span)[span_11](end_span)
-                        <input type="number" id="copiesInput" class="form-control" value="1" min="1" max="99">[span_12](start_span)[span_12](end_span)
+                        <label class="form-label">份数</label>
+                        <input type="number" id="copiesInput" class="form-control" value="1" min="1" max="99">
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label class="form-label">纸张大小</label>[span_13](start_span)[span_13](end_span)
+                        <label class="form-label">纸张大小</label>
                         <select id="mediaSelect" class="form-control">
-                            <option value="A4">A4 (210×297mm)</option>[span_14](start_span)[span_14](end_span)
+                            <option value="A4">A4 (210×297mm)</option>
                             <option value="A5">A5 (148×210mm)</option>
                             <option value="A6">A6 (105×148mm)</option>
                             <option value="B5">B5 (182×257mm)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">纸张类型</label>[span_15](start_span)[span_15](end_span)
+                        <label class="form-label">纸张类型</label>
                         <select id="paperTypeSelect" class="form-control">
-                            <option value="plain">普通纸</option>[span_16](start_span)[span_16](end_span)
+                            <option value="plain">普通纸</option>
                             <option value="photo">相片纸</option>
                             <option value="heavy">厚纸</option>
                         </select>
@@ -304,23 +313,23 @@ HTML_PAGE = """<!DOCTYPE html>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label class="form-label">缩放</label>[span_17](start_span)[span_17](end_span)
+                        <label class="form-label">缩放</label>
                         <select id="scaleSelect" class="form-control">
-                            <option value="fit-to-page">适应纸张</option>[span_18](start_span)[span_18](end_span)
+                            <option value="fit-to-page">适应纸张</option>
                             <option value="actual">实际大小 (100%)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">页面范围</label>[span_19](start_span)[span_19](end_span)
-                        <input type="text" id="pageRangeInput" class="form-control" placeholder="留空=全部，如: 1-5 8">[span_20](start_span)[span_20](end_span)
+                        <label class="form-label">页面范围</label>
+                        <input type="text" id="pageRangeInput" class="form-control" placeholder="留空=全部，如: 1-5 8">
                     </div>
                 </div>
 
                 <div class="form-group" style="margin-bottom: 16px;">
-                    <label class="form-label">镜像打印</label>[span_21](start_span)[span_21](end_span)
+                    <label class="form-label">镜像打印</label>
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #475569; cursor: pointer;">
-                        <input type="checkbox" id="mirrorCheckbox" style="width: 16px; height: 16px; accent-color: var(--primary);">[span_22](start_span)[span_22](end_span)
-                        <span>[⇋] 水平镜像翻转</span>[span_23](start_span)[span_23](end_span)
+                        <input type="checkbox" id="mirrorCheckbox" style="width: 16px; height: 16px; accent-color: var(--primary);">
+                        <span>[⇋] 水平镜像翻转</span>
                     </label>
                 </div>
 
@@ -339,42 +348,42 @@ HTML_PAGE = """<!DOCTYPE html>
                 </div>
 
                 <button class="btn-submit" onclick="submitPrintJob()">
-                    <span>🖨️ 提交打印</span>[span_24](start_span)[span_24](end_span)
+                    <span>🖨️ 提交打印</span>
                 </button>
             </div>
         </section>
 
-        <!-- 右侧：打印机状态（图示卡片与故障诊断） -->
+        <!-- 右侧：打印机状态卡片 -->
         <section>
             <div class="card">
                 <div class="card-header">
-                    <span>📈 打印机状态</span>[span_25](start_span)[span_25](end_span)
+                    <span>📈 打印机状态</span>
                     <button class="nav-btn nav-btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="loadPrinters()">🔄 刷新</button>
                 </div>
 
                 <!-- 1. 打印机状态徽标 -->
                 <div class="status-item">
                     <div class="status-item-left">
-                        <span>ℹ️</span>[span_26](start_span)[span_26](end_span)
-                        <span>打印机状态</span>[span_27](start_span)[span_27](end_span)
+                        <span>ℹ️</span>
+                        <span>打印机状态</span>
                     </div>
-                    <span class="badge badge-idle" id="curStatusBadge">空闲</span>[span_28](start_span)[span_28](end_span)
+                    <span class="badge badge-idle" id="curStatusBadge">空闲</span>
                 </div>
 
                 <!-- 2. 队列任务数 -->
                 <div class="status-item">
                     <div class="status-item-left">
-                        <span>📊</span>[span_29](start_span)[span_29](end_span)
-                        <span>队列任务数</span>[span_30](start_span)[span_30](end_span)
+                        <span>📊</span>
+                        <span>队列任务数</span>
                     </div>
-                    <span class="status-val" id="queueJobCount">0</span>[span_31](start_span)[span_31](end_span)
+                    <span class="status-val" id="queueJobCount">0</span>
                 </div>
 
                 <!-- 3. 状态持续时间 -->
                 <div class="status-item">
                     <div class="status-item-left">
-                        <span>🕒</span>[span_32](start_span)[span_32](end_span)
-                        <span>状态持续</span>[span_33](start_span)[span_33](end_span)
+                        <span>🕒</span>
+                        <span>状态持续</span>
                     </div>
                     <span class="status-val" id="uptimeDisplay" style="font-size: 13px; font-weight: normal; color: #475569;">计算中...</span>
                 </div>
@@ -382,23 +391,23 @@ HTML_PAGE = """<!DOCTYPE html>
                 <!-- 4. 纸盒信息明细 -->
                 <div style="margin-top: 14px;">
                     <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #334155; display: flex; align-items: center; gap: 6px;">
-                        <span>📚 纸盒信息</span>[span_34](start_span)[span_34](end_span)
+                        <span>📚 纸盒信息</span>
                     </div>
                     <div class="tray-box">
-                        <input type="checkbox" checked disabled>[span_35](start_span)[span_35](end_span)
-                        <span>iso_a4_210x297mm (默认标准进纸)</span>[span_36](start_span)[span_36](end_span)
+                        <input type="checkbox" checked disabled>
+                        <span>iso_a4_210x297mm (默认标准进纸)</span>
                     </div>
                     <div class="tray-box">
-                        <input type="checkbox" disabled>[span_37](start_span)[span_37](end_span)
-                        <span>iso_a6_105x148mm (相片纸进纸槽)</span>[span_38](start_span)[span_38](end_span)
+                        <input type="checkbox" disabled>
+                        <span>iso_a6_105x148mm (相片纸进纸槽)</span>
                     </div>
                     <div class="tray-box">
-                        <input type="checkbox" disabled>[span_39](start_span)[span_39](end_span)
-                        <span>iso_a5_148x210mm (半页票据)</span>[span_40](start_span)[span_40](end_span)
+                        <input type="checkbox" disabled>
+                        <span>iso_a5_148x210mm (半页票据)</span>
                     </div>
                     <div class="tray-box">
-                        <input type="checkbox" disabled>[span_41](start_span)[span_41](end_span)
-                        <span>iso_a3_297x420mm</span>[span_42](start_span)[span_42](end_span)
+                        <input type="checkbox" disabled>
+                        <span>iso_a3_297x420mm</span>
                     </div>
                 </div>
             </div>
@@ -506,6 +515,20 @@ HTML_PAGE = """<!DOCTYPE html>
             }
         }
 
+        // 清空/移除已选文件函数
+        function clearSelectedFile() {
+            selectedFile = null;
+            fileInput.value = '';
+            document.getElementById('fileInfoBox').style.display = 'none';
+            previewImg.src = '';
+            previewImg.style.display = 'none';
+            previewPlaceholder.style.display = 'block';
+            previewPlaceholder.innerHTML = `
+                <div class="icon">🖼️</div>
+                <div style="font-size: 13px;">选择或拖入图片查看排版</div>
+            `;
+        }
+
         document.getElementById('mirrorCheckbox').addEventListener('change', updateMirrorPreview);
         function updateMirrorPreview() {
             const isMirror = document.getElementById('mirrorCheckbox').checked;
@@ -549,7 +572,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         async function loadPrinters() {
             try {
-                const res = await fetch('/api/printers');
+                const res = await fetch('/api/printers?_t=' + Date.now());
                 const data = await res.json();
                 printersData = data.printers || [];
                 const sel = document.getElementById('printerSelect');
@@ -578,7 +601,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         async function loadHistory() {
             try {
-                const res = await fetch('/api/history');
+                const res = await fetch('/api/history?_t=' + Date.now());
                 const list = await res.json();
                 const c = document.getElementById('historyList');
                 if (!list.length) return;
@@ -613,6 +636,7 @@ HTML_PAGE = """<!DOCTYPE html>
             const ret = await res.json();
             if (ret.code === 0) {
                 alert('🎉 打印任务已成功加入队列！');
+                clearSelectedFile(); // 提交成功后自动重置文件
                 loadHistory();
                 loadPrinters();
             } else {
@@ -633,7 +657,7 @@ HTML_PAGE = """<!DOCTYPE html>
             const devSelect = document.getElementById('detectedDevices');
             devSelect.innerHTML = '<option value="">正在探测设备中...</option>';
             try {
-                const res = await fetch('/api/scan_devices');
+                const res = await fetch('/api/scan_devices?_t=' + Date.now());
                 const list = await res.json();
                 devSelect.innerHTML = '';
                 if (list.length === 0) {
@@ -691,12 +715,17 @@ HTML_PAGE = """<!DOCTYPE html>
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         self.set_header("Content-Type", "text/html; charset=UTF-8")
+        # 禁用浏览器对 HTML 的强缓存，确保每次加载最新界面
+        self.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.set_header("Pragma", "no-cache")
+        self.set_header("Expires", "0")
         self.write(HTML_PAGE)
 
 class PrintersApiHandler(tornado.web.RequestHandler):
     def get(self):
         printers, def_p = get_printers_info()
         uptime = get_system_uptime_str()
+        self.set_header("Cache-Control", "no-cache")
         self.write(json.dumps({
             "printers": printers,
             "default": def_p,
@@ -705,10 +734,10 @@ class PrintersApiHandler(tornado.web.RequestHandler):
 
 class HistoryApiHandler(tornado.web.RequestHandler):
     def get(self):
+        self.set_header("Cache-Control", "no-cache")
         self.write(json.dumps(PRINT_HISTORY))
 
 class ScanDevicesApiHandler(tornado.web.RequestHandler):
-    """自动扫描 USB 和网络已接入硬件 URI"""
     def get(self):
         devices = []
         try:
@@ -725,7 +754,6 @@ class ScanDevicesApiHandler(tornado.web.RequestHandler):
         self.write(json.dumps(devices))
 
 class AddPrinterApiHandler(tornado.web.RequestHandler):
-    """接收 Web 上传的 PPD 驱动文件并调用 lpadmin 完成系统注册"""
     def post(self):
         name = self.get_argument("name", "").strip()
         uri = self.get_argument("uri", "").strip()
@@ -798,31 +826,18 @@ class PrintApiHandler(tornado.web.RequestHandler):
         cmd.extend(["-n", str(copies)])
         cmd.extend(["-o", f"media={media}"])
 
-        # 缩放控制
         if scale == "fit-to-page":
             cmd.extend(["-o", "fit-to-page"])
-
-        # 打印方向
         if orient == "landscape":
             cmd.extend(["-o", "orientation-requested=4"])
-
-        # 色彩模式
         if color == "gray":
             cmd.extend(["-o", "ColorModel=Gray"])
-
-        # 纸张类型
         if paper_type == "photo":
             cmd.extend(["-o", "MediaType=Photo"])
-
-        # 水平镜像翻转
         if mirror == "true":
             cmd.extend(["-o", "mirror"])
-
-        # 双面打印
         if duplex != "one-sided":
             cmd.extend(["-o", f"sides={duplex}"])
-
-        # 页面范围
         if page_range.strip():
             cmd.extend(["-o", f"page-ranges={page_range.strip()}"])
 
