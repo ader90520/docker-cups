@@ -5,7 +5,7 @@ ENV HOME=/root
 ENV XDG_CACHE_HOME=/root/.cache
 ENV DCONF_USER_CONFIG_DIR=/root/.config/dconf
 
-# 1. 第一层：系统底座与 CUPS 打印核心、基础字体 (约 65MB，秒拉秒解)
+# 1. 第一层：系统底座与 CUPS 打印核心、基础字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 第二层：打印机通用驱动栈 + 扫描仪驱动 (约 50MB)
+# 2. 第二层：打印机通用驱动栈 + 扫描仪驱动
 RUN apt-get update && apt-get install -y --no-install-recommends \
     printer-driver-foo2zjs \
     printer-driver-splix \
@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 3. 第三层：Python 运行环境 + OpenCV + Tornado (约 70MB)
+# 3. 第三层：Python 运行环境 + OpenCV + Tornado
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pil \
@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-numpy \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 4. 第四层：极简 LibreOffice 核心（只装 writer 与 calc 的无头运行环境，剔除所有图形壳，约 60MB）
+# 4. 第四层：极简 LibreOffice 核心（无头环境）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-writer-nogui \
     libreoffice-calc-nogui \
@@ -106,7 +106,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
     \
-    # 彻底杜绝 CUPS 导航单字竖排换行补丁
+    # 注入全局 CSS 与模板内联补丁
     NAV_CSS_PATCH='/* 强制中文导航横向平铺，禁止单字竖排 */\n.header { clear: both !important; display: block !important; width: 100% !important; }\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 10px !important; }\n.header .nav a, .nav a, div.nav a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 6px 12px !important; }\n' && \
     for f in $(find /usr/share/cups/doc-root -name "*.css"); do \
         echo -e "\n$NAV_CSS_PATCH" >> "$f"; \
