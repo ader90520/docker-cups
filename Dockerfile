@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 第一层：系统底座 + 打印驱动 + 核心工具 + OpenCV Python + 中文字符集（全并入单层并深度清理缓存）
+# 第一层：系统底座 + CUPS打印驱动 + SANE扫描仪驱动 + OpenCV Python + 中文字符集（单层高聚合并清理缓存）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen
 
-# 第二层：预载惠普热门固件
+# 第二层：预载惠普常见热敏/GDI打印机固件
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for m in 1005 1007 1008 1020; do getweb $m || true; done && \
@@ -52,7 +52,7 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 复制配置文件与脚本
+# 复制脚本与汉化模板资源
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -66,7 +66,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh \
              /usr/share/cups/doc-root/zh_CN \
              /usr/share/cups/templates/zh_CN \
-             /etc/cups.orig /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /etc/cups/ssl && \
+             /etc/cups.orig /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /etc/cups/ssl /var/lock/sane && \
     msguniq --use-first /tmp/cups_zh.po -o /tmp/cups_zh_clean.po && \
     msgfmt -o /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /tmp/cups_zh_clean.po && \
     for d in /usr/share/cups/locale/zh_CN /usr/share/cups/locale/zh; do \
@@ -77,7 +77,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
     cp -rp /etc/cups/* /etc/cups.orig/ 2>/dev/null || true && \
-    chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
+    chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane && \
     chmod 700 /etc/cups/ssl && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py && \
     rm -rf /tmp/*
