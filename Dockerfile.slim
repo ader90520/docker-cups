@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 核心轻量组件：剔除 LibreOffice/OpenCV/臃肿依赖，保留核心打印驱动与必要工具
+# 1. 核心轻量组件：剔除 LibreOffice/OpenCV，保留核心打印驱动与必要工具
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -83,7 +83,7 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh-Hans/index.html && \
     \
-    # 彻底根除 CUPS 导航单字竖排换行补丁
+    # 彻底杜绝 CUPS 导航单字竖排换行补丁
     NAV_CSS_PATCH='/* 强制中文导航横向平铺，禁止单字竖排 */\n.header { clear: both !important; display: block !important; width: 100% !important; }\n.header .nav, .nav, div.nav { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 10px !important; }\n.header .nav a, .nav a, div.nav a, ul.nav li a { white-space: nowrap !important; word-break: keep-all !important; display: inline-block !important; min-width: max-content !important; padding: 6px 12px !important; }\n' && \
     for f in $(find /usr/share/cups/doc-root -name "*.css"); do \
         echo -e "\n$NAV_CSS_PATCH" >> "$f"; \
@@ -99,7 +99,7 @@ RUN cp -rp /etc/cups /etc/cups.orig && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
-EXPOSE 631 8000
+EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cupsd", "-f"]
