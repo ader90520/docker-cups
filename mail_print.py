@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os, sys, time, gc, re, email, imaplib, subprocess, requests
+import os
+import sys
+import time
+import gc
+import re
+import email
+import imaplib
+import subprocess
+import requests
 from email.header import decode_header
 from PIL import Image, ImageOps
 
@@ -20,10 +28,12 @@ PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 NOTIFY_URL = os.getenv("NOTIFY_URL", "https://www.pushplus.plus/send")
 DEFAULT_PRINTER_ENV = os.getenv("DEFAULT_PRINTER", "")
 
-TEMP_DIR, SCAN_DIR = "/tmp/mail_print_tasks", os.getenv("SCAN_DIR", "/scans")
-for d in (TEMP_DIR, SCAN_DIR): os.makedirs(d, exist_ok=True)
+TEMP_DIR = "/tmp/mail_print_tasks"
+SCAN_DIR = os.getenv("SCAN_DIR", "/scans")
+for d in (TEMP_DIR, SCAN_DIR):
+    os.makedirs(d, exist_ok=True)
 
-# ==================== 1. 扫描级图像增强算法 (NumPy 矢量加速版) ====================
+# ==================== 1. 扫描级图像增强核心 (NumPy 纯矢量加速) ====================
 def auto_scan_and_whiten_cv(image_path):
     try:
         with Image.open(image_path) as pil_raw:
@@ -31,7 +41,7 @@ def auto_scan_and_whiten_cv(image_path):
 
         h, w = orig.shape[:2]
 
-        # 1. 霍夫变换文本基线倾角检测与快速自动拉平 (Deskew)
+        # 1. 霍夫变换文字基线倾角检测与快速自动拉平 (Deskew)
         scale = 600.0 / max(h, w)
         sw, sh = int(w * scale), int(h * scale)
         small = cv2.resize(orig, (sw, sh), interpolation=cv2.INTER_AREA)
@@ -43,7 +53,8 @@ def auto_scan_and_whiten_cv(image_path):
         angle = 0.0
         if lines is not None:
             angles = [np.degrees(np.arctan2(y2 - y1, x2 - x1)) for line in lines for x1, y1, x2, y2 in line if -15 < np.degrees(np.arctan2(y2 - y1, x2 - x1)) < 15]
-            if angles: angle = float(np.median(angles))
+            if angles:
+                angle = float(np.median(angles))
 
         warped = orig
         if abs(angle) > 0.3:
@@ -94,90 +105,122 @@ def images_to_single_pdf(image_paths, output_pdf_path):
         pil_images = []
         for img_p in image_paths:
             auto_process_image(img_p)
-            with Image.open(img_p) as im: pil_images.append(im.convert("RGB"))
-        if not pil_images: return False
+            with Image.open(img_p) as im:
+                pil_images.append(im.convert("RGB"))
+        if not pil_images:
+            return False
         pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:], resolution=300.0)
         return True
-    except: return False
+    except Exception:
+        return False
 
 def convert_office_to_pdf(doc_path):
     return None
 
 # ==================== 2. 邮件守护与出纸监控 ====================
 def decode_mime(s):
-    if not s: return ""
+    if not s:
+        return ""
     res = []
     for frag, charset in decode_header(s):
         if isinstance(frag, bytes):
-            try: res.append(frag.decode(charset or "utf-8", errors="ignore"))
-            except: res.append(frag.decode("utf-8", errors="ignore"))
-        else: res.append(str(frag))
+            try:
+                res.append(frag.decode(charset or "utf-8", errors="ignore"))
+            except Exception:
+                res.append(frag.decode("utf-8", errors="ignore"))
+        else:
+            res.append(str(frag))
     return "".join(res)
 
 def get_target_printer():
     all_p, def_p = [], None
     try:
         dp = subprocess.run(["lpstat", "-d"], capture_output=True, text=True, timeout=3)
-        if "destination: " in dp.stdout: def_p = dp.stdout.split("destination: ")[-1].strip()
+        if "destination: " in dp.stdout:
+            def_p = dp.stdout.split("destination: ")[-1].strip()
         ps = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, timeout=3)
         for l in ps.stdout.splitlines():
-            if l.startswith("printer "): all_p.append(l.split()[1].strip())
-    except: pass
+            if l.startswith("printer "):
+                all_p.append(l.split()[1].strip())
+    except Exception:
+        pass
     return DEFAULT_PRINTER_ENV if DEFAULT_PRINTER_ENV in all_p else (def_p or (all_p[0] if all_p else None))
 
 def print_file(filepath, filename):
     p = get_target_printer()
-    if not p: return False
+    if not p:
+        return False
     try:
-        cmd = ["lp", "-d", p, "-o", "media=A4", "-o", "fit-to-page", "-o", "Resolution=600dpi", "-o", "pdftops-renderer=gs", "-o", "ColorModel=Gray", filepath]
+        cmd = [
+            "lp", "-d", p,
+            "-o", "media=A4", "-o", "fit-to-page",
+            "-o", "Resolution=600dpi", "-o", "pdftops-renderer=gs",
+            "-o", "ColorModel=Gray", filepath
+        ]
         subprocess.run(cmd, capture_output=True, timeout=25)
         return True
-    except: return False
+    except Exception:
+        return False
     finally:
         if os.path.exists(filepath):
-            try: os.remove(filepath)
-            except: pass
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
         gc.collect()
 
 def fetch_and_print():
-    if not EMAIL_USER or not EMAIL_PASS: return
+    if not EMAIL_USER or not EMAIL_PASS:
+        return
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, 993, timeout=12)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("INBOX")
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK" or not messages[0]:
-            mail.logout(); return
+            mail.logout()
+            return
 
         for num in messages[0].split():
             status, data = mail.fetch(num, "(RFC822)")
-            if status != "OK": continue
+            if status != "OK":
+                continue
             msg = email.message_from_bytes(data[0][1])
             imgs, docs = [], []
             for part in msg.walk():
-                if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None: continue
+                if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
+                    continue
                 fn = decode_mime(part.get_filename() or "")
                 ext = os.path.splitext(fn)[1].lower()
                 fp = os.path.join(TEMP_DIR, fn)
-                with open(fp, "wb") as f: f.write(part.get_payload(decode=True))
-                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]: imgs.append(fp)
-                elif ext in [".pdf", ".txt"]: docs.append((fp, fn))
+                with open(fp, "wb") as f:
+                    f.write(part.get_payload(decode=True))
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
+                    imgs.append(fp)
+                elif ext in [".pdf", ".txt"]:
+                    docs.append((fp, fn))
             if imgs:
                 if len(imgs) == 1:
                     auto_process_image(imgs[0])
                     print_file(imgs[0], os.path.basename(imgs[0]))
                 else:
                     comb = os.path.join(TEMP_DIR, f"合卷_{int(time.time())}.pdf")
-                    if images_to_single_pdf(imgs, comb): print_file(comb, os.path.basename(comb))
-            for dfp, dfn in docs: print_file(dfp, dfn)
+                    if images_to_single_pdf(imgs, comb):
+                        print_file(comb, os.path.basename(comb))
+            for dfp, dfn in docs:
+                print_file(dfp, dfn)
             mail.store(num, "+FLAGS", "\\Seen")
-        mail.close(); mail.logout()
-    except: pass
+        mail.close()
+        mail.logout()
+    except Exception:
+        pass
 
 def main():
     while True:
-        try: fetch_and_print()
-        except: pass
+        try:
+            fetch_and_print()
+        except Exception:
+            pass
         time.sleep(8)
 
 if __name__ == "__main__":
