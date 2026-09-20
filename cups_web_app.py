@@ -119,7 +119,6 @@ HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta na
   </div>
 </header>
 
-<!-- 1. 打印视图 -->
 <main class="box" id="printView">
 <section>
   <div class="card">
@@ -179,7 +178,6 @@ HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta na
 </section>
 </main>
 
-<!-- 2. 扫描仪视图 -->
 <main class="box" id="scanView" style="display:none">
 <section>
   <div class="card">
@@ -407,7 +405,7 @@ async function submitPrint(){
   } else alert('失败:'+res.msg);
 }
 
-// ==================== 扫描仪前端操作函数 ====================
+// ==================== 扫描仪前端逻辑 ====================
 async function scanHardwareScanners(){
   const sel = document.getElementById('scannerSelect');
   sel.innerHTML = '<option value="">正在检测 SANE 扫描仪硬件...</option>';
@@ -732,9 +730,8 @@ class PrintH(tornado.web.RequestHandler):
         else:
             self.write(json.dumps({"code": 1, "msg": last_err or "提交打印失败"}))
 
-# ==================== SANE 扫描仪后台 API 实现 ====================
+# ==================== SANE 扫描仪专属路由 ====================
 class SaneScannersApiHandler(tornado.web.RequestHandler):
-    """通过 scanimage -L 探测物理扫描仪"""
     def get(self):
         scanners = []
         try:
@@ -751,7 +748,6 @@ class SaneScannersApiHandler(tornado.web.RequestHandler):
         self.write(json.dumps(scanners))
 
 class ScanJobApiHandler(tornado.web.RequestHandler):
-    """执行物理扫描并处理输出"""
     def post(self):
         device = self.get_argument("device", "").strip()
         resolution = self.get_argument("resolution", "300")
@@ -807,7 +803,6 @@ class ScanJobApiHandler(tornado.web.RequestHandler):
             self.write(json.dumps({"code": 1, "msg": str(e)}))
 
 class PrintScanFileApiHandler(tornado.web.RequestHandler):
-    """直接把 /scans 里的扫描文档送往 CUPS 打印（一键复印）"""
     def post(self):
         fn = self.get_argument("scan_file", "").strip()
         printer = self.get_argument("printer", "").strip()
@@ -849,7 +844,6 @@ class PrintScanFileApiHandler(tornado.web.RequestHandler):
             self.write(json.dumps({"code": 1, "msg": str(e)}))
 
 class ScanFilesApiHandler(tornado.web.RequestHandler):
-    """读取 /scans 目录所有历史扫描文件"""
     def get(self):
         file_list = []
         if os.path.exists(SCAN_DIR):
@@ -866,7 +860,6 @@ class ScanFilesApiHandler(tornado.web.RequestHandler):
         self.write(json.dumps(file_list))
 
 class DeleteScanFileApiHandler(tornado.web.RequestHandler):
-    """删除指定的扫描文件"""
     def post(self):
         fn = self.get_argument("filename", "").strip()
         if not fn or "/" in fn or "\\" in fn:
@@ -889,7 +882,6 @@ def make_app():
         (r"/api/add_printer", AddH),
         (r"/api/history", HistoryH),
         (r"/api/print", PrintH),
-        # 扫描仪专属路由
         (r"/api/sane_scanners", SaneScannersApiHandler),
         (r"/api/scan_job", ScanJobApiHandler),
         (r"/api/print_scan_file", PrintScanFileApiHandler),
