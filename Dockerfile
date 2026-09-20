@@ -1,35 +1,27 @@
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+ENV XDG_CACHE_HOME=/root/.cache
+ENV DCONF_USER_CONFIG_DIR=/root/.config/dconf
 
-# 1. 完整组件安装：包含 LibreOffice、中文字库、OpenCV 视觉库及 SANE 扫描驱动
+# 1. 第一层：系统底座与 CUPS 打印核心、基础字体 (约 65MB，秒拉秒解)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     cups-filters \
+    cups-browsed \
     cups-server-common \
-    printer-driver-foo2zjs \
-    printer-driver-splix \
-    printer-driver-brlaser \
-    hplip \
-    sane-utils \
-    libsane-hpaio \
     ghostscript \
     poppler-utils \
-    libreoffice-writer-nogui \
-    libreoffice-calc-nogui \
     fonts-wqy-zenhei \
     fonts-wqy-microhei \
     avahi-daemon \
+    avahi-utils \
+    libnss-mdns \
     dbus \
     locales \
     gettext \
-    python3 \
-    python3-pil \
-    python3-requests \
-    python3-tornado \
-    python3-opencv \
-    python3-numpy \
     ca-certificates \
     curl \
     wget \
@@ -38,7 +30,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
-# 2. 预下载惠普固件
+# 2. 第二层：打印机通用驱动栈 + 扫描仪驱动 (约 50MB)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    printer-driver-foo2zjs \
+    printer-driver-splix \
+    printer-driver-brlaser \
+    hplip \
+    sane-utils \
+    libsane-hpaio \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+# 3. 第三层：Python 运行环境 + OpenCV + Tornado (约 70MB)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pil \
+    python3-requests \
+    python3-tornado \
+    python3-opencv \
+    python3-numpy \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+# 4. 第四层：极简 LibreOffice 核心（只装 writer 与 calc 的无头运行环境，剔除所有图形壳，约 60MB）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer-nogui \
+    libreoffice-calc-nogui \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+
+# 5. 预下载惠普热门固件
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for model in 1005 1007 1008 1020; do \
@@ -48,14 +66,14 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 3. 锁定 UTF-8 中文环境
+# 6. 中文环境生成
 RUN sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
     locale-gen
 ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 ENV LC_ALL=zh_CN.UTF-8
 
-# 4. 复制脚本与汉化文件
+# 7. 复制系统脚本与汉化资源
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -63,7 +81,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 编译汉化并覆盖模板 + 注入防竖排补丁
+# 8. 编译汉化并注入导航防折行补丁
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -98,10 +116,11 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     find /usr/share/cups/doc-root -name "*.html" -exec sed -i "s|</head>|${INLINE_STYLE}</head>|g" {} + 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 6. 初始化权限与持久化卷目录
+# 9. 目录与用户权限预置
 RUN cp -rp /etc/cups /etc/cups.orig && \
-    mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
+    mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /etc/cups/ssl /root/.cache/dconf /root/.config/libreoffice && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
+    chmod 700 /etc/cups/ssl /root/.cache/dconf && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
 EXPOSE 631 8088
