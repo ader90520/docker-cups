@@ -2,11 +2,12 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 核心轻量组件：剔除 LibreOffice/OpenCV，保留核心打印驱动与必要工具
+# 1. 核心轻量组件：保留核心打印驱动与必要工具
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     cups-filters \
+    cups-browsed \
     cups-server-common \
     printer-driver-foo2zjs \
     printer-driver-splix \
@@ -18,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     fonts-wqy-microhei \
     avahi-daemon \
+    avahi-utils \
+    libnss-mdns \
     dbus \
     locales \
     gettext \
@@ -95,8 +98,9 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
 
 # 6. 初始化权限与持久化卷目录
 RUN cp -rp /etc/cups /etc/cups.orig && \
-    mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
+    mkdir -p /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /etc/cups/ssl && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads && \
+    chmod 700 /etc/cups/ssl && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py
 
 EXPOSE 631 8088
