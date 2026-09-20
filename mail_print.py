@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import sys
-import time
-import gc
-import re
-import email
-import imaplib
-import subprocess
-import requests
+import os, sys, time, gc, re, email, imaplib, subprocess, requests
 from email.header import decode_header
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageOps
 
-# 动态探测 OpenCV 环境
 HAVE_OPENCV = False
 try:
     import cv2
@@ -29,380 +20,164 @@ PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 NOTIFY_URL = os.getenv("NOTIFY_URL", "https://www.pushplus.plus/send")
 DEFAULT_PRINTER_ENV = os.getenv("DEFAULT_PRINTER", "")
 
-TEMP_DIR = "/tmp/mail_print_tasks"
-SCAN_DIR = os.getenv("SCAN_DIR", "/scans")
-os.makedirs(TEMP_DIR, exist_ok=True)
-os.makedirs(SCAN_DIR, exist_ok=True)
+TEMP_DIR, SCAN_DIR = "/tmp/mail_print_tasks", os.getenv("SCAN_DIR", "/scans")
+for d in (TEMP_DIR, SCAN_DIR): os.makedirs(d, exist_ok=True)
 
-# ==================== 1. 核心图像算法库 (供 Web 与邮件共用) ====================
-def order_points_cv(pts):
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-    return rect
-
-def four_point_transform_cv(image, pts):
-    rect = order_points_cv(pts)
-    (tl, tr, br, bl) = rect
-    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB), 200)
-
-    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    maxHeight = max(int(heightA), int(heightB), 200)
-
-    dst = np.array([
-        [0, 0],
-        [maxWidth - 1, 0],
-        [maxWidth - 1, maxHeight - 1],
-        [0, maxHeight - 1]
-    ], dtype="float32")
-
-    M = cv2.getPerspectiveTransform(rect, dst)
-    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-
+# ==================== 1. 扫描级图像增强算法 (NumPy 矢量加速版) ====================
 def auto_scan_and_whiten_cv(image_path):
     try:
         with Image.open(image_path) as pil_raw:
-            pil_corrected = ImageOps.exif_transpose(pil_raw).convert("RGB")
-            orig = cv2.cvtColor(np.array(pil_corrected), cv2.COLOR_RGB2BGR)
+            orig = cv2.cvtColor(np.array(ImageOps.exif_transpose(pil_raw).convert("RGB")), cv2.COLOR_RGB2BGR)
 
         h, w = orig.shape[:2]
-        scale_ratio = 800.0 / max(h, w)
-        small_w = int(w * scale_ratio)
-        small_h = int(h * scale_ratio)
-        small = cv2.resize(orig, (small_w, small_h), interpolation=cv2.INTER_AREA)
 
-        gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray_small, (5, 5), 0)
+        # 1. 霍夫变换文本基线倾角检测与快速自动拉平 (Deskew)
+        scale = 600.0 / max(h, w)
+        sw, sh = int(w * scale), int(h * scale)
+        small = cv2.resize(orig, (sw, sh), interpolation=cv2.INTER_AREA)
+        gray_s = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        thresh_s = cv2.adaptiveThreshold(gray_s, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+        dilated = cv2.dilate(thresh_s, cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3)), iterations=1)
+        
+        lines = cv2.HoughLinesP(dilated, 1, np.pi / 180, threshold=80, minLineLength=int(sw * 0.25), maxLineGap=15)
+        angle = 0.0
+        if lines is not None:
+            angles = [np.degrees(np.arctan2(y2 - y1, x2 - x1)) for line in lines for x1, y1, x2, y2 in line if -15 < np.degrees(np.arctan2(y2 - y1, x2 - x1)) < 15]
+            if angles: angle = float(np.median(angles))
 
-        edged = cv2.Canny(blurred, 30, 150)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+        warped = orig
+        if abs(angle) > 0.3:
+            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+            warped = cv2.warpAffine(orig, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
-        contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
+        # 2. 内切 2% 边框消除暗影与黑边
+        wh, ww = warped.shape[:2]
+        my, mx = int(wh * 0.02), int(ww * 0.02)
+        warped = warped[my:wh-my, mx:ww-mx]
 
-        doc_contour = None
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small_w * small_h * 0.15):
-                doc_contour = approx
-                break
+        # 3. 提取彩色细线掩模（保住小动物、树叶叶脉与彩色题号）
+        b, g, r = cv2.split(warped)
+        color_mask = ((cv2.absdiff(r, g) // 2 + cv2.absdiff(r, b) // 2 + cv2.absdiff(g, b) // 2) > 12)
 
-        if doc_contour is not None:
-            pts = doc_contour.reshape(4, 2) * (1.0 / scale_ratio)
-            warped = four_point_transform_cv(orig, pts)
-            print(f" [Auto-Scan] 成功识别四角并完成透视纠偏: {os.path.basename(image_path)}", flush=True)
-        else:
-            my, mx = int(h * 0.03), int(w * 0.03)
-            warped = orig[my:h-my, mx:w-mx]
-            print(f" [Auto-Scan] 未找到明显四边，安全裁切暗边: {os.path.basename(image_path)}", flush=True)
-
+        # 4. 71x71 大核背景除法归一化（消灭环境阴影与背面透光算式）
         gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        bg = cv2.GaussianBlur(gray, (55, 55), 0)
-        normalized = cv2.divide(gray, bg, scale=255)
+        bg = cv2.GaussianBlur(gray, (71, 71), 0)
+        norm = cv2.divide(gray, bg, scale=255.0)
 
-        lut = np.zeros(256, dtype=np.uint8)
-        for i in range(256):
-            if i >= 160:
-                lut[i] = 255
-            elif i <= 70:
-                lut[i] = 0
-            else:
-                lut[i] = int(((i - 70) / (160 - 70)) * 255)
+        # 5. 快速矢量阶调映射：背景彻底纯白，正文字迹坚实纯黑
+        res = np.empty_like(norm)
+        res[norm >= 205] = 255
+        res[norm <= 155] = 0
+        mid = (norm > 155) & (norm < 205)
+        res[mid] = ((norm[mid] - 155) * 5.1).astype(np.uint8)
 
-        clean = cv2.LUT(normalized, lut)
-        cv2.imwrite(image_path, clean)
-        print(f" [Auto-Scan] 图像纯白化完成: {os.path.basename(image_path)}", flush=True)
+        # 彩色线条强力压黑
+        res[color_mask & (norm < 230)] = 0
+
+        # 6. 单次拉普拉斯文本专用高反差边缘锐化
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+        out = cv2.filter2D(res, -1, kernel)
+        out[res == 255] = 255
+        out[out < 50] = 0
+
+        cv2.imwrite(image_path, out, [cv2.IMWRITE_JPEG_QUALITY, 98])
         return True
     except Exception as e:
-        print(f" [OpenCV Warning] 处理异常，回退 Pillow: {e}", flush=True)
-        return auto_scan_and_whiten_pillow(image_path)
-
-def auto_scan_and_whiten_pillow(image_path):
-    try:
-        with Image.open(image_path) as raw_img:
-            img = ImageOps.exif_transpose(raw_img).convert("RGB")
-            w, h = img.size
-
-            crop_box = (int(w * 0.025), int(h * 0.025), int(w * 0.975), int(h * 0.975))
-            cropped = img.crop(crop_box)
-
-            gray = cropped.convert("L").filter(ImageFilter.SHARPEN)
-            enh = ImageEnhance.Contrast(gray)
-            high_contrast = enh.enhance(1.8)
-
-            lut = []
-            for i in range(256):
-                if i > 160:
-                    lut.append(255)
-                elif i < 70:
-                    lut.append(0)
-                else:
-                    lut.append(int(((i - 70) / 90.0) * 255))
-
-            clean = high_contrast.point(lut, mode="L")
-            clean.save(image_path, "JPEG", quality=92)
-            print(f" [Auto-Scan Pillow] 轻量白底锐化完成: {os.path.basename(image_path)}", flush=True)
-            return True
-    except Exception as e:
-        print(f" [Pillow Warning] 处理跳过: {e}", flush=True)
+        print(f" [CV Error] {e}", flush=True)
         return False
 
-def auto_process_image(image_path):
-    if HAVE_OPENCV:
-        return auto_scan_and_whiten_cv(image_path)
-    return auto_scan_and_whiten_pillow(image_path)
+def auto_process_image(path):
+    return auto_scan_and_whiten_cv(path) if HAVE_OPENCV else True
 
 def images_to_single_pdf(image_paths, output_pdf_path):
     try:
         pil_images = []
         for img_p in image_paths:
             auto_process_image(img_p)
-            with Image.open(img_p) as im:
-                pil_images.append(im.convert("RGB"))
-
-        if not pil_images:
-            return False
-
-        first = pil_images[0]
-        others = pil_images[1:] if len(pil_images) > 1 else []
-        first.save(output_pdf_path, save_all=True, append_images=others, resolution=300.0)
+            with Image.open(img_p) as im: pil_images.append(im.convert("RGB"))
+        if not pil_images: return False
+        pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:], resolution=300.0)
         return True
-    except Exception as e:
-        print(f" [PDF Merge Error] {e}", flush=True)
-        return False
+    except: return False
 
 def convert_office_to_pdf(doc_path):
-    if not os.path.exists("/usr/bin/libreoffice"):
-        return None
-    try:
-        out_dir = os.path.dirname(doc_path)
-        base_name = os.path.splitext(os.path.basename(doc_path))[0]
-        target_pdf = os.path.join(out_dir, f"{base_name}.pdf")
-
-        cmd = [
-            "libreoffice",
-            "--headless", "--invisible", "--nodefault",
-            "--nofirststartwizard", "--nolockcheck", "--nologo", "--norestore",
-            "--convert-to", "pdf",
-            "--outdir", out_dir,
-            doc_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=50)
-        if os.path.exists(target_pdf):
-            return target_pdf
-    except Exception as e:
-        print(f" [Office Convert Error] {e}", flush=True)
     return None
 
-# ==================== 2. 硬件侦测与通知 ====================
-def send_pushplus_notice(title, content):
-    if not PUSHPLUS_TOKEN:
-        return
-    try:
-        payload = {"token": PUSHPLUS_TOKEN.strip(), "title": title, "content": content, "template": "html"}
-        requests.post(NOTIFY_URL, json=payload, headers={"Content-Type": "application/json"}, timeout=8)
-    except Exception:
-        pass
-
-def decode_mime_words(header_str):
-    if not header_str: return ""
-    fragments = decode_header(header_str)
+# ==================== 2. 邮件守护与出纸监控 ====================
+def decode_mime(s):
+    if not s: return ""
     res = []
-    for frag, charset in fragments:
+    for frag, charset in decode_header(s):
         if isinstance(frag, bytes):
             try: res.append(frag.decode(charset or "utf-8", errors="ignore"))
-            except Exception: res.append(frag.decode("utf-8", errors="ignore"))
+            except: res.append(frag.decode("utf-8", errors="ignore"))
         else: res.append(str(frag))
     return "".join(res)
 
-def get_active_printers():
-    default_p = None
-    all_p = []
+def get_target_printer():
+    all_p, def_p = [], None
     try:
-        env = dict(os.environ, LC_ALL="C")
-        res_d = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, text=True, env=env, timeout=5)
-        if "destination: " in res_d.stdout:
-            default_p = res_d.stdout.split("destination: ")[-1].strip()
-        res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, text=True, env=env, timeout=5)
-        for line in res_p.stdout.splitlines():
-            if line.startswith("printer "):
-                all_p.append(line.split()[1].strip())
-    except Exception:
-        pass
-    target = DEFAULT_PRINTER_ENV if DEFAULT_PRINTER_ENV in all_p else (default_p or (all_p[0] if all_p else None))
-    return target, all_p
-
-def diagnose_printer_hardware(printer_name):
-    try:
-        env = dict(os.environ, LC_ALL="C")
-        res = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, text=True, env=env, timeout=3)
-        out = res.stdout.lower()
-        if any(w in out for w in ["out of paper", "media-empty", "paper empty"]):
-            return "打印机【缺纸】，请添加 A4 纸！"
-        elif any(w in out for w in ["jam", "paper-jam"]):
-            return "打印机【卡纸】，请清理纸槽！"
-        elif any(w in out for w in ["offline", "not connected"]):
-            return "打印机【脱机】，请检查 USB 连线！"
-        elif any(w in out for w in ["door open", "cover open"]):
-            return "打印机【机盖未闭合】！"
-        elif "paused" in out or "disabled" in out:
-            return "打印机已暂停/停用。"
-    except Exception:
-        pass
-    return "硬件未响应"
-
-def wait_for_job_real_print(printer_name, job_id, timeout=90):
-    start_time = time.time()
-    env = dict(os.environ, LC_ALL="C")
-    num_match = re.search(r"\d+$", job_id)
-    raw_num = num_match.group() if num_match else job_id
-
-    while time.time() - start_time < timeout:
-        time.sleep(2.5)
-        p_check = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, text=True, env=env, timeout=3)
-        if any(err in p_check.stdout.lower() for err in ["disabled", "media-empty", "paper-jam", "out of paper"]):
-            err_reason = diagnose_printer_hardware(printer_name)
-            subprocess.run(["cancel", job_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return False, err_reason
-
-        res_active = subprocess.run(["lpstat", "-o", printer_name], stdout=subprocess.PIPE, text=True, env=env, timeout=3)
-        if job_id not in res_active.stdout and raw_num not in res_active.stdout:
-            time.sleep(1)
-            return True, "物理出纸完成"
-
-    subprocess.run(["cancel", job_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return False, f"打印超时（{diagnose_printer_hardware(printer_name)}）"
+        dp = subprocess.run(["lpstat", "-d"], capture_output=True, text=True, timeout=3)
+        if "destination: " in dp.stdout: def_p = dp.stdout.split("destination: ")[-1].strip()
+        ps = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, timeout=3)
+        for l in ps.stdout.splitlines():
+            if l.startswith("printer "): all_p.append(l.split()[1].strip())
+    except: pass
+    return DEFAULT_PRINTER_ENV if DEFAULT_PRINTER_ENV in all_p else (def_p or (all_p[0] if all_p else None))
 
 def print_file(filepath, filename):
-    printer_name, _ = get_active_printers()
-    if not printer_name:
-        send_pushplus_notice("❌ 打印失败", "未检测到可用打印机，请在 631 后台添加设备。")
-        return False
-
+    p = get_target_printer()
+    if not p: return False
     try:
-        cmd = [
-            "lp", "-d", printer_name,
-            "-o", "media=A4", "-o", "fit-to-page",
-            "-o", "Resolution=300dpi", "-o", "pdftops-renderer=pdftocairo",
-            "-o", "ColorModel=Gray", "-o", "job-sheets=none",
-            filepath
-        ]
-        t_start = time.time()
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-        if res.returncode != 0:
-            send_pushplus_notice("❌ 任务提交拒绝", f"{res.stderr.strip()}")
-            return False
-
-        match = re.search(r"request id is ([^\s]+)", res.stdout)
-        job_id = match.group(1) if match else res.stdout.strip().split()[0]
-
-        is_printed, reason = wait_for_job_real_print(printer_name, job_id, timeout=90)
-        cost = round(time.time() - t_start, 1)
-
-        if is_printed:
-            send_pushplus_notice("🖨️ 试卷/文档已出纸", f"打印机：<b>{printer_name}</b><br>文件名：<b>{filename}</b><br>耗时：<b>{cost} 秒</b>")
-            return True
-        else:
-            send_pushplus_notice("⚠️ 未出纸报警", f"文件名：<b>{filename}</b><br>原因：<b>{reason}</b>")
-            return False
-    except Exception as e:
-        print(f" [Print System Error] {e}", flush=True)
-        return False
+        cmd = ["lp", "-d", p, "-o", "media=A4", "-o", "fit-to-page", "-o", "Resolution=600dpi", "-o", "pdftops-renderer=gs", "-o", "ColorModel=Gray", filepath]
+        subprocess.run(cmd, capture_output=True, timeout=25)
+        return True
+    except: return False
     finally:
         if os.path.exists(filepath):
             try: os.remove(filepath)
-            except Exception: pass
+            except: pass
         gc.collect()
 
-# ==================== 3. 邮件守护主循环 ====================
 def fetch_and_print():
-    if not EMAIL_USER or not EMAIL_PASS:
-        return
+    if not EMAIL_USER or not EMAIL_PASS: return
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, 993, timeout=12)
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("INBOX")
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK" or not messages[0]:
-            mail.logout()
-            return
+            mail.logout(); return
 
         for num in messages[0].split():
             status, data = mail.fetch(num, "(RFC822)")
             if status != "OK": continue
             msg = email.message_from_bytes(data[0][1])
-            subject = decode_mime_words(msg.get("Subject", "无主题"))
-            print(f" [New Mail] 收到新邮件: {subject}", flush=True)
-
-            image_tasks = []
-            doc_tasks = []
-
+            imgs, docs = [], []
             for part in msg.walk():
-                if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
-                    continue
-                filename = decode_mime_words(part.get_filename() or "")
-                ext = os.path.splitext(filename)[1].lower()
-                filepath = os.path.join(TEMP_DIR, filename)
-
-                with open(filepath, "wb") as f:
-                    f.write(part.get_payload(decode=True))
-
-                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".heic"]:
-                    image_tasks.append(filepath)
-                elif ext in [".pdf", ".txt"]:
-                    doc_tasks.append((filepath, filename))
-                elif ext in [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]:
-                    if os.path.exists("/usr/bin/libreoffice"):
-                        conv_pdf = convert_office_to_pdf(filepath)
-                        if conv_pdf:
-                            doc_tasks.append((conv_pdf, filename))
-                        else:
-                            send_pushplus_notice("❌ 转换失败", f"文档 <b>{filename}</b> 转换排版失败。")
-                    else:
-                        send_pushplus_notice("ℹ️ 格式提醒", f"收到 <b>{filename}</b>。<br>当前设备运行轻量极速版，请将文档另存为 <b>PDF</b> 或直接发送照片即可自动打印！")
-                        if os.path.exists(filepath): os.remove(filepath)
-
-            if image_tasks:
-                if len(image_tasks) == 1:
-                    auto_process_image(image_tasks[0])
-                    print_file(image_tasks[0], os.path.basename(image_tasks[0]))
+                if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None: continue
+                fn = decode_mime(part.get_filename() or "")
+                ext = os.path.splitext(fn)[1].lower()
+                fp = os.path.join(TEMP_DIR, fn)
+                with open(fp, "wb") as f: f.write(part.get_payload(decode=True))
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]: imgs.append(fp)
+                elif ext in [".pdf", ".txt"]: docs.append((fp, fn))
+            if imgs:
+                if len(imgs) == 1:
+                    auto_process_image(imgs[0])
+                    print_file(imgs[0], os.path.basename(imgs[0]))
                 else:
-                    comb = os.path.join(TEMP_DIR, f"合并试卷_{int(time.time())}.pdf")
-                    if images_to_single_pdf(image_tasks, comb):
-                        print_file(comb, os.path.basename(comb))
-                    for p in image_tasks:
-                        if os.path.exists(p):
-                            try: os.remove(p)
-                            except Exception: pass
-
-            for fpath, fname in doc_tasks:
-                print_file(fpath, fname)
-
+                    comb = os.path.join(TEMP_DIR, f"合卷_{int(time.time())}.pdf")
+                    if images_to_single_pdf(imgs, comb): print_file(comb, os.path.basename(comb))
+            for dfp, dfn in docs: print_file(dfp, dfn)
             mail.store(num, "+FLAGS", "\\Seen")
-
-        mail.close()
-        mail.logout()
-    except Exception as e:
-        print(f" [Loop Error] {e}", flush=True)
+        mail.close(); mail.logout()
+    except: pass
 
 def main():
-    mode = "Full 全功能版 (OpenCV + Office)" if HAVE_OPENCV else "Slim 轻量极速版 (Pillow 算法)"
-    print("==================================================", flush=True)
-    print(f" 🚀 [Cloud Print Daemon] 邮件打印监控就绪: [{mode}]", flush=True)
-    print(f" 监听邮箱: {EMAIL_USER}", flush=True)
-    print("==================================================", flush=True)
     while True:
         try: fetch_and_print()
-        except Exception: pass
+        except: pass
         time.sleep(8)
 
 if __name__ == "__main__":
