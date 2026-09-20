@@ -73,21 +73,39 @@ HTML_PAGE = """<!DOCTYPE html>
         .nav-btn { text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; }
         .nav-btn-primary { background: var(--primary); color: #fff; }
         .nav-btn-outline { border-color: var(--border); background: #fff; color: var(--text-main); }
+        
         .container { max-width: 1280px; margin: 24px auto; padding: 0 20px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; }
         @media (max-width: 900px) { .container { grid-template-columns: 1fr; } }
+        
         .card { background: var(--card-bg); border-radius: 10px; border: 1px solid var(--border); padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
         .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #f1f5f9; padding-bottom: 12px; font-weight: 600; font-size: 15px; }
+        
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
         .form-group { display: flex; flex-direction: column; gap: 6px; }
         .form-label { font-size: 13px; font-weight: 500; color: #334155; }
         .form-control { width: 100%; height: 38px; border: 1px solid var(--border); border-radius: 6px; padding: 0 12px; font-size: 13px; background: #fff; outline: none; }
         .form-control:focus { border-color: var(--primary); }
+        
         .pill-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #f8fafc; height: 38px; }
         .pill-btn { flex: 1; border: none; background: transparent; cursor: pointer; font-size: 13px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .pill-btn.active { background: var(--primary); color: #fff; font-weight: 600; }
-        .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px 16px; text-align: center; cursor: pointer; background: #f8fafc; margin-bottom: 16px; }
+        
+        /* 拖拽区域 */
+        .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px 16px; text-align: center; cursor: pointer; background: #f8fafc; margin-bottom: 16px; transition: all 0.2s ease; }
         .upload-zone:hover { border-color: var(--primary); background: #f0fdf4; }
+        .upload-zone.dragover { border-color: var(--primary); background: #dcfce7; transform: scale(1.01); }
+        
         .upload-info { display: flex; align-items: center; justify-content: space-between; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
+        
+        /* 仿真纸张打印预览区域 */
+        .preview-container { background: #e2e8f0; border-radius: 8px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 280px; overflow: hidden; }
+        .paper-sheet { background: #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.12); border-radius: 4px; display: flex; justify-content: center; align-items: center; overflow: hidden; transition: all 0.3s ease; padding: 8px; box-sizing: border-box; }
+        .paper-portrait { width: 220px; height: 311px; }
+        .paper-landscape { width: 311px; height: 220px; }
+        .preview-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 2px; }
+        .doc-placeholder { text-align: center; color: var(--text-muted); }
+        .doc-placeholder .icon { font-size: 42px; margin-bottom: 8px; }
+        
         .btn-submit { width: 100%; height: 44px; background: var(--primary); color: white; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; }
         .btn-submit:hover { background: var(--primary-hover); }
         .record-item { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; background: #fff; display: flex; justify-content: space-between; align-items: center; }
@@ -106,6 +124,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </header>
 
     <main class="container">
+        <!-- 左侧：参数与预览提交 -->
         <section>
             <div class="card">
                 <div class="card-header"><span>🖨️ 打印机与文档</span></div>
@@ -113,21 +132,24 @@ HTML_PAGE = """<!DOCTYPE html>
                     <label class="form-label">选择目标打印机</label>
                     <select id="printerSelect" class="form-control"></select>
                 </div>
-                <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-                    <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this.files)">
-                    <div style="font-size: 28px; margin-bottom: 6px;">📄</div>
-                    <div style="font-weight: 600; color: #334155;">点击或拖拽试卷/照片/文档到此处</div>
-                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">支持自动四角纠偏与纯白去黑底滤镜</div>
+                
+                <div class="upload-zone" id="dropZone">
+                    <input type="file" id="fileInput" style="display: none;">
+                    <div style="font-size: 30px; margin-bottom: 6px;">📄</div>
+                    <div style="font-weight: 600; color: #334155;">点击或将微信文件/照片直接拖入此处</div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">支持 PDF, Word, Excel, JPG, PNG（自动纠偏去黑底）</div>
                 </div>
+
                 <div id="fileInfoBox" class="upload-info" style="display: none;">
                     <div>
                         <span id="fileNameDisplay" style="font-weight: 600;"></span>
                         <span id="fileSizeDisplay" style="color: var(--text-muted); margin-left: 8px;"></span>
                     </div>
-                    <span style="color: var(--primary); font-weight: 600;">✓ 就绪</span>
+                    <span style="color: var(--primary); font-weight: 600;">✓ 已就绪</span>
                 </div>
             </div>
 
+            <!-- 打印参数设置 -->
             <div class="card">
                 <div class="card-header"><span>⚙️ 打印参数</span></div>
                 <div class="form-row">
@@ -139,7 +161,7 @@ HTML_PAGE = """<!DOCTYPE html>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">打印方向</label>
+                        <label class="form-label">打印方向 (与下方预览联动)</label>
                         <div class="pill-group">
                             <button type="button" class="pill-btn active" id="btnPortrait" onclick="setOrient('portrait')">▯ 纵向</button>
                             <button type="button" class="pill-btn" id="btnLandscape" onclick="setOrient('landscape')">▭ 横向</button>
@@ -177,10 +199,25 @@ HTML_PAGE = """<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- 仿真纸张打印预览卡片 -->
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label class="form-label">👀 仿真纸张打印预览</label>
+                    <div class="preview-container">
+                        <div class="paper-sheet paper-portrait" id="paperSheet">
+                            <div class="doc-placeholder" id="previewPlaceholder">
+                                <div class="icon">🖼️</div>
+                                <div style="font-size: 13px;">选择或拖入图片查看排版</div>
+                            </div>
+                            <img id="previewImg" class="preview-img" style="display: none;" alt="预览图">
+                        </div>
+                    </div>
+                </div>
+
                 <button class="btn-submit" onclick="submitPrintJob()">🖨️ 立即提交打印</button>
             </div>
         </section>
 
+        <!-- 右侧：状态卡片与记录 -->
         <section>
             <div class="card">
                 <div class="card-header">
@@ -208,23 +245,75 @@ HTML_PAGE = """<!DOCTYPE html>
         let selectedFile = null;
         let printConfig = { color: 'color', orient: 'portrait' };
 
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const previewImg = document.getElementById('previewImg');
+        const previewPlaceholder = document.getElementById('previewPlaceholder');
+        const paperSheet = document.getElementById('paperSheet');
+
+        // 全局拦截拖拽默认事件，防止冲刷页面
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            window.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+            dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false));
+        ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false));
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length > 0) handleFileSelect(dt.files);
+        });
+        fileInput.addEventListener('change', function() { handleFileSelect(this.files); });
+
+        // 文件捕获与实时预览渲染
+        function handleFileSelect(files) {
+            if (!files || !files.length) return;
+            selectedFile = files[0];
+            document.getElementById('fileNameDisplay').textContent = selectedFile.name;
+            const sz = (selectedFile.size / 1024 / 1024).toFixed(2);
+            document.getElementById('fileSizeDisplay').textContent = sz > 0 ? sz + ' MB' : (selectedFile.size / 1024).toFixed(1) + ' KB';
+            document.getElementById('fileInfoBox').style.display = 'flex';
+
+            if (selectedFile.type.startsWith('image/') || /\.(jpg|jpeg|png|bmp|heic|webp)$/i.test(selectedFile.name)) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewImg.src = e.target.result;
+                    previewImg.style.display = 'block';
+                    previewPlaceholder.style.display = 'none';
+                };
+                reader.readAsDataURL(selectedFile);
+            } else {
+                previewImg.style.display = 'none';
+                previewPlaceholder.style.display = 'block';
+                previewPlaceholder.innerHTML = `
+                    <div class="icon">📑</div>
+                    <div style="font-weight: 600; color: #334155; margin-bottom: 4px;">${selectedFile.name}</div>
+                    <div style="font-size: 11px;">文档将自动转为 A4 版面打印</div>
+                `;
+            }
+        }
+
         function setColor(m) {
             printConfig.color = m;
             document.getElementById('btnColor').classList.toggle('active', m === 'color');
             document.getElementById('btnGray').classList.toggle('active', m === 'gray');
         }
+
         function setOrient(o) {
             printConfig.orient = o;
             document.getElementById('btnPortrait').classList.toggle('active', o === 'portrait');
             document.getElementById('btnLandscape').classList.toggle('active', o === 'landscape');
+            if (o === 'portrait') {
+                paperSheet.classList.add('paper-portrait');
+                paperSheet.classList.remove('paper-landscape');
+            } else {
+                paperSheet.classList.add('paper-landscape');
+                paperSheet.classList.remove('paper-portrait');
+            }
         }
-        function handleFileSelect(files) {
-            if (!files.length) return;
-            selectedFile = files[0];
-            document.getElementById('fileNameDisplay').textContent = selectedFile.name;
-            document.getElementById('fileSizeDisplay').textContent = (selectedFile.size / 1024 / 1024).toFixed(2) + ' MB';
-            document.getElementById('fileInfoBox').style.display = 'flex';
-        }
+
         async function loadPrinters() {
             try {
                 const res = await fetch('/api/printers');
@@ -241,6 +330,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (data.printers.length > 0) document.getElementById('curStatusTag').textContent = data.printers[0].status;
             } catch(e) {}
         }
+
         async function loadHistory() {
             try {
                 const res = await fetch('/api/history');
@@ -258,8 +348,9 @@ HTML_PAGE = """<!DOCTYPE html>
                 `).join('');
             } catch(e) {}
         }
+
         async function submitPrintJob() {
-            if (!selectedFile) return alert('请先选择文件！');
+            if (!selectedFile) return alert('请先拖入或选择文件！');
             const fd = new FormData();
             fd.append('file', selectedFile);
             fd.append('printer', document.getElementById('printerSelect').value);
@@ -279,6 +370,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 alert('提交失败: ' + ret.msg);
             }
         }
+
         loadPrinters();
         loadHistory();
         setInterval(loadHistory, 5000);
@@ -315,10 +407,8 @@ class PrintApiHandler(tornado.web.RequestHandler):
         with open(filepath, 'wb') as f:
             f.write(file_obj['body'])
 
-        # 核心联动：如果是照片/试卷，Web 上传直接调用纠偏与白底纯化
         if ext in [".jpg", ".jpeg", ".png", ".bmp", ".heic"]:
             auto_process_image(filepath)
-        # 如果是 Office 且系统装了 LibreOffice，自动转换
         elif ext in [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]:
             conv_pdf = convert_office_to_pdf(filepath)
             if conv_pdf:
@@ -377,5 +467,5 @@ def make_app():
 if __name__ == "__main__":
     app = make_app()
     app.listen(PORT, address="0.0.0.0")
-    print(f" [Web App] 扁平化打印控制台已监听 0.0.0.0:{PORT} ...", flush=True)
+    print(f" [Web App] 带图片预览与拖拽拦截的打印控制台已监听 0.0.0.0:{PORT} ...", flush=True)
     tornado.ioloop.IOLoop.current().start()
