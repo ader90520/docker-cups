@@ -11,9 +11,9 @@ import imaplib
 import subprocess
 import requests
 from email.header import decode_header
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-# 动态探测 OpenCV 是否可用（Full 镜像使用 OpenCV 高级纠偏，Slim 镜像无感回退 Pillow 纯算法）
+# 动态探测 OpenCV 环境（Full 镜像使用 OpenCV 高阶纠偏，Slim 镜像自动回退 Pillow 算法）
 HAVE_OPENCV = False
 try:
     import cv2
@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAVE_OPENCV = False
 
-# ==================== 1. 配置与初始化 ====================
+# ==================== 1. 配置与路径初始化 ====================
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.qq.com")
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
@@ -36,7 +36,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(SCAN_DIR, exist_ok=True)
 
 
-# ==================== 2. 图像智能处理引擎 ====================
+# ==================== 2. 高阶图像纠偏与白底去黑边算法 ====================
 def order_points_cv(pts):
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
@@ -52,11 +52,11 @@ def four_point_transform_cv(image, pts):
     (tl, tr, br, bl) = rect
     widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
     widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB), 100)
+    maxWidth = max(int(widthA), int(widthB), 200)
 
     heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
     heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    maxHeight = max(int(heightA), int(heightB), 100)
+    maxHeight = max(int(heightA), int(heightB), 200)
 
     dst = np.array([
         [0, 0],
@@ -69,12 +69,18 @@ def four_point_transform_cv(image, pts):
     return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
 def auto_scan_and_whiten_cv(image_path):
-    """Full 镜像：OpenCV 透视拉正、切除黑边与光照归一化纯白化"""
+    """
+    OpenCV 高阶文档纠偏与漂白：
+    1. 修正手机 EXIF 旋转角（解决竖拍横读导致的识别失败）
+    2. 多重闭合寻找纸张四边凸多边形进行透视摆正
+    3. 大核高斯背景除法彻底消除阴影
+    4. 激进 LUT 查找表推白灰底
+    """
     try:
-        orig = cv2.imread(image_path)
-        if orig is None:
-            with Image.open(image_path) as pil_im:
-                orig = cv2.cvtColor(np.array(pil_im.convert("RGB")), cv2.COLOR_RGB2BGR)
+        # 1. 修正 EXIF 旋转
+        with Image.open(image_path) as pil_raw:
+            pil_corrected = ImageOps.exif_transpose(pil_raw).convert("RGB")
+            orig = cv2.cvtColor(np.array(pil_corrected), cv2.COLOR_RGB2BGR)
 
         h, w = orig.shape[:2]
         scale_ratio = 800.0 / max(h, w)
@@ -84,68 +90,79 @@ def auto_scan_and_whiten_cv(image_path):
 
         gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray_small, (5, 5), 0)
-        edged = cv2.Canny(blurred, 50, 180)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        # 2. 边缘检测与轮廓闭合
+        edged = cv2.Canny(blurred, 30, 150)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
         closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
 
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+        contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
 
         doc_contour = None
         for c in contours:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small_w * small_h * 0.20):
+            if len(approx) == 4 and cv2.contourArea(c) > (small_w * small_h * 0.15):
                 doc_contour = approx
                 break
 
         if doc_contour is not None:
             pts = doc_contour.reshape(4, 2) * (1.0 / scale_ratio)
             warped = four_point_transform_cv(orig, pts)
-            print(f" [Auto-Scan OpenCV] 成功识别轮廓并透视拉平: {os.path.basename(image_path)}", flush=True)
+            print(f" [Auto-Scan] 成功识别轮廓并完成四角透视纠偏: {os.path.basename(image_path)}", flush=True)
         else:
-            margin_y = int(h * 0.02)
-            margin_x = int(w * 0.02)
-            warped = orig[margin_y:h-margin_y, margin_x:w-margin_x]
-            print(f" [Auto-Scan OpenCV] 特写拍摄，安全切除边缘: {os.path.basename(image_path)}", flush=True)
+            my, mx = int(h * 0.03), int(w * 0.03)
+            warped = orig[my:h-my, mx:w-mx]
+            print(f" [Auto-Scan] 未找到明显四边，执行安全边缘裁切: {os.path.basename(image_path)}", flush=True)
 
+        # 3. 强力背景除法去阴影
         gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        bg = cv2.GaussianBlur(gray, (51, 51), 0)
+        bg = cv2.GaussianBlur(gray, (55, 55), 0)
         normalized = cv2.divide(gray, bg, scale=255)
-        clean = np.where(normalized > 195, 255, normalized).astype(np.uint8)
-        clean = cv2.normalize(clean, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
 
+        # 4. 激进纯白化：发灰区域 (>=160) 强制拉成纯白 255，字迹 (<=70) 强力拉黑
+        lut = np.zeros(256, dtype=np.uint8)
+        for i in range(256):
+            if i >= 160:
+                lut[i] = 255
+            elif i <= 70:
+                lut[i] = 0
+            else:
+                lut[i] = int(((i - 70) / (160 - 70)) * 255)
+
+        clean = cv2.LUT(normalized, lut)
         cv2.imwrite(image_path, clean)
+        print(f" [Auto-Scan] 白底纯净化与字迹锐化完成: {os.path.basename(image_path)}", flush=True)
         return True
     except Exception as e:
-        print(f" [OpenCV Warning] 处理异常，转入 Pillow: {e}", flush=True)
+        print(f" [OpenCV Warning] 处理异常，回退 Pillow: {e}", flush=True)
         return auto_scan_and_whiten_pillow(image_path)
 
 def auto_scan_and_whiten_pillow(image_path):
-    """Slim 镜像：Pillow 纯轻量化白底自适应映射与切黑边（适配 1GB 内存）"""
+    """Pillow 纯轻量算法（专供 1GB 海思盒子，兼顾 EXIF 旋转与白底纯化）"""
     try:
-        with Image.open(image_path) as img:
-            img = img.convert("RGB")
+        with Image.open(image_path) as raw_img:
+            img = ImageOps.exif_transpose(raw_img).convert("RGB")
             w, h = img.size
 
-            # 切除镜头暗边
-            crop_box = (int(w * 0.02), int(h * 0.02), int(w * 0.98), int(h * 0.98))
+            # 裁剪 2.5% 外缘暗区
+            crop_box = (int(w * 0.025), int(h * 0.025), int(w * 0.975), int(h * 0.975))
             cropped = img.crop(crop_box)
 
             gray = cropped.convert("L").filter(ImageFilter.SHARPEN)
             enh = ImageEnhance.Contrast(gray)
             high_contrast = enh.enhance(1.8)
 
-            # 查找表动态漂白：发灰部分 (>165) 归纯白，字迹 (<70) 强力加深
+            # 查找表纯白化
             lut = []
             for i in range(256):
-                if i > 165:
+                if i > 160:
                     lut.append(255)
                 elif i < 70:
                     lut.append(0)
                 else:
-                    lut.append(int(((i - 70) / 95.0) * 255))
+                    lut.append(int(((i - 70) / 90.0) * 255))
 
             clean = high_contrast.point(lut, mode="L")
             clean.save(image_path, "JPEG", quality=92)
@@ -180,7 +197,6 @@ def images_to_single_pdf(image_paths, output_pdf_path):
         return False
 
 def convert_office_to_pdf(doc_path):
-    """Office 转 PDF（检测 LibreOffice 是否可用）"""
     if not os.path.exists("/usr/bin/libreoffice"):
         return None
     try:
@@ -204,7 +220,7 @@ def convert_office_to_pdf(doc_path):
     return None
 
 
-# ==================== 3. 消息通知与硬件监控 ====================
+# ==================== 3. 硬件侦测与消息通知 ====================
 def send_pushplus_notice(title, content):
     if not PUSHPLUS_TOKEN:
         return
