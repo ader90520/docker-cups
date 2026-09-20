@@ -323,7 +323,7 @@ def print_file(filepath, filename):
             except Exception: pass
         gc.collect()
 
-# ==================== 3. 邮件循环守护 ====================
+# ==================== 3. 邮件守护主循环 ====================
 def fetch_and_print():
     if not EMAIL_USER or not EMAIL_PASS:
         return
