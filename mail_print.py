@@ -13,7 +13,7 @@ import requests
 from email.header import decode_header
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-# 动态探测 OpenCV 环境（Full 镜像使用 OpenCV 高阶纠偏，Slim 镜像自动回退 Pillow 算法）
+# 动态探测 OpenCV 环境
 HAVE_OPENCV = False
 try:
     import cv2
@@ -22,7 +22,6 @@ try:
 except ImportError:
     HAVE_OPENCV = False
 
-# ==================== 1. 配置与路径初始化 ====================
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.qq.com")
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASS = os.getenv("EMAIL_PASS", "")
@@ -35,8 +34,7 @@ SCAN_DIR = os.getenv("SCAN_DIR", "/scans")
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(SCAN_DIR, exist_ok=True)
 
-
-# ==================== 2. 高阶图像纠偏与白底去黑边算法 ====================
+# ==================== 1. 核心图像算法库 (供 Web 与邮件共用) ====================
 def order_points_cv(pts):
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
@@ -69,15 +67,7 @@ def four_point_transform_cv(image, pts):
     return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
 def auto_scan_and_whiten_cv(image_path):
-    """
-    OpenCV 高阶文档纠偏与漂白：
-    1. 修正手机 EXIF 旋转角（解决竖拍横读导致的识别失败）
-    2. 多重闭合寻找纸张四边凸多边形进行透视摆正
-    3. 大核高斯背景除法彻底消除阴影
-    4. 激进 LUT 查找表推白灰底
-    """
     try:
-        # 1. 修正 EXIF 旋转
         with Image.open(image_path) as pil_raw:
             pil_corrected = ImageOps.exif_transpose(pil_raw).convert("RGB")
             orig = cv2.cvtColor(np.array(pil_corrected), cv2.COLOR_RGB2BGR)
@@ -91,7 +81,6 @@ def auto_scan_and_whiten_cv(image_path):
         gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray_small, (5, 5), 0)
 
-        # 2. 边缘检测与轮廓闭合
         edged = cv2.Canny(blurred, 30, 150)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
         closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
@@ -110,18 +99,16 @@ def auto_scan_and_whiten_cv(image_path):
         if doc_contour is not None:
             pts = doc_contour.reshape(4, 2) * (1.0 / scale_ratio)
             warped = four_point_transform_cv(orig, pts)
-            print(f" [Auto-Scan] 成功识别轮廓并完成四角透视纠偏: {os.path.basename(image_path)}", flush=True)
+            print(f" [Auto-Scan] 成功识别四角并完成透视纠偏: {os.path.basename(image_path)}", flush=True)
         else:
             my, mx = int(h * 0.03), int(w * 0.03)
             warped = orig[my:h-my, mx:w-mx]
-            print(f" [Auto-Scan] 未找到明显四边，执行安全边缘裁切: {os.path.basename(image_path)}", flush=True)
+            print(f" [Auto-Scan] 未找到明显四边，安全裁切暗边: {os.path.basename(image_path)}", flush=True)
 
-        # 3. 强力背景除法去阴影
         gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
         bg = cv2.GaussianBlur(gray, (55, 55), 0)
         normalized = cv2.divide(gray, bg, scale=255)
 
-        # 4. 激进纯白化：发灰区域 (>=160) 强制拉成纯白 255，字迹 (<=70) 强力拉黑
         lut = np.zeros(256, dtype=np.uint8)
         for i in range(256):
             if i >= 160:
@@ -133,20 +120,18 @@ def auto_scan_and_whiten_cv(image_path):
 
         clean = cv2.LUT(normalized, lut)
         cv2.imwrite(image_path, clean)
-        print(f" [Auto-Scan] 白底纯净化与字迹锐化完成: {os.path.basename(image_path)}", flush=True)
+        print(f" [Auto-Scan] 图像纯白化完成: {os.path.basename(image_path)}", flush=True)
         return True
     except Exception as e:
         print(f" [OpenCV Warning] 处理异常，回退 Pillow: {e}", flush=True)
         return auto_scan_and_whiten_pillow(image_path)
 
 def auto_scan_and_whiten_pillow(image_path):
-    """Pillow 纯轻量算法（专供 1GB 海思盒子，兼顾 EXIF 旋转与白底纯化）"""
     try:
         with Image.open(image_path) as raw_img:
             img = ImageOps.exif_transpose(raw_img).convert("RGB")
             w, h = img.size
 
-            # 裁剪 2.5% 外缘暗区
             crop_box = (int(w * 0.025), int(h * 0.025), int(w * 0.975), int(h * 0.975))
             cropped = img.crop(crop_box)
 
@@ -154,7 +139,6 @@ def auto_scan_and_whiten_pillow(image_path):
             enh = ImageEnhance.Contrast(gray)
             high_contrast = enh.enhance(1.8)
 
-            # 查找表纯白化
             lut = []
             for i in range(256):
                 if i > 160:
@@ -219,8 +203,7 @@ def convert_office_to_pdf(doc_path):
         print(f" [Office Convert Error] {e}", flush=True)
     return None
 
-
-# ==================== 3. 硬件侦测与消息通知 ====================
+# ==================== 2. 硬件侦测与通知 ====================
 def send_pushplus_notice(title, content):
     if not PUSHPLUS_TOKEN:
         return
@@ -263,12 +246,12 @@ def diagnose_printer_hardware(printer_name):
         env = dict(os.environ, LC_ALL="C")
         res = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, text=True, env=env, timeout=3)
         out = res.stdout.lower()
-        if any(w in out for w in ["out of paper", "media-empty", "paper empty", "input tray empty"]):
+        if any(w in out for w in ["out of paper", "media-empty", "paper empty"]):
             return "打印机【缺纸】，请添加 A4 纸！"
         elif any(w in out for w in ["jam", "paper-jam"]):
             return "打印机【卡纸】，请清理纸槽！"
-        elif any(w in out for w in ["offline", "not connected", "unable to locate"]):
-            return "打印机【脱机】，请检查 USB 连线与电源！"
+        elif any(w in out for w in ["offline", "not connected"]):
+            return "打印机【脱机】，请检查 USB 连线！"
         elif any(w in out for w in ["door open", "cover open"]):
             return "打印机【机盖未闭合】！"
         elif "paused" in out or "disabled" in out:
@@ -340,8 +323,7 @@ def print_file(filepath, filename):
             except Exception: pass
         gc.collect()
 
-
-# ==================== 4. 邮件守护主循环 ====================
+# ==================== 3. 邮件循环守护 ====================
 def fetch_and_print():
     if not EMAIL_USER or not EMAIL_PASS:
         return
