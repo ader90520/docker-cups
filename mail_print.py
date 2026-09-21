@@ -11,7 +11,7 @@ import imaplib
 import subprocess
 import requests
 from email.header import decode_header
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 
 HAVE_OPENCV = False
 try:
@@ -33,10 +33,51 @@ SCAN_DIR = os.getenv("SCAN_DIR", "/scans")
 for d in (TEMP_DIR, SCAN_DIR):
     os.makedirs(d, exist_ok=True)
 
-# ==================== 1. 扫描级图像增强核心 (NumPy 纯矢量计算) ====================
-def auto_scan_and_whiten_cv(image_path):
-    if not HAVE_OPENCV:
+def get_clean_env():
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    return env
+
+# ==================== 0. 消息通知模块 (PushPlus 等) ====================
+def send_notify(title, content):
+    """打印完成/异常自动推送通知"""
+    if not PUSHPLUS_TOKEN:
+        return
+    try:
+        data = {
+            "token": PUSHPLUS_TOKEN,
+            "title": title,
+            "content": content,
+            "template": "html"
+        }
+        requests.post(NOTIFY_URL, json=data, timeout=8)
+    except Exception as e:
+        print(f" [Notify Error] {e}", flush=True)
+
+# ==================== 1. 扫描级图像增强核心 ====================
+
+def auto_scan_and_whiten_pillow(image_path):
+    """海纳思小内存专属降级方案 (纯 Pillow 极速去灰底与对比度拉伸)"""
+    try:
+        with Image.open(image_path) as im:
+            im = ImageOps.exif_transpose(im).convert("L")
+            # 适度切除四周 2% 暗边
+            w, h = im.size
+            im = im.crop((int(w * 0.02), int(h * 0.02), int(w * 0.98), int(h * 0.98)))
+            # 自动对比度增强与灰底漂白
+            im = ImageOps.autocontrast(im, cutoff=2)
+            # 阶调映射白底
+            table = [0 if i < 60 else (255 if i > 210 else int((i - 60) * 1.7)) for i in range(256)]
+            out = im.point(table, "L").filter(ImageFilter.SHARPEN)
+            out.save(image_path, "JPEG", quality=95)
         return True
+    except Exception as e:
+        print(f" [PIL Whiten Error] {e}", flush=True)
+        return False
+
+def auto_scan_and_whiten_cv(image_path):
+    """N1 / x86 大内存旗舰方案 (OpenCV 霍夫变换倾角拉平 + 71x71 背景除法消灭黑底)"""
     try:
         with Image.open(image_path) as pil_raw:
             orig = cv2.cvtColor(np.array(ImageOps.exif_transpose(pil_raw).convert("RGB")), cv2.COLOR_RGB2BGR)
@@ -68,7 +109,7 @@ def auto_scan_and_whiten_cv(image_path):
         my, mx = int(wh * 0.02), int(ww * 0.02)
         warped = warped[my:wh-my, mx:ww-mx]
 
-        # 3. 提取彩色细线掩模（保留彩色题号与图案线条）
+        # 3. 提取彩色细线掩模（保留彩色题号与批改笔迹）
         b, g, r = cv2.split(warped)
         color_mask = ((cv2.absdiff(r, g) // 2 + cv2.absdiff(r, b) // 2 + cv2.absdiff(g, b) // 2) > 12)
 
@@ -100,7 +141,10 @@ def auto_scan_and_whiten_cv(image_path):
         return False
 
 def auto_process_image(path):
-    return auto_scan_and_whiten_cv(path) if HAVE_OPENCV else True
+    """自适应调用算法库"""
+    if HAVE_OPENCV:
+        return auto_scan_and_whiten_cv(path)
+    return auto_scan_and_whiten_pillow(path)
 
 def images_to_single_pdf(image_paths, output_pdf_path):
     try:
@@ -120,6 +164,7 @@ def convert_office_to_pdf(doc_path):
     return None
 
 # ==================== 2. 邮件接收与出纸监控 ====================
+
 def decode_mime(s):
     if not s:
         return ""
@@ -136,14 +181,17 @@ def decode_mime(s):
 
 def get_target_printer():
     all_p, def_p = [], None
+    env = get_clean_env()
     try:
-        dp = subprocess.run(["lpstat", "-d"], capture_output=True, text=True, timeout=3)
-        if "destination: " in dp.stdout:
-            def_p = dp.stdout.split("destination: ")[-1].strip()
-        ps = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, timeout=3)
+        dp = subprocess.run(["lpstat", "-d"], capture_output=True, text=True, env=env, timeout=3)
+        m_def = re.search(r"destination:\s*(\S+)", dp.stdout, re.IGNORECASE)
+        if m_def:
+            def_p = m_def.group(1).strip()
+        ps = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, env=env, timeout=3)
         for l in ps.stdout.splitlines():
-            if l.startswith("printer "):
-                all_p.append(l.split()[1].strip())
+            m_p = re.match(r"^printer\s+([^\s:]+)", l.strip(), re.IGNORECASE)
+            if m_p:
+                all_p.append(m_p.group(1).strip())
     except Exception:
         pass
     return DEFAULT_PRINTER_ENV if DEFAULT_PRINTER_ENV in all_p else (def_p or (all_p[0] if all_p else None))
@@ -151,6 +199,7 @@ def get_target_printer():
 def print_file(filepath, filename):
     p = get_target_printer()
     if not p:
+        send_notify("🖨️ 打印失败通知", f"任务【{filename}】打印失败：系统未检测到任何可用打印机！")
         return False
     try:
         cmd = [
@@ -159,9 +208,16 @@ def print_file(filepath, filename):
             "-o", "Resolution=600dpi", "-o", "pdftops-renderer=gs",
             "-o", "ColorModel=Gray", filepath
         ]
-        subprocess.run(cmd, capture_output=True, timeout=25)
-        return True
-    except Exception:
+        res = subprocess.run(cmd, capture_output=True, text=True, env=get_clean_env(), timeout=35)
+        if res.returncode == 0:
+            send_notify("🖨️ 打印完成提醒", f"邮件任务已成功送达打印机！<br><b>文件名:</b> {filename}<br><b>目标设备:</b> {p}<br><b>完成时间:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            return True
+        else:
+            err_msg = res.stderr.strip() or res.stdout.strip()
+            send_notify("⚠️ 打印出纸异常", f"任务【{filename}】出纸失败！<br>报错信息: {err_msg}")
+            return False
+    except Exception as e:
+        send_notify("⚠️ 打印任务异常", f"任务【{filename}】执行异常: {str(e)}")
         return False
     finally:
         if os.path.exists(filepath):
@@ -188,11 +244,14 @@ def fetch_and_print():
             if status != "OK":
                 continue
             msg = email.message_from_bytes(data[0][1])
+            subject = decode_mime(msg.get("Subject", "无主题邮件"))
             imgs, docs = [], []
             for part in msg.walk():
                 if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
                     continue
                 fn = decode_mime(part.get_filename() or "")
+                if not fn:
+                    continue
                 ext = os.path.splitext(fn)[1].lower()
                 fp = os.path.join(TEMP_DIR, fn)
                 with open(fp, "wb") as f:
@@ -201,6 +260,8 @@ def fetch_and_print():
                     imgs.append(fp)
                 elif ext in [".pdf", ".txt"]:
                     docs.append((fp, fn))
+            
+            # 处理图片（单张去阴影拉平打印，多张自动合并排版为合卷 PDF）
             if imgs:
                 if len(imgs) == 1:
                     auto_process_image(imgs[0])
@@ -208,14 +269,21 @@ def fetch_and_print():
                 else:
                     comb = os.path.join(TEMP_DIR, f"合卷_{int(time.time())}.pdf")
                     if images_to_single_pdf(imgs, comb):
-                        print_file(comb, os.path.basename(comb))
+                        print_file(comb, f"[{subject}] 合卷共{len(imgs)}页.pdf")
+                    else:
+                        for ifp in imgs:
+                            auto_process_image(ifp)
+                            print_file(ifp, os.path.basename(ifp))
+            
+            # 处理 PDF / 文档直通
             for dfp, dfn in docs:
                 print_file(dfp, dfn)
+                
             mail.store(num, "+FLAGS", "\\Seen")
         mail.close()
         mail.logout()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f" [Fetch Mail Error] {e}", flush=True)
 
 def main():
     while True:
