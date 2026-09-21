@@ -13,9 +13,10 @@ if [ -f /usr/share/zoneinfo/$TZ ]; then
     echo "$TZ" > /etc/timezone 2>/dev/null || true
 fi
 
-# 2. 清理临时锁与权限目录（赋权扫描仪 SANE 锁）
+# 2. 清理临时锁与权限目录（关键：直接递归赋权 USB 设备总线与 SANE 锁）
 rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/run/cups/cupsd.pid /var/run/cups/cups.sock 2>/dev/null || true
 mkdir -p /var/run/dbus /var/run/avahi-daemon /var/run/cups /tmp/mail_print_tasks /tmp/cups_web_uploads /scans /var/lock/sane
+chmod -R 666 /dev/bus/usb 2>/dev/null || true
 chmod 777 /tmp/mail_print_tasks /tmp/cups_web_uploads /scans /var/lock/sane 2>/dev/null || true
 chown -R messagebus:messagebus /var/run/dbus 2>/dev/null || true
 chown -R avahi:avahi /var/run/avahi-daemon 2>/dev/null || true
@@ -32,13 +33,13 @@ chmod 700 /etc/cups/ssl
 ADMIN_USER=${CUPS_USER:-admin}
 ADMIN_PASS=${ADMIN_PASSWORD:-${CUPS_PASSWORD:-admin}}
 if ! id "$ADMIN_USER" &>/dev/null; then
-    useradd -m -s /bin/bash -G lpadmin,lp,scanner "$ADMIN_USER"
+    useradd -m -s /bin/bash -G lpadmin,lp,scanner,root "$ADMIN_USER"
 else
-    usermod -a -G lpadmin,lp,scanner "$ADMIN_USER" 2>/dev/null || true
+    usermod -a -G lpadmin,lp,scanner,root "$ADMIN_USER" 2>/dev/null || true
 fi
 echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 
-# 5. 内存感知判断：海纳思自动缩容，N1 提高处理性能
+# 5. 内存感知判断：海纳思 32 位限制 32MB 光栅化缓存，N1 提高到 128MB
 TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 if [ "$TOTAL_MEM_KB" -lt 1500000 ]; then
     RIP_CACHE="32m"
@@ -90,7 +91,7 @@ find /usr/share/cups/templates -type f -name "*.tmpl" -exec sed -i "s|</head>|${
 find /usr/share/cups/doc-root -type f -name "*.html" -exec sed -i "s|</head>|${INLINE_BLOCK}</head>|g" {} + 2>/dev/null || true
 rm -f /tmp/cups_nav_patch.css
 
-# 8. 惠普热敏/GDI 打印机固件循环监听
+# 8. 惠普热敏/GDI 固件循环推送
 LOADED_FW_TAG="/tmp/loaded_hp_firmware"
 mkdir -p "$LOADED_FW_TAG"
 load_hp_firmware() {
@@ -120,7 +121,7 @@ load_hp_firmware() {
 load_hp_firmware
 (while true; do sleep 8; load_hp_firmware; done) >/dev/null 2>&1 &
 
-# 9. 启动守护进程
+# 9. 启动核心服务
 dbus-daemon --system --fork 2>/dev/null || true
 avahi-daemon -D 2>/dev/null || true
 
