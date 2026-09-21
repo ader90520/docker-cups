@@ -33,12 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     hplip \
     sane-utils \
     libsane-hpaio \
+    sane-airscan \
     python3 \
     python3-pil \
     python3-requests \
     python3-tornado \
-    python3-opencv \
     python3-numpy \
+    python3-opencv \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /tmp/* \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen
@@ -49,6 +51,18 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2zjs/firmware/ 2>/dev/null || true && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
+
+RUN HPLIP_VER=$(dpkg -s hplip | grep '^Version:' | cut -d' ' -f2 | cut -d'-' -f1) && \
+    mkdir -p /tmp/hp-plugin && cd /tmp/hp-plugin && \
+    curl -fsSL "https://developers.hp.com/sites/default/files/hplip-${HPLIP_VER}-plugin.run" -o plugin.run || true && \
+    if [ -f plugin.run ]; then \
+        sh plugin.run --tar -xf 2>/dev/null || true && \
+        mkdir -p /usr/share/hplip/data/plugins /var/lib/hp && \
+        cp -rf * /usr/share/hplip/ 2>/dev/null || true && \
+        python3 -c "import shutil, os; [shutil.copy(f, '/usr/share/hplip/') for f in os.listdir('.') if f.endswith('.so')]" 2>/dev/null || true && \
+        printf "[installation]\nversion = %s\nplugin = 1\nplugin_version = %s\n" "${HPLIP_VER}" "${HPLIP_VER}" > /var/lib/hp/hplip-install.state; \
+    fi && \
+    cd / && rm -rf /tmp/*
 
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
