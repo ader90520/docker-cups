@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 安装基础依赖包（包含 hplip-data 保证 models.dat 机型库完整）
+# 1. 基础依赖包（包含 hplip-data 保证 models.dat 机型库完整）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen
 
-# 2. 获取并部署 foo2zjs 固件
+# 2. 获取并部署 foo2zjs 微码
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for m in 1005 1007 1008 1020; do getweb $m || true; done && \
@@ -45,12 +45,12 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 3. 跨架构自动匹配安装 HP 专有闭源插件与机型库映射
+# 3. 跨架构匹配安装 HP 闭源插件与机型库映射（使用 printf 写入，杜绝 EOF 解析错误）
 RUN set -e && \
     RAW_VER=$(dpkg -s hplip | grep '^Version:' | awk '{print $2}') && \
     HPLIP_VER=$(echo "$RAW_VER" | sed -E 's/[~+].*//; s/-.*//') && \
     ARCH=$(uname -m) && \
-    echo ">>> [HPLIP 安装] 纯净版本: ${HPLIP_VER}，主机架构: ${ARCH}" && \
+    echo ">>> [HPLIP 安装] 纯净版本: ${HPLIP_VER}，架构: ${ARCH}" && \
     mkdir -p /tmp/hp-plugin && cd /tmp/hp-plugin && \
     URL_MIRROR="https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins" && \
     curl -fsSL -A "Mozilla/5.0" "${URL_MIRROR}/hplip-${HPLIP_VER}-plugin.run" -o plugin.run && \
@@ -68,38 +68,13 @@ RUN set -e && \
             cp -f "$f" "/usr/share/hplip/${base_name}"; \
             cp -f "$f" "/usr/lib/${base_name}" 2>/dev/null || true; \
             cp -f "$f" "/usr/lib/aarch64-linux-gnu/${base_name}" 2>/dev/null || true; \
+            cp -f "$f" "/usr/lib/arm-linux-gnueabihf/${base_name}" 2>/dev/null || true; \
             cp -f "$f" "/usr/lib/x86_64-linux-gnu/${base_name}" 2>/dev/null || true; \
         fi; \
     done && \
     cp -f plugin.spec /usr/share/hplip/ 2>/dev/null || true && \
-    cat << EOF > /var/lib/hp/hplip-install.state && \
-[installation]
-version = ${HPLIP_VER}
-plugin = 1
-plugin_version = ${HPLIP_VER}
-EOF
-    cat << EOF > /etc/hp/hplip.conf && \
-[hplip]
-version=${HPLIP_VER}
-
-[dirs]
-home=/usr/share/hplip
-run=/var/run
-ppd=/usr/share/ppd/HP
-ppdbase=/usr/share/ppd
-doc=/usr/share/doc/hplip
-html=/usr/share/doc/hplip
-icon=/usr/share/applications
-cupsbackend=/usr/lib/cups/backend
-cupsfilter=/usr/lib/cups/filter
-drv=/usr/share/cups/drv
-internal_tag=${HPLIP_VER}
-
-[installation]
-date_time=09/21/2026
-installed_version=${HPLIP_VER}
-command_line=
-EOF
+    printf "[installation]\nversion = %s\nplugin = 1\nplugin_version = %s\n" "${HPLIP_VER}" "${HPLIP_VER}" > /var/lib/hp/hplip-install.state && \
+    printf "[hplip]\nversion=%s\n\n[dirs]\nhome=/usr/share/hplip\nrun=/var/run\nppd=/usr/share/ppd/HP\nppdbase=/usr/share/ppd\ndoc=/usr/share/doc/hplip\nhtml=/usr/share/doc/hplip\nicon=/usr/share/applications\ncupsbackend=/usr/lib/cups/backend\ncupsfilter=/usr/lib/cups/filter\ndrv=/usr/share/cups/drv\ninternal_tag=%s\n\n[installation]\ndate_time=09/21/2026\ninstalled_version=%s\ncommand_line=\n" "${HPLIP_VER}" "${HPLIP_VER}" "${HPLIP_VER}" > /etc/hp/hplip.conf && \
     MODEL_PATH=$(find /usr -name "models.dat" 2>/dev/null | head -n 1) && \
     if [ -n "$MODEL_PATH" ]; then \
         cp -f "$MODEL_PATH" /usr/share/hplip/data/models/ 2>/dev/null || true; \
@@ -108,7 +83,7 @@ EOF
     ldconfig && \
     cd / && rm -rf /tmp/hp-plugin
 
-# 4. 拷贝业务脚本及 Web 汉化
+# 4. 拷贝业务代码
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -116,7 +91,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 语言包编译与运行目录就绪
+# 5. 语言包编译与目录权限设定
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
