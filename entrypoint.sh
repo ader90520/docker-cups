@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-# 1. 系统环境变量与纯净 C 语言环境隔离
+# 1. 强制系统级纯净 C 语言环境（防止中英文字符串差异破坏正则解析）
 export LC_ALL="C"
 export LANG="C"
 
-# 2. 时区修正
+# 2. 时区配置
 if [ -n "$TZ" ]; then
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 fi
@@ -19,7 +19,7 @@ if ! id "$CUPS_USER" &>/dev/null; then
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
-# 4. 创建工作目录并放行读写与锁权限
+# 4. 创建工作目录并放行设备读写与扫描锁权限
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks
 chmod 777 /scans /var/lock/sane /var/run/lock /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 chmod -R 666 /dev/bus/usb 2>/dev/null || true
@@ -41,17 +41,17 @@ if [ -f /etc/cups/cupsd.conf ]; then
     sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 fi
 
-# 7. 启动 CUPS 主守护进程
-echo ">>> [1/3] 正在拉起 CUPS 打印服务 (631)..."
+# 7. 关键：后台启动 CUPS 服务（严禁在此处使用 -f 阻塞前台）
+echo ">>> [1/3] 正在启动 CUPS 后台打印服务 (631)..."
 /usr/sbin/cupsd
 sleep 2
 
-# 8. 启动邮件打印监听后台 (若配置了相关参数)
+# 8. 启动邮件监听静默出纸进程（如果配置了环境变量）
 if [ -n "$EMAIL_USER" ] && [ -n "$EMAIL_PASS" ] && [ -f /opt/mail_print.py ]; then
-    echo ">>> [2/3] 正在拉起邮件打印监听进程..."
+    echo ">>> [2/3] 正在启动邮件打印监听服务..."
     python3 -u /opt/mail_print.py &
 fi
 
-# 9. 启动 8088 智能交互控制台
-echo ">>> [3/3] 正在启动 8088 控制台服务..."
+# 9. 关键：由 8088 智能控制台接管容器前台主进程（确保 8088 必开，且容器永不退出）
+echo ">>> [3/3] 正在启动 8088 Web 智能控制台..."
 exec python3 -u /opt/cups_web_app.py
