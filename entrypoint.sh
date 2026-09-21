@@ -1,16 +1,15 @@
 #!/bin/bash
 set -e
 
-# 1. 强制系统级纯净 C 语言环境（防止中英文字符串差异破坏正则解析）
+# 1. 语言与时区校正
 export LC_ALL="C"
 export LANG="C"
 
-# 2. 时区配置
 if [ -n "$TZ" ]; then
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 fi
 
-# 3. CUPS 管理员账户创建与密码设置 (默认 admin / admin)
+# 2. CUPS 用户凭证
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 
@@ -19,17 +18,32 @@ if ! id "$CUPS_USER" &>/dev/null; then
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
-# 4. 创建工作目录并放行设备读写与扫描锁权限
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks
-chmod 777 /scans /var/lock/sane /var/run/lock /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
+# 3. 运行目录权限初始化
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
+chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 chmod -R 666 /dev/bus/usb 2>/dev/null || true
 
-# 5. 动态注入并激活 SANE 惠普专有一体机驱动后端
+# 4. 机型库 models.dat 自动恢复守护
+if [ ! -f /usr/share/hplip/models.dat ]; then
+    MODEL_PATH=$(find /usr -name "models.dat" 2>/dev/null | head -n 1)
+    if [ -n "$MODEL_PATH" ]; then
+        cp -f "$MODEL_PATH" /usr/share/hplip/ 2>/dev/null || true
+        cp -f "$MODEL_PATH" /usr/share/hplip/data/models/ 2>/dev/null || true
+    fi
+fi
+
+# 5. D-Bus 守护进程自动拉起
+dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || true
+dbus-uuidgen --ensure=/var/lib/dbus/machine-id 2>/dev/null || true
+rm -f /var/run/dbus/pid /var/run/dbus/system_bus_socket
+dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
+
+# 6. SANE hpaio 后端激活
 if [ -f /etc/sane.d/dll.conf ]; then
     grep -q '^hpaio' /etc/sane.d/dll.conf || echo 'hpaio' >> /etc/sane.d/dll.conf
 fi
 
-# 6. 配置 cupsd.conf 确保 8088 与 631 后台数据完全互通
+# 7. CUPS 远程配置校验
 if [ ! -f /etc/cups/cupsd.conf ]; then
     cp /etc/cups.orig/cupsd.conf /etc/cups/cupsd.conf 2>/dev/null || true
 fi
@@ -41,17 +55,20 @@ if [ -f /etc/cups/cupsd.conf ]; then
     sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
 fi
 
-# 7. 关键：后台启动 CUPS 服务（严禁在此处使用 -f 阻塞前台）
-echo ">>> [1/3] 正在启动 CUPS 后台打印服务 (631)..."
+# 8. 后台启动 CUPS 服务
+echo ">>> [1/3] 启动 CUPS 后台服务 (631)..."
 /usr/sbin/cupsd
 sleep 2
 
-# 8. 启动邮件监听静默出纸进程（如果配置了环境变量）
+# 9. 启动 Avahi 广播
+service avahi-daemon start 2>/dev/null || true
+
+# 10. 启动邮件监听任务
 if [ -n "$EMAIL_USER" ] && [ -n "$EMAIL_PASS" ] && [ -f /opt/mail_print.py ]; then
-    echo ">>> [2/3] 正在启动邮件打印监听服务..."
+    echo ">>> [2/3] 启动邮件自动化打印监听器..."
     python3 -u /opt/mail_print.py &
 fi
 
-# 9. 关键：由 8088 智能控制台接管容器前台主进程（确保 8088 必开，且容器永不退出）
-echo ">>> [3/3] 正在启动 8088 Web 智能控制台..."
+# 11. 前台常驻拉起 Web 控制台（8088 端口）
+echo ">>> [3/3] 启动 Web 控制台 (8088)..."
 exec python3 -u /opt/cups_web_app.py
