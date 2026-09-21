@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
+# 1. 精简系统包与轻量 Pillow 库（彻底排除 OpenCV，杜绝海纳思 OOM 内存溢出）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -34,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen
 
+# 2. foo2zjs / foo2xqx 经典激光微码下载 (HP 1005/1007/1008/1020 等)
 RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cd /tmp && \
     for m in 1005 1007 1008 1020; do getweb $m || true; done && \
@@ -41,6 +43,7 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
+# 3. 固化集成 HP 专有扫描插件 (仅 12MB，开箱即用支持 M126a 扫描)
 RUN HPLIP_VER=$(dpkg -s hplip | grep '^Version:' | cut -d' ' -f2 | cut -d'-' -f1) && \
     mkdir -p /tmp/hp-plugin && cd /tmp/hp-plugin && \
     curl -fsSL "https://developers.hp.com/sites/default/files/hplip-${HPLIP_VER}-plugin.run" -o plugin.run || true && \
@@ -53,6 +56,7 @@ RUN HPLIP_VER=$(dpkg -s hplip | grep '^Version:' | cut -d' ' -f2 | cut -d'-' -f1
     fi && \
     cd / && rm -rf /tmp/*
 
+# 4. 拷贝源码及 631 汉化包
 COPY entrypoint.sh /entrypoint.sh
 COPY mail_print.py /opt/mail_print.py
 COPY cups_web_app.py /opt/cups_web_app.py
@@ -60,6 +64,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
+# 5. 编译 631 中文 MO 语言包并部署中文 HTML 模板
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -83,4 +88,4 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
 EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["cupsd", "-f"]
+CMD []
