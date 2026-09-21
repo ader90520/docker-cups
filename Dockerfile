@@ -95,4 +95,4 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
 EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["cupsd", "-f"]
+CMD []
