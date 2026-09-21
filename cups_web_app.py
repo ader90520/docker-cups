@@ -11,11 +11,13 @@ from PIL import Image, ImageOps, ImageFilter
 import tornado.ioloop
 import tornado.web
 
+# 自适应检测是否可用 OpenCV 增强算子 (兼容海纳思与 N1/x86)
 try:
-    from mail_print import auto_process_image, convert_office_to_pdf
+    import numpy as np
+    import cv2
+    HAS_OPENCV = True
 except ImportError:
-    auto_process_image = lambda x: True
-    convert_office_to_pdf = lambda x: None
+    HAS_OPENCV = False
 
 PORT = int(os.getenv("WEB_PORT", "8088"))
 UPLOAD_DIR = "/tmp/cups_web_uploads"
@@ -28,7 +30,6 @@ for d in (UPLOAD_DIR, PPD_DIR, SCAN_DIR):
 PRINT_HISTORY = []
 
 def get_clean_env():
-    """获取纯净的 C 语言环境，防止命令输出中文字符破坏正则匹配"""
     env = dict(os.environ)
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
@@ -44,7 +45,6 @@ def get_uptime_str():
         return "正常运行中"
 
 def get_printer_model(name):
-    """提取真实打印机驱动与硬件型号（双向读取 PPD 与底层描述）"""
     ppd_file = os.path.join(PPD_DIR, "%s.ppd" % name)
     if os.path.exists(ppd_file):
         try:
@@ -68,7 +68,6 @@ def get_printer_model(name):
     return ""
 
 def diagnose_printer(name):
-    """诊断设备状态与打印队列"""
     env = get_clean_env()
     status, stype = "空闲", "idle"
     try:
@@ -92,50 +91,99 @@ def diagnose_printer(name):
 
     return status, stype, jobs
 
+# ================= 图像处理逻辑 (海纳思原生 Pillow + N1/x86 OpenCV 自适应) =================
+
+def remove_shadow_and_whiten(cv_img):
+    if not HAS_OPENCV: return cv_img
+    rgb_planes = cv2.split(cv_img)
+    result_norm_planes = []
+    for plane in rgb_planes:
+        dilated_img = cv2.dilate(plane, np.ones((15, 15), np.uint8))
+        bg_img = cv2.medianBlur(dilated_img, 21)
+        diff_img = 255 - cv2.absdiff(plane, bg_img)
+        norm_img = cv2.normalize(diff_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
+        result_norm_planes.append(norm_img)
+    result_norm = cv2.merge(result_norm_planes)
+    gray = cv2.cvtColor(result_norm, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
+    result_norm[mask == 255] = [255, 255, 255]
+    return result_norm
+
+def correct_document_perspective(cv_img):
+    if not HAS_OPENCV: return cv_img
+    orig = cv_img.copy()
+    h, w = cv_img.shape[:2]
+    scale = 800.0 / max(h, w)
+    small = cv2.resize(cv_img, (int(w * scale), int(h * scale)))
+    
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 30, 120)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    dilated = cv2.dilate(edged, kernel, iterations=2)
+    
+    cnts, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+    
+    doc_cnt = None
+    for c in cnts:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.25):
+            doc_cnt = approx
+            break
+            
+    if doc_cnt is not None:
+        pts = doc_cnt.reshape(4, 2) / scale
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+        
+        (tl, tr, br, bl) = rect
+        widthA = np.linalg.norm(br - bl)
+        widthB = np.linalg.norm(tr - tl)
+        maxWidth = max(int(widthA), int(widthB))
+        heightA = np.linalg.norm(tr - br)
+        heightB = np.linalg.norm(tl - bl)
+        maxHeight = max(int(heightA), int(heightB))
+        
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]
+        ], dtype="float32")
+        
+        M = cv2.getPerspectiveTransform(rect, dst)
+        return cv2.warpPerspective(orig, M, (maxWidth, maxHeight), flags=cv2.INTER_LANCZOS4)
+    return orig
+
+def process_smart_image(image_bytes, auto_whiten=True, auto_deskew=True):
+    if not HAS_OPENCV:
+        im = Image.open(io.BytesIO(image_bytes))
+        return ImageOps.exif_transpose(im).convert('RGB')
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    if auto_deskew: img = correct_document_perspective(img)
+    if auto_whiten: img = remove_shadow_and_whiten(img)
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
+
 def smart_crop_card(image_bytes, crop_pct=0.06, target_w=1011, target_h=638):
-    """
-    轻量自适应身份证裁剪：
-    1. EXIF 重力自适应摆正方向
-    2. 基于边框梯度与比例截取去除桌边背景
-    3. 严格锁定中国二代身份证物理标准比例 85.6 : 54.0
-    """
     im = Image.open(io.BytesIO(image_bytes))
     im = ImageOps.exif_transpose(im).convert('RGB')
-    
     if im.height > im.width:
         im = im.rotate(270, expand=True)
-
     w, h = im.size
     pct = max(0.0, min(0.25, float(crop_pct)))
-    
-    if pct > 0.0:
-        crop_rect = (int(w * pct), int(h * pct), int(w * (1.0 - pct)), int(h * (1.0 - pct)))
-        im = im.crop(crop_rect)
-    else:
-        small = im.resize((240, 160))
-        gray = small.convert('L')
-        sw, sh = small.size
-        edges = gray.filter(ImageFilter.FIND_EDGES)
-        pixels = edges.load()
-        left, right, top, bottom = 0, sw - 1, 0, sh - 1
-        
-        for y in range(int(sh * 0.25)):
-            if sum(pixels[x, y] for x in range(int(sw * 0.2), int(sw * 0.8))) > (sw * 0.6 * 35):
-                top = y; break
-        for y in range(sh - 1, int(sh * 0.75), -1):
-            if sum(pixels[x, y] for x in range(int(sw * 0.2), int(sw * 0.8))) > (sw * 0.6 * 35):
-                bottom = y; break
-        for x in range(int(sw * 0.25)):
-            if sum(pixels[x, y] for y in range(int(sh * 0.2), int(sh * 0.8))) > (sh * 0.6 * 35):
-                left = x; break
-        for x in range(sw - 1, int(sw * 0.75), -1):
-            if sum(pixels[x, y] for y in range(int(sh * 0.2), int(sh * 0.8))) > (sh * 0.6 * 35):
-                right = x; break
-                
-        if (right - left) > sw * 0.6 and (bottom - top) > sh * 0.6:
-            crop_rect = (int(left * (w / sw)), int(top * (h / sh)), int(right * (w / sw)), int(bottom * (h / sh)))
-            im = im.crop(crop_rect)
-
+    crop_rect = (int(w * pct), int(h * pct), int(w * (1.0 - pct)), int(h * (1.0 - pct)))
+    im = im.crop(crop_rect)
     return ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS)
 
 HTML = '''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -171,6 +219,7 @@ HTML = '''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta na
 .idcard-box:hover{border-color:var(--b);background:#f0f9ff}
 .idcard-box img{width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0}
 
+.ai-enhance-bar{background:#f8fafc;border:1px dashed #38bdf8;border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center}
 .crop-slider-bar{background:#f1f5f9;border:1px solid var(--bd);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;flex-direction:column;gap:8px}
 
 .file-list{display:none;flex-direction:column;gap:8px;margin-bottom:16px}
@@ -210,14 +259,19 @@ HTML = '''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta na
     <div class="fg" style="margin-bottom:14px"><select id="selP" class="fc" onchange="syncP()"></select></div>
 
     <div class="sub-nav-tabs">
-      <div class="sub-tab-btn active" id="subTabStd" onclick="switchPrintMode('std')">📄 标准打印</div>
+      <div class="sub-tab-btn active" id="subTabStd" onclick="switchPrintMode('std')">📄 标准/作业打印</div>
       <div class="sub-tab-btn" id="subTabInv" onclick="switchPrintMode('inv')">🧾 发票打印</div>
       <div class="sub-tab-btn" id="subTabId" onclick="switchPrintMode('id')">🪪 身份证打印</div>
     </div>
 
     <!-- 1. 标准打印面板 -->
     <div id="panelStd">
-      <div class="drop" id="dzStd"><input type="file" id="fiStd" multiple style="display:none"><div style="font-size:28px">📑</div><div style="font-weight:600">点击或拖入照片/文档/PDF (支持多选批量)</div></div>
+      <div class="ai-enhance-bar">
+        <span style="font-weight:600;font-size:12px;color:var(--b)">✨ 作业试卷拍摄增强:</span>
+        <label style="cursor:pointer;font-size:12px"><input type="checkbox" id="chkWhiten" checked> 消除灰暗黑底</label>
+        <label style="cursor:pointer;font-size:12px"><input type="checkbox" id="chkDeskew" checked> 自动透视拉平</label>
+      </div>
+      <div class="drop" id="dzStd"><input type="file" id="fiStd" multiple style="display:none"><div style="font-size:28px">📑</div><div style="font-weight:600">点击或拖入照片/试卷/PDF (支持多选批量)</div></div>
       <div class="file-list" id="flistStd"></div>
     </div>
 
@@ -595,6 +649,8 @@ function submitPrint() {
   if (currentMode === 'std') {
     if (!filesStd.length) return alert('请先选择标准打印文件！');
     for (var i = 0; i < filesStd.length; i++) fd.append('files', filesStd[i]);
+    fd.append('auto_whiten', document.getElementById('chkWhiten').checked ? 'true' : 'false');
+    fd.append('auto_deskew', document.getElementById('chkDeskew').checked ? 'true' : 'false');
   } else if (currentMode === 'inv') {
     if (!filesInv.length) return alert('请先选择发票文件！');
     for (var i = 0; i < filesInv.length; i++) fd.append('files', filesInv[i]);
@@ -875,7 +931,6 @@ class AddH(tornado.web.RequestHandler):
             self.write(json.dumps({"code": 1, "msg": str(e)}))
 
 class MergeIdCardH(tornado.web.RequestHandler):
-    """提取身份证主体、去除多余桌边，按 1:1 物理比例 (85.6mm*54mm) 垂直居中排版"""
     def post(self):
         front_file = self.request.files.get('front', [None])[0]
         back_file = self.request.files.get('back', [None])[0]
@@ -884,7 +939,6 @@ class MergeIdCardH(tornado.web.RequestHandler):
             self.set_status(400)
             return self.write("正反面缺失")
 
-        # A4 300DPI 标准像素尺寸: 2480 x 3508
         a4_w, a4_h = 2480, 3508
         canvas = Image.new('RGB', (a4_w, a4_h), (255, 255, 255))
         card_w, card_h = 1011, 638
@@ -918,13 +972,23 @@ class PrintH(tornado.web.RequestHandler):
         orient = self.get_argument("orient", "portrait")
         color = self.get_argument("color", "color")
         mode = self.get_argument("mode", "std")
+        auto_whiten = (self.get_argument("auto_whiten", "false") == "true")
+        auto_deskew = (self.get_argument("auto_deskew", "false") == "true")
         
         env = get_clean_env()
         succ = 0
         last_err = ""
         for f_obj in files:
-            fp = os.path.join(UPLOAD_DIR, f_obj['filename'])
-            with open(fp, "wb") as f: f.write(f_obj['body'])
+            fname = f_obj['filename']
+            fp = os.path.join(UPLOAD_DIR, fname)
+            
+            is_img = any(fname.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp'])
+            if mode == "std" and is_img and (auto_whiten or auto_deskew) and HAS_OPENCV:
+                pil_im = process_smart_image(f_obj['body'], auto_whiten=auto_whiten, auto_deskew=auto_deskew)
+                pil_im.save(fp, "JPEG", quality=95)
+            else:
+                with open(fp, "wb") as f: f.write(f_obj['body'])
+
             cmd = ["lp"]
             if p: cmd.extend(["-d", p])
             cmd.extend(["-n", str(copies), "-o", "media=%s" % media])
@@ -944,7 +1008,7 @@ class PrintH(tornado.web.RequestHandler):
             if res.returncode == 0:
                 succ += 1
                 tag = "发票" if mode == "inv" else ("身份证" if mode == "id" else "标准")
-                PRINT_HISTORY.insert(0, {"filename": "[%s] %s" % (tag, f_obj['filename']), "printer": p or "默认", "time": time.strftime("%H:%M"), "status": "已出纸"})
+                PRINT_HISTORY.insert(0, {"filename": "[%s] %s" % (tag, fname), "printer": p or "默认", "time": time.strftime("%H:%M"), "status": "已出纸"})
             else:
                 last_err = res.stderr.strip()
         
@@ -1014,7 +1078,6 @@ class ScanFilesH(tornado.web.RequestHandler):
         self.write(json.dumps(l))
 
 class InlineStaticFileHandler(tornado.web.StaticFileHandler):
-    """支持直接在网页实体纸张内嵌预览 PDF，防止被浏览器误拦截强制下载"""
     def set_extra_headers(self, path):
         self.set_header("Content-Disposition", "inline")
 
