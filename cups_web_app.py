@@ -64,7 +64,7 @@ class DevicesHandler(tornado.web.RequestHandler):
         printers = []
         scanners = []
         
-        # 获取 CUPS 打印机
+        # 获取可用 CUPS 打印机
         try:
             res = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             for line in res.stdout.splitlines():
@@ -87,17 +87,69 @@ class DevicesHandler(tornado.web.RequestHandler):
 
         self.write(json.dumps({"printers": printers, "scanners": scanners}))
 
-# 4. 触发扫描及复印 API
+# 4. 网页端上传文件直接打印 API（核心补全）
+class PrintUploadHandler(tornado.web.RequestHandler):
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        try:
+            printer = self.get_argument("printer", "").strip()
+            copies = self.get_argument("copies", "1").strip()
+            fitplot = self.get_argument("fitplot", "true").strip() # 默认自适应纸张
+            
+            if not printer:
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "请选择目标打印机"}))
+                return
+
+            file_metas = self.request.files.get('file', None)
+            if not file_metas:
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "未检测到上传的文件"}))
+                return
+
+            meta = file_metas[0]
+            original_fname = meta['filename']
+            save_name = f"print_{int(time.time())}_{original_fname}"
+            save_path = os.path.join(UPLOAD_DIR, save_name)
+
+            with open(save_path, 'wb') as f:
+                f.write(meta['body'])
+
+            # 组装 CUPS 原生打印命令
+            lp_cmd = ["lp", "-d", printer, "-n", copies]
+            if fitplot.lower() == "true":
+                lp_cmd.extend(["-o", "fit-to-page"])
+            lp_cmd.append(save_path)
+
+            res = subprocess.run(lp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode != 0:
+                self.set_status(500)
+                self.write(json.dumps({"success": False, "msg": f"打印失败: {res.stderr}"}))
+            else:
+                job_id = res.stdout.strip()
+                self.write(json.dumps({"success": True, "msg": f"打印任务已提交: {job_id}"}))
+
+            # 延时清理临时文件
+            try:
+                os.remove(save_path)
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
+# 5. 触发扫描及复印 API
 class DoScanHandler(tornado.web.RequestHandler):
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
             data = json.loads(self.request.body.decode('utf-8'))
             device = data.get("device", "").strip()
-            mode = data.get("mode", "Color") # Color / Gray / Lineart
+            mode = data.get("mode", "Color")
             resolution = data.get("resolution", "150")
             fmt = data.get("format", "pdf").lower()
-            action = data.get("action", "scan") # scan / copy
+            action = data.get("action", "scan")
             target_printer = data.get("printer", "")
 
             timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -105,7 +157,6 @@ class DoScanHandler(tornado.web.RequestHandler):
             out_filename = f"scan_{timestamp}.{fmt}"
             final_path = os.path.join(SCAN_DIR, out_filename)
 
-            # 调用 SANE 原生指令
             cmd = [
                 "scanimage",
                 "-d", device,
@@ -125,7 +176,6 @@ class DoScanHandler(tornado.web.RequestHandler):
                     os.remove(raw_tiff)
                 return
 
-            # 转码格式
             if fmt == "pdf":
                 subprocess.run(["python3", "-c", f"""
 from PIL import Image
@@ -152,7 +202,6 @@ im.save('{final_path}', 'PNG')
             if os.path.exists(raw_tiff):
                 os.remove(raw_tiff)
 
-            # 如果是复印任务，直接投递到 CUPS 队列
             if action == "copy" and target_printer:
                 subprocess.run(["lp", "-d", target_printer, final_path], check=True)
 
@@ -166,7 +215,7 @@ im.save('{final_path}', 'PNG')
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
-# 5. 主控制台页面
+# 6. 主界面
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         html = """
@@ -189,7 +238,7 @@ class MainHandler(tornado.web.RequestHandler):
                 h3 { margin-top: 0; }
                 .form-group { margin-bottom: 16px; }
                 label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 14px; }
-                select, input[type="text"] { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 4px; box-sizing: border-box; }
+                select, input[type="text"], input[type="number"], input[type="file"] { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 4px; box-sizing: border-box; }
                 .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
                 .btn-primary { background: var(--primary); color: white; }
                 .btn-success { background: var(--success); color: white; }
@@ -206,15 +255,46 @@ class MainHandler(tornado.web.RequestHandler):
         <body>
             <div class="container">
                 <div class="nav-tabs">
-                    <button class="tab-btn active" onclick="switchTab('scan')">📠 扫描与复印</button>
+                    <button class="tab-btn active" onclick="switchTab('print')">🖨️ 网页文档打印</button>
+                    <button class="tab-btn" onclick="switchTab('scan')">📠 扫描与复印</button>
                     <button class="tab-btn" onclick="switchTab('files')">📑 文档管理与预览</button>
                     <button class="tab-btn" onclick="window.open('http://' + window.location.hostname + ':631', '_blank')">⚙️ CUPS 原生管理</button>
                 </div>
 
-                <!-- 选项卡 1：扫描复印 -->
-                <div id="tab-scan" class="tab-pane active">
+                <!-- 选项卡 1：文档打印 -->
+                <div id="tab-print" class="tab-pane active">
                     <div class="card">
-                        <h3>设备及参数配置</h3>
+                        <h3>上传文件快速打印</h3>
+                        <div class="form-group">
+                            <label>选择打印机：</label>
+                            <select id="printer-select"><option value="">正在获取打印机...</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label>选择要打印的文件（支持 PDF、图片、Word、文本等）：</label>
+                            <input type="file" id="print-file-input">
+                        </div>
+                        <div style="display: flex; gap: 15px;">
+                            <div class="form-group" style="flex: 1;">
+                                <label>打印份数：</label>
+                                <input type="number" id="print-copies" value="1" min="1" max="99">
+                            </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label>页面缩放：</label>
+                                <select id="print-fit">
+                                    <option value="true">自动适应纸张大小 (推荐)</option>
+                                    <option value="false">保持原样输出</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="doPrint()">🖨️ 提交打印任务</button>
+                        <div id="print-status" style="margin-top: 15px; font-size: 14px; font-weight: 500;"></div>
+                    </div>
+                </div>
+
+                <!-- 选项卡 2：扫描复印 -->
+                <div id="tab-scan" class="tab-pane">
+                    <div class="card">
+                        <h3>扫描仪配置与动作</h3>
                         <div class="form-group">
                             <label>选择扫描仪：</label>
                             <select id="scanner-select"><option value="">正在探测扫描仪...</option></select>
@@ -248,13 +328,13 @@ class MainHandler(tornado.web.RequestHandler):
                         <div class="btn-group" style="margin-top: 10px;">
                             <button class="btn btn-primary" onclick="triggerScan('scan')">🚀 开始扫描</button>
                             <button class="btn btn-success" onclick="triggerScan('copy')">📋 扫描并一键复印</button>
-                            <button class="btn" style="background:#e2e8f0; color:#333;" onclick="loadDevices()">🔄 重新探测设备</button>
+                            <button class="btn" style="background:#e2e8f0; color:#333;" onclick="loadDevices()">🔄 刷新设备</button>
                         </div>
-                        <div id="status-msg" style="margin-top: 15px; font-size: 14px; font-weight: 500;"></div>
+                        <div id="scan-status" style="margin-top: 15px; font-size: 14px; font-weight: 500;"></div>
                     </div>
                 </div>
 
-                <!-- 选项卡 2：文档管理与预览 -->
+                <!-- 选项卡 3：文档管理与预览 -->
                 <div id="tab-files" class="tab-pane">
                     <div class="card">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -262,12 +342,10 @@ class MainHandler(tornado.web.RequestHandler):
                             <button class="btn btn-primary" onclick="loadFiles()">🔄 刷新列表</button>
                         </div>
                         
-                        <!-- 实时预览区 -->
                         <div class="preview-container" id="preview-area">
                             <span style="color: #a0aec0;">点击下方文件项的“预览”按钮在此处查看</span>
                         </div>
 
-                        <!-- 文件列表 -->
                         <div id="file-list" style="margin-top: 15px;"></div>
                     </div>
                 </div>
@@ -286,15 +364,65 @@ class MainHandler(tornado.web.RequestHandler):
                     fetch('/api/devices')
                     .then(r => r.json())
                     .then(d => {
-                        const sel = document.getElementById('scanner-select');
-                        sel.innerHTML = '';
-                        if (!d.scanners || d.scanners.length === 0) {
-                            sel.innerHTML = '<option value="">未找到扫描设备，请检查 USB 连接</option>';
+                        // 加载打印机
+                        const pSel = document.getElementById('printer-select');
+                        pSel.innerHTML = '';
+                        if (!d.printers || d.printers.length === 0) {
+                            pSel.innerHTML = '<option value="">未找到已安装的打印机，请进入 631 后台添加</option>';
                         } else {
-                            d.scanners.forEach(s => {
-                                sel.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+                            d.printers.forEach(p => {
+                                pSel.innerHTML += `<option value="${p}">${p}</option>`;
                             });
                         }
+
+                        // 加载扫描仪
+                        const sSel = document.getElementById('scanner-select');
+                        sSel.innerHTML = '';
+                        if (!d.scanners || d.scanners.length === 0) {
+                            sSel.innerHTML = '<option value="">未找到扫描设备，请检查 USB 连接</option>';
+                        } else {
+                            d.scanners.forEach(s => {
+                                sSel.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+                            });
+                        }
+                    });
+                }
+
+                function doPrint() {
+                    const printer = document.getElementById('printer-select').value;
+                    const fileInput = document.getElementById('print-file-input');
+                    const status = document.getElementById('print-status');
+
+                    if (!printer) return alert('请先选择可用的打印机！');
+                    if (!fileInput.files || fileInput.files.length === 0) return alert('请选择要打印的文件！');
+
+                    const formData = new FormData();
+                    formData.append('printer', printer);
+                    formData.append('file', fileInput.files[0]);
+                    formData.append('copies', document.getElementById('print-copies').value);
+                    formData.append('fitplot', document.getElementById('print-fit').value);
+
+                    status.style.color = '#0066cc';
+                    status.innerText = '正在上传并提交打印任务，请稍候...';
+
+                    fetch('/api/print', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res.success) {
+                            status.style.color = '#28a745';
+                            status.innerText = res.msg;
+                            fileInput.value = '';
+                        } else {
+                            status.style.color = '#e53e3e';
+                            status.innerText = '打印失败: ' + res.msg;
+                        }
+                    })
+                    .catch(err => {
+                        status.style.color = '#e53e3e';
+                        status.innerText = '网络连接或后端异常';
                     });
                 }
 
@@ -302,7 +430,7 @@ class MainHandler(tornado.web.RequestHandler):
                     const dev = document.getElementById('scanner-select').value;
                     if (!dev) return alert('请先选择可用的扫描仪设备！');
                     
-                    const msg = document.getElementById('status-msg');
+                    const msg = document.getElementById('scan-status');
                     msg.style.color = '#0066cc';
                     msg.innerText = action === 'copy' ? '正在执行扫描并复印，请稍候...' : '正在扫描出图中，请稍候...';
                     
@@ -314,7 +442,8 @@ class MainHandler(tornado.web.RequestHandler):
                             mode: document.getElementById('scan-mode').value,
                             resolution: document.getElementById('scan-dpi').value,
                             format: document.getElementById('scan-fmt').value,
-                            action: action
+                            action: action,
+                            printer: document.getElementById('printer-select').value
                         })
                     })
                     .then(r => r.json())
@@ -401,10 +530,10 @@ def make_app():
     return tornado.web.Application([
         (r"/", MainHandler),
         (r"/api/devices", DevicesHandler),
+        (r"/api/print", PrintUploadHandler),
         (r"/api/do_scan", DoScanHandler),
         (r"/api/scans", ScanListHandler),
         (r"/api/delete_scan", ScanDeleteHandler),
-        # 核心静态路由：向外提供 /scans 物理挂载卷的文件映射，实现无刷新加载与预览
         (r"/scans/(.*)", tornado.web.StaticFileHandler, {"path": SCAN_DIR}),
     ])
 
