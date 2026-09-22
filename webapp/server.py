@@ -4,45 +4,27 @@
 import os
 import sys
 
-# 1. 绝对路径优先注入
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-HANDLERS_DIR = os.path.join(CURRENT_DIR, "handlers")
-
-for path in [CURRENT_DIR, HANDLERS_DIR]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
+# 优先注册运行目录和 handlers 目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HANDLERS_DIR = os.path.join(BASE_DIR, "handlers")
+for p in [BASE_DIR, HANDLERS_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import tornado.ioloop
 import tornado.web
 
-# 2. 兼容导入方式（包导入或单模块直导）
-try:
-    from handlers.device_handler import DeviceHandler
-except ImportError:
-    from device_handler import DeviceHandler
+from handlers.device_handler import DeviceHandler
+from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
+from handlers.mail_handler import MailConfigHandler
 
+# 兼容不同的打印上传类命名
 try:
-    try:
-        from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
-    except ImportError:
-        from handlers.print_handler import PrintHandler as PrintHandlerCls
+    from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
 except ImportError:
-    try:
-        from print_handler import PrintUploadHandler as PrintHandlerCls
-    except ImportError:
-        from print_handler import PrintHandler as PrintHandlerCls
+    from handlers.print_handler import PrintHandler as PrintHandlerCls
 
-try:
-    from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
-except ImportError:
-    from scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
-
-try:
-    from handlers.mail_handler import MailConfigHandler
-except ImportError:
-    from mail_handler import MailConfigHandler
-
-STATIC_DIR = os.path.join(CURRENT_DIR, "static")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 def make_app():
     return tornado.web.Application([
