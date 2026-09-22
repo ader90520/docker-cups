@@ -2,6 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
+
+# 关键修复：确保 Python 能够正确识别当前目录及子包 handlers
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 import tornado.ioloop
 import tornado.web
 
@@ -14,7 +21,6 @@ except ImportError:
 from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
 from handlers.mail_handler import MailConfigHandler
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 def make_app():
