@@ -13,26 +13,26 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def enhance_homework_image(input_path, output_path):
     """
-    轻量级试卷/文档拍照增强算法 (纯 PIL + NumPy 矩阵运算)
-    彻底告别庞大的 OpenCV/GDAL，秒级去阴影、背景漂白、字迹锐化
+    轻量级试卷/文档增强算法 (纯 PIL + NumPy 矩阵运算)
+    无任何庞大第三方 C 库依赖，秒级去阴影、背景漂白、字迹锐化
     """
     try:
         with Image.open(input_path) as img:
             gray = img.convert('L')
             arr = np.array(gray, dtype=np.float32)
 
-            # 局部背景估算
+            # 极大值滤波模拟局部光照背景
             bg = gray.filter(ImageFilter.MaxFilter(25))
             bg_arr = np.array(bg, dtype=np.float32)
             bg_arr[bg_arr < 1.0] = 1.0
 
-            # 差分光照除法
+            # 差分光照除法，消灭大面积阴影与底灰
             normalized = (arr / bg_arr) * 255.0
             normalized = np.clip(normalized, 0, 255).astype(np.uint8)
 
             result = Image.fromarray(normalized)
 
-            # 增强对比度与锐化
+            # 对比度强化与笔画边缘锐化
             enh_contrast = ImageEnhance.Contrast(result)
             result = enh_contrast.enhance(1.8)
             result = result.filter(ImageFilter.SHARPEN)
@@ -69,13 +69,12 @@ class PrintHandler(tornado.web.RequestHandler):
                 f.write(upload_file['body'])
 
             final_print_file = save_path
-            # 若开启增强且属于常见图片格式
+            # 若勾选增强且为常见格式
             if enhance and ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
                 enhanced_path = os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")
                 if enhance_homework_image(save_path, enhanced_path):
                     final_print_file = enhanced_path
 
-            # 构建 lp 打印命令
             cmd = ["lp", "-d", printer, "-n", str(copies)]
             if fitplot.lower() == "true":
                 cmd.extend(["-o", "fit-to-page"])
@@ -90,7 +89,7 @@ class PrintHandler(tornado.web.RequestHandler):
                     except Exception: pass
 
             if res.returncode == 0:
-                self.write({"success": True, "msg": f"打印任务已提交成功！(Job: {res.stdout.strip()})"})
+                self.write({"success": True, "msg": f"打印任务提交成功！(Job: {res.stdout.strip()})"})
             else:
                 self.write({"success": False, "msg": f"打印错误: {res.stderr.strip()}"})
 
@@ -98,5 +97,5 @@ class PrintHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write({"success": False, "msg": str(e)})
 
-# 【核心修复】：增加类名别名，彻底兼容 server.py 中的 PrintUploadHandler 导入
+# 兼容两种命名导入，彻底根治 ImportError
 PrintUploadHandler = PrintHandler
