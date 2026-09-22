@@ -7,7 +7,7 @@ export LANGUAGE="zh_CN:zh"
 
 [ -n "$TZ" ] && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 1. CUPS 管理员账户初始化
+# 1. 账户权限初始化
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 if ! id "$CUPS_USER" &>/dev/null; then
@@ -19,7 +19,7 @@ echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /usr/share/cups/templates/zh_CN
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 
-# 3. 容器内全自动热插拔自愈守护
+# 3. 容器内热插拔守护（静默检测并修正权限）
 auto_usb_daemon() {
     echo ">>> [Hotplug] 容器内自动热插拔守护已上线..."
     while true; do
@@ -34,11 +34,11 @@ auto_usb_daemon() {
 }
 auto_usb_daemon &
 
-# 4. 唤醒系统底层服务
+# 4. 唤醒系统基础服务
 /bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
 /bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
 
-# 5. 写入防跨域拦截、支持外部 IP 访问的 cupsd.conf
+# 5. 【核心修复】：彻底关闭 Upgrade 强制重定向，允许全端口直达
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -53,6 +53,9 @@ WebInterface Yes
 ServerAlias *
 DefaultLanguage zh_CN
 
+# 核心：彻底关闭强制升级加密（禁止弹出 Upgrade Required 页面）
+DefaultEncryption Never
+
 <Location />
   Order allow,deny
   Allow all
@@ -63,6 +66,8 @@ DefaultLanguage zh_CN
   Allow all
   AuthType Default
   Require valid-user
+  # 禁止管理路径强制 SSL 升级协商
+  Encryption Never
 </Location>
 
 <Location /admin/conf>
@@ -70,6 +75,7 @@ DefaultLanguage zh_CN
   Require user @SYSTEM
   Order allow,deny
   Allow all
+  Encryption Never
 </Location>
 
 <Policy default>
@@ -92,6 +98,7 @@ DefaultLanguage zh_CN
     Require user @SYSTEM
     Order deny,allow
     Allow all
+    Encryption Never
   </Limit>
 
   <Limit Pause-Printer Resume-Printer Enable-Printer Disable-Printer Pause-Printer-After-Current-Job Hold-New-Jobs Release-Held-New-Jobs Deactivate-Printer Activate-Printer Restart-Printer Shutdown-Printer Startup-Printer Promote-Job Schedule-Job-After Cancel-Jobs CUPS-Accept-Jobs CUPS-Reject-Jobs>
@@ -99,6 +106,7 @@ DefaultLanguage zh_CN
     Require user @SYSTEM
     Order deny,allow
     Allow all
+    Encryption Never
   </Limit>
 
   <Limit Cancel-Job CUPS-Authenticate-Job>
@@ -112,7 +120,7 @@ DefaultLanguage zh_CN
 </Policy>
 EOF
 
-# 恢复并补齐中文模板
+# 恢复中文模板与汉化
 if [ -d /tmp/zh_templates ]; then
     cp -rn /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
 fi
@@ -126,6 +134,13 @@ sleep 2
 
 service avahi-daemon start 2>/dev/null || true
 
-# 6. 前台交付 8088 智能控制台
+# 6. 切换工作目录并带守护启动 8088 独立 Web 控制台
 echo ">>> [2/2] 启动 8088 综合控制台..."
-exec python3 -u /opt/webapp/server.py
+cd /opt/webapp
+export PYTHONPATH="/opt/webapp:${PYTHONPATH}"
+
+while true; do
+    python3 -u server.py
+    echo ">>> [Warning] 8088 Web 控制台异常退出，5秒后自动尝试恢复..."
+    sleep 5
+done
