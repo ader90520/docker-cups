@@ -18,26 +18,23 @@ def enhance_homework_image(input_path, output_path):
     """
     try:
         with Image.open(input_path) as img:
-            # 转换为灰度图
             gray = img.convert('L')
             arr = np.array(gray, dtype=np.float32)
 
-            # 局部背景估算（利用极大值滤波模拟光照背景）
+            # 局部背景估算
             bg = gray.filter(ImageFilter.MaxFilter(25))
             bg_arr = np.array(bg, dtype=np.float32)
             bg_arr[bg_arr < 1.0] = 1.0
 
-            # 差分光照除法，消灭大面积阴影与泛黄底色
+            # 差分光照除法
             normalized = (arr / bg_arr) * 255.0
             normalized = np.clip(normalized, 0, 255).astype(np.uint8)
 
             result = Image.fromarray(normalized)
 
-            # 增强对比度，使文字笔迹更黑、纸张更纯白
+            # 增强对比度与锐化
             enh_contrast = ImageEnhance.Contrast(result)
             result = enh_contrast.enhance(1.8)
-
-            # 锐化笔锋边缘
             result = result.filter(ImageFilter.SHARPEN)
 
             result.save(output_path, "PNG", optimize=True)
@@ -86,7 +83,7 @@ class PrintHandler(tornado.web.RequestHandler):
 
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
 
-            # 异步清理临时文件
+            # 清理临时文件
             for p in [save_path, os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")]:
                 if os.path.exists(p):
                     try: os.remove(p)
@@ -100,3 +97,6 @@ class PrintHandler(tornado.web.RequestHandler):
         except Exception as e:
             self.set_status(500)
             self.write({"success": False, "msg": str(e)})
+
+# 【核心修复】：增加类名别名，彻底兼容 server.py 中的 PrintUploadHandler 导入
+PrintUploadHandler = PrintHandler
