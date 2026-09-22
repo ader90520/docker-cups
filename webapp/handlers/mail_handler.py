@@ -1,59 +1,248 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-export LC_ALL="C"
-export LANG="C"
+import os
+import time
+import json
+import poplib
+import email
+from email.header import decode_header
+import smtplib
+from email.mime.text import MIMEText
+import threading
+import subprocess
+import requests
+import tornado.web
 
-[ -n "$TZ" ] && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+from handlers.print_handler import enhance_homework_image
 
-# 1. 账户权限初始化
-CUPS_USER=${CUPS_USER:-admin}
-CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
-if ! id "$CUPS_USER" &>/dev/null; then
-    useradd -r -G lpadmin -M -s /usr/sbin/nologin "$CUPS_USER"
-fi
-echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
+CONFIG_FILE = "/etc/cups/mail_print_config.json"
+TASK_DIR = "/tmp/mail_print_tasks"
+os.makedirs(TASK_DIR, exist_ok=True)
 
-# 2. 运行时目录及权限保障
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
-chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
-
-# 3. 容器内热插拔守护进程（静默防骚扰，确保拔插打印机 3 秒自愈）
-auto_usb_daemon() {
-    echo ">>> [Hotplug] 容器内自动热插拔守护已上线..."
-    while true; do
-        if lsmod 2>/dev/null | grep -q usblp; then
-            rmmod usblp 2>/dev/null || true
-        fi
-        if [ -d /dev/bus/usb ]; then
-            chmod -R 666 /dev/bus/usb 2>/dev/null || true
-        fi
-        sleep 3
-    done
+DEFAULT_CONFIG = {
+    "enabled": True,
+    "pushplus_token": "",
+    "accounts": [],
+    "printer_name": "",
+    "check_interval": 30
 }
-auto_usb_daemon &
 
-# 4. 基础服务唤醒
-/bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
-/bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
+def load_config():
+    cfg = DEFAULT_CONFIG.copy()
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                cfg.update(saved)
+        except Exception:
+            pass
+    return cfg
 
-# 5. CUPS 服务端配置加固
-if [ ! -f /etc/cups/cupsd.conf ]; then
-    cp /etc/cups.orig/cupsd.conf /etc/cups/cupsd.conf 2>/dev/null || true
-fi
-if [ -f /etc/cups/cupsd.conf ]; then
-    sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-fi
+def save_config(cfg):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=4, ensure_ascii=False)
 
-echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
-/usr/sbin/cupsd
-sleep 2
+def decode_str(s):
+    if not s:
+        return ""
+    try:
+        decoded_list = decode_header(s)
+        res = []
+        for value, charset in decoded_list:
+            if isinstance(value, bytes):
+                res.append(value.decode(charset or 'utf-8', errors='ignore'))
+            else:
+                res.append(str(value))
+        return "".join(res)
+    except Exception:
+        return str(s)
 
-service avahi-daemon start 2>/dev/null || true
+def send_pushplus(token, title, content):
+    if not token or not token.strip():
+        return
+    try:
+        requests.post("https://www.pushplus.plus/send", json={
+            "token": token.strip(),
+            "title": title[:30],
+            "content": content,
+            "template": "html"
+        }, timeout=8)
+    except Exception as e:
+        print(f"[PushPlus] 推送失败: {e}")
 
-# 6. 前台交付 8088 Web 智能控制台
-echo ">>> [2/2] 启动 8088 综合控制台..."
-exec python3 -u /opt/webapp/server.py
+class MultiMailWorker(threading.Thread):
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = True
+        self.statuses = {}
+
+    def run(self):
+        while self.running:
+            try:
+                cfg = load_config()
+                if not cfg.get("enabled"):
+                    self.statuses = {"global": "云打印已暂停"}
+                    time.sleep(10)
+                    continue
+
+                accounts = cfg.get("accounts", [])
+                if not accounts:
+                    self.statuses = {"global": "暂未配置任何邮箱"}
+                    time.sleep(10)
+                    continue
+
+                target_printer = cfg.get("printer_name", "")
+                push_token = cfg.get("pushplus_token", "")
+
+                for acc in accounts:
+                    acc_user = acc.get("email_user", "").strip()
+                    if not acc_user or not acc.get("email_pass") or not acc.get("active", True):
+                        continue
+
+                    try:
+                        self.check_single_account(acc, target_printer, push_token)
+                        self.statuses[acc_user] = f"正常运行 (最后巡检: {time.strftime('%H:%M:%S')})"
+                    except Exception as err:
+                        self.statuses[acc_user] = f"连接受阻: {str(err)[:40]}"
+
+                interval = int(cfg.get("check_interval", 30))
+                time.sleep(max(10, interval))
+            except Exception as e:
+                time.sleep(10)
+
+    def check_single_account(self, acc, target_printer, push_token):
+        user = acc["email_user"].strip()
+        server_host = acc.get("pop_server", "pop.qq.com").strip()
+        server_port = int(acc.get("pop_port", 995))
+
+        server = poplib.POP3_SSL(server_host, server_port, timeout=15)
+        try:
+            server.user(user)
+            server.pass_(acc["email_pass"].strip())
+            
+            num_messages = len(server.list()[1])
+            if num_messages == 0:
+                return
+
+            whitelist_raw = acc.get("whitelist", "")
+            whitelist = [x.strip().lower() for x in whitelist_raw.split(",") if x.strip()]
+
+            # 仅处理最近 5 封未删邮件
+            for i in range(num_messages, max(0, num_messages - 5), -1):
+                try:
+                    raw_email = b"\n".join(server.retr(i)[1])
+                    msg = email.message_from_bytes(raw_email)
+
+                    sender = decode_str(msg.get("From", ""))
+                    subject = decode_str(msg.get("Subject", "无主题"))
+                    sender_email = email.utils.parseaddr(sender)[1].lower()
+
+                    if whitelist and sender_email not in whitelist:
+                        continue
+
+                    printed_files = []
+                    for part in msg.walk():
+                        if part.get_content_disposition() == 'attachment':
+                            filename = part.get_filename()
+                            if filename:
+                                filename = decode_str(filename)
+                                ext = os.path.splitext(filename)[1].lower()
+                                save_path = os.path.join(TASK_DIR, f"task_{int(time.time())}_{filename}")
+                                with open(save_path, "wb") as f:
+                                    f.write(part.get_payload(decode=True))
+
+                                final_file = save_path
+                                # 图像作业自动增强处理
+                                if acc.get("auto_enhance", True) and ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+                                    enh_path = os.path.join(TASK_DIR, f"enh_{filename}.png")
+                                    if enhance_homework_image(save_path, enh_path):
+                                        final_file = enh_path
+
+                                # 提交 CUPS 打印
+                                lp_cmd = ["lp"]
+                                if target_printer:
+                                    lp_cmd.extend(["-d", target_printer])
+                                lp_cmd.extend(["-o", "fit-to-page", final_file])
+
+                                res = subprocess.run(lp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                                if res.returncode == 0:
+                                    printed_files.append(filename)
+
+                                for p in [save_path, os.path.join(TASK_DIR, f"enh_{filename}.png")]:
+                                    if os.path.exists(p):
+                                        try: os.remove(p)
+                                        except Exception: pass
+
+                    if printed_files:
+                        if push_token:
+                            file_html = "".join([f"<li><b>{f}</b></li>" for f in printed_files])
+                            body = f"""
+                            <div style="padding:10px; border-left:4px solid #0066cc; font-family:sans-serif;">
+                                <h3 style="color:#0066cc; margin:0 0 8px 0;">🖨️ 打印成功通知</h3>
+                                <p style="margin:4px 0;"><b>接收邮箱：</b><span style="color:#2b6cb0;">{user}</span></p>
+                                <p style="margin:4px 0;"><b>发件人：</b>{sender_email}</p>
+                                <p style="margin:4px 0;"><b>主题：</b>{subject}</p>
+                                <p style="margin:4px 0;"><b>已打印文件：</b></p>
+                                <ul>{file_html}</ul>
+                                <span style="font-size:12px; color:#888;">完成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}</span>
+                            </div>
+                            """
+                            send_pushplus(push_token, f"🖨️ [{user}] 已打印附件", body)
+                        # 成功打印后清除该邮件
+                        server.dele(i)
+                except Exception:
+                    continue
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                pass
+
+worker = MultiMailWorker()
+worker.start()
+
+class MailConfigHandler(tornado.web.RequestHandler):
+    def get(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        cfg = load_config()
+        safe_cfg = json.loads(json.dumps(cfg))
+        
+        for acc in safe_cfg.get("accounts", []):
+            if acc.get("email_pass"):
+                acc["email_pass"] = "******"
+        if safe_cfg.get("pushplus_token"):
+            token = safe_cfg["pushplus_token"]
+            safe_cfg["pushplus_token"] = token[:4] + "********" if len(token) > 4 else "******"
+
+        self.write(json.dumps({"config": safe_cfg, "statuses": worker.statuses}))
+
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        try:
+            data = json.loads(self.request.body.decode('utf-8'))
+            cfg = load_config()
+
+            if "enabled" in data: cfg["enabled"] = bool(data["enabled"])
+            if "printer_name" in data: cfg["printer_name"] = str(data["printer_name"]).strip()
+            
+            new_token = data.get("pushplus_token", "").strip()
+            if new_token and "******" not in new_token:
+                cfg["pushplus_token"] = new_token
+
+            if "accounts" in data:
+                old_pass_map = {a.get("id"): a.get("email_pass") for a in cfg.get("accounts", [])}
+                new_accounts = []
+                for acc in data["accounts"]:
+                    acc_id = acc.get("id")
+                    if acc.get("email_pass") == "******":
+                        acc["email_pass"] = old_pass_map.get(acc_id, "")
+                    new_accounts.append(acc)
+                cfg["accounts"] = new_accounts
+
+            save_config(cfg)
+            self.write(json.dumps({"success": True, "msg": "配置已保存并即时生效！"}))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
