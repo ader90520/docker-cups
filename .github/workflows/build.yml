@@ -22,20 +22,24 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 设置 QEMU 跨平台仿真 (支持 32位 armv7 与 64位 arm64)
+      - name: 设置 QEMU 跨平台仿真 (支持 armv7/arm64/amd64)
         uses: docker/setup-qemu-action@v3
 
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 关键点：自动兼容你之前设置的各种 Docker Hub 密码变量名
+      # 规范化镜像拥有者名称为纯小写，防止 ghcr.io 拒绝大写
+      - name: 转换仓库所有者为纯小写
+        id: prep
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+
       - name: 登录 Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME || secrets.DOCKERHUB_USERNAME || secrets.DOCKER_USERNAME || 'ader90520' }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN || secrets.DOCKER_PASSWORD || secrets.DOCKER_HUB_PASSWORD || secrets.DOCKERHUB_TOKEN }}
 
-      # 同时登录 GitHub Packages (免密，内置 token)
       - name: 登录 GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
@@ -43,26 +47,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 1. 专门为海纳思机顶盒构建 32 位 ARMv7 架构的 Slim 版
-      - name: 构建并推送 Slim 版 (海纳思 32位 armv7)
+      # 1. Slim 精简版 (支持海纳思 armv7、斐讯 N1 arm64、x86 主机 amd64)
+      - name: 构建并推送 Slim 版 (全平台轻量)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.slim
-          platforms: linux/arm/v7,linux/arm64
+          platforms: linux/arm/v7,linux/arm64,linux/amd64
           push: true
+          provenance: false
           tags: |
             ader90520/cups:slim
-            ghcr.io/${{ github.repository_owner }}/cups:slim
+            ghcr.io/${{ steps.prep.outputs.owner }}/cups:slim
 
-      # 2. 专门为斐讯 N1 构建 64 位 ARM64 架构的 Latest 版
-      - name: 构建并推送 Latest 完整版 (N1 64位 arm64)
+      # 2. Latest 完整版 (带全量开源驱动 printer-driver-all，支持 arm64 与 x86 amd64)
+      - name: 构建并推送 Latest 完整驱动版
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/arm64,linux/amd64
           push: true
+          provenance: false
           tags: |
             ader90520/cups:latest
-            ghcr.io/${{ github.repository_owner }}/cups:latest
+            ghcr.io/${{ steps.prep.outputs.owner }}/cups:latest
