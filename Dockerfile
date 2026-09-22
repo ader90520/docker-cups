@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础依赖包与完整驱动
+# 1. 安装基础依赖包与完整驱动
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -46,7 +46,7 @@ RUN mkdir -p /usr/share/foo2zjs/firmware /usr/share/foo2xqx/firmware && \
     cp -f *.dl /usr/share/foo2xqx/firmware/ 2>/dev/null || true && \
     rm -rf /tmp/*
 
-# 3. 跨架构匹配安装 HP 闭源插件与机型库映射
+# 3. 跨架构匹配安装 HP 闭源插件与机型库映射（使用 printf 写入配置，彻底杜绝 parse error）
 RUN set -e && \
     RAW_VER=$(dpkg -s hplip | grep '^Version:' | awk '{print $2}') && \
     HPLIP_VER=$(echo "$RAW_VER" | sed -E 's/[~+].*//; s/-.*//') && \
@@ -92,7 +92,7 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 5. 语言包编译与目录权限设定
+# 5. 语言包编译与经典深蓝通栏主题样式注入（彻底修复导航横排与底部文字漂移）
 RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
@@ -104,10 +104,11 @@ RUN mkdir -p /usr/share/locale/zh_CN/LC_MESSAGES \
     cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /usr/share/cups/locale/zh_CN/cups.mo && \
     cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups.mo /usr/share/cups/locale/zh/cups.mo && \
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ && \
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html && \
     cp -f /tmp/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
     cp -rp /etc/cups/* /etc/cups.orig/ 2>/dev/null || true && \
+    printf "\n/* 修复中文汉化经典蓝色主题与横向导航锁死 */\n.header, .nav, div.header { background: #003366 !important; width: 100%% !important; margin: 0 !important; padding: 0 !important; }\n.header ul, ul.nav, .nav ul, div.header ul { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; list-style: none !important; margin: 0 !important; padding: 10px 20px !important; background: #003366 !important; }\n.header ul li, ul.nav li, .nav li, div.header ul li { display: inline-flex !important; margin-right: 25px !important; }\n.header ul li a, ul.nav li a, .nav li a, div.header ul li a { color: #ffffff !important; text-decoration: none !important; font-weight: bold !important; font-size: 15px !important; padding: 4px 8px !important; border-radius: 3px !important; }\n.header ul li a:hover, ul.nav li a:hover { background: #004c99 !important; }\n.body, .content { min-height: 480px !important; padding: 20px !important; }\n.footer, div.footer { clear: both !important; background: #003366 !important; color: #ffffff !important; text-align: center !important; padding: 15px 0 !important; margin-top: 40px !important; width: 100%% !important; display: block !important; }\n.footer a, div.footer a { color: #80bfff !important; text-decoration: underline !important; }\n" >> /usr/share/cups/doc-root/cups.css && \
+    cp -f /usr/share/cups/doc-root/cups.css /usr/share/cups/doc-root/zh_CN/cups.css 2>/dev/null || true && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
     chmod 700 /etc/cups/ssl && \
     chmod +x /entrypoint.sh /opt/mail_print.py /opt/cups_web_app.py && \
