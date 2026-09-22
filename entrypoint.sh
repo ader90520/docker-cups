@@ -14,16 +14,29 @@ if ! id "$CUPS_USER" &>/dev/null; then
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
-# 2. 路径与设备放行
+# 2. 运行时目录准备
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
-chmod -R 666 /dev/bus/usb 2>/dev/null || true
 
-# 3. 逐个拉起系统级模块
-/bin/bash /opt/modules/init/10_dbus.sh
-/bin/bash /opt/modules/init/20_sane.sh
+# 3. 【核心创新：容器内部自动热插拔守护线程】
+# 彻底免除在宿主机手动执行脚本的麻烦
+auto_usb_daemon() {
+    echo ">>> [Hotplug] 容器内自动热插拔守护进程已启动..."
+    while true; do
+        # 自动卸载抢占打印机端口的内核 usblp 模块
+        rmmod usblp 2>/dev/null || true
+        # 持续将 USB 总线节点赋权为 666，确保热插拔后新节点立即可用
+        chmod -R 666 /dev/bus/usb 2>/dev/null || true
+        sleep 3
+    done
+}
+auto_usb_daemon &
 
-# 4. CUPS 启动配置
+# 4. 逐个拉起系统级模块
+/bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
+/bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
+
+# 5. CUPS 启动配置
 if [ ! -f /etc/cups/cupsd.conf ]; then
     cp /etc/cups.orig/cupsd.conf /etc/cups/cupsd.conf 2>/dev/null || true
 fi
@@ -40,6 +53,6 @@ sleep 2
 
 service avahi-daemon start 2>/dev/null || true
 
-# 5. 前台启动 8088 独立 Web 控制台 (内含邮件轮询与 PushPlus 守护线程)
+# 6. 前台启动 8088 独立 Web 控制台 (多邮箱轮询 + PushPlus 微信通知)
 echo ">>> [2/2] 启动 8088 Web 综合控制台..."
 exec python3 -u /opt/webapp/server.py
