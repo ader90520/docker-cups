@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 彻底剔除 opencv/gdal/多媒体库，仅保留 CUPS、扫描仪与超轻量纯图像运算核心
+# 1. 深度精准安装：仅保留 CUPS 核心、扫描组件及纯 Python 图像处理基础库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -41,9 +41,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
               /usr/share/doc/* \
               /usr/share/man/* \
               /usr/share/info/* \
+              /usr/share/groff/* \
               /tmp/*
 
-# 拷贝拆分模块与入口
+# 2. 拷贝各个功能模块与静态资源
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
@@ -51,16 +52,16 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 换行符清洗与赋权
+# 3. 递归清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 执行驱动与主题
+# 4. 执行驱动预装与主题补丁注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 目录与权限准备
+# 5. 准备工作目录与权限
 RUN mkdir -p /opt/cups_data /scans /tmp/cups_web_uploads /tmp/mail_print_tasks /etc/cups/ssl /var/lock/sane /var/run/dbus && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
     chmod 700 /etc/cups/ssl && \
