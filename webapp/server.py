@@ -4,14 +4,15 @@
 import os
 import sys
 
-# 关键修复：确保 Python 能够正确识别当前目录及子包 handlers
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+# 强制将 /opt/webapp 和 handlers 所在真实目录推入 sys.path 第一顺位
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
 import tornado.ioloop
 import tornado.web
 
+# 优先直接导入同目录包
 from handlers.device_handler import DeviceHandler
 try:
     from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
@@ -21,7 +22,7 @@ except ImportError:
 from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
 from handlers.mail_handler import MailConfigHandler
 
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_DIR = os.path.join(CURRENT_DIR, "static")
 
 def make_app():
     return tornado.web.Application([
@@ -41,5 +42,5 @@ def make_app():
 if __name__ == "__main__":
     app = make_app()
     app.listen(8088, address="0.0.0.0")
-    print(">>> 8088 Web 综合控制台已监听在 0.0.0.0:8088")
+    print(">>> 8088 Web 综合控制台已监听在 0.0.0.0:8088", flush=True)
     tornado.ioloop.IOLoop.current().start()
