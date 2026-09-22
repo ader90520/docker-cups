@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUPS 智能打印与扫描控制台</title>
+    <style>
+        :root { --primary: #0066cc; --danger: #e53e3e; --success: #28a745; --bg: #f4f6f9; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 15px; background: var(--bg); color: #333; }
+        .container { max-width: 960px; margin: 0 auto; }
+        .nav-tabs { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; overflow-x: auto; }
+        .tab-btn { padding: 8px 15px; border: none; background: none; font-size: 15px; cursor: pointer; border-bottom: 3px solid transparent; font-weight: 500; white-space: nowrap; }
+        .tab-btn.active { border-color: var(--primary); color: var(--primary); }
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 15px; }
+        .form-group { margin-bottom: 14px; }
+        label { display: block; margin-bottom: 5px; font-weight: 500; font-size: 14px; }
+        select, input[type="text"], input[type="password"], input[type="number"], input[type="file"] { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; box-sizing: border-box; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: var(--success); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .preview-box { border: 2px dashed #cbd5e0; border-radius: 8px; background: #fff; min-height: 220px; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-top: 15px; }
+        .preview-box img { max-width: 100%; max-height: 450px; }
+        .preview-box iframe { width: 100%; height: 450px; border: none; }
+        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #edf2f7; }
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; background: #e2e8f0; color: #4a5568; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="nav-tabs">
+        <button class="tab-btn active" onclick="switchTab('print')">🖨️ 网页打印</button>
+        <button class="tab-btn" onclick="switchTab('scan')">📠 扫描复印</button>
+        <button class="tab-btn" onclick="switchTab('files')">📑 扫描文件</button>
+        <button class="tab-btn" onclick="switchTab('mail')">✉️ 邮件与微信通知</button>
+        <button class="tab-btn" onclick="window.open('http://' + window.location.hostname + ':631', '_blank')">⚙️ CUPS 管理</button>
+    </div>
+
+    <!-- 1. 打印 -->
+    <div id="tab-print" class="tab-pane active">
+        <div class="card">
+            <h3>上传文件打印</h3>
+            <div class="form-group">
+                <label>目标打印机：</label>
+                <select id="printer-select"><option value="">获取中...</option></select>
+            </div>
+            <div class="form-group">
+                <label>选择文件 (PDF/图片/Word等)：</label>
+                <input type="file" id="print-file-input">
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <div class="form-group" style="flex: 1;">
+                    <label>份数：</label><input type="number" id="print-copies" value="1" min="1">
+                </div>
+                <div class="form-group" style="flex: 1;">
+                    <label>页面缩放：</label>
+                    <select id="print-fit">
+                        <option value="true">适应纸张</option><option value="false">原始比例</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label style="color:#2b6cb0; font-weight:bold; cursor:pointer;">
+                    <input type="checkbox" id="print-enhance" checked>
+                    ✨ 开启拍照作业/试卷增强 (自动去除阴影黑底、背景漂白、字体矫正)
+                </label>
+            </div>
+            <button class="btn btn-primary" onclick="doPrint()">🖨️ 提交打印</button>
+            <div id="print-status" style="margin-top:10px; font-weight:500;"></div>
+        </div>
+    </div>
+
+    <!-- 2. 扫描 -->
+    <div id="tab-scan" class="tab-pane">
+        <div class="card">
+            <h3>扫描仪控制</h3>
+            <div class="form-group">
+                <label>扫描仪：</label><select id="scanner-select"><option value="">探测中...</option></select>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <div class="form-group" style="flex:1;">
+                    <label>色彩：</label>
+                    <select id="scan-mode"><option value="Color">全彩</option><option value="Gray">灰度</option><option value="Lineart">黑白</option></select>
+                </div>
+                <div class="form-group" style="flex:1;">
+                    <label>DPI：</label>
+                    <select id="scan-dpi"><option value="150">150</option><option value="200">200</option><option value="300">300</option></select>
+                </div>
+                <div class="form-group" style="flex:1;">
+                    <label>格式：</label>
+                    <select id="scan-fmt"><option value="pdf">PDF</option><option value="jpg">JPG</option><option value="png">PNG</option></select>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="triggerScan('scan')">🚀 开始扫描</button>
+                <button class="btn btn-success" onclick="triggerScan('copy')">📋 扫描并一键复印</button>
+                <button class="btn" style="background:#e2e8f0;" onclick="loadDevices()">🔄 刷新设备</button>
+            </div>
+            <div id="scan-status" style="margin-top:10px; font-weight:500;"></div>
+        </div>
+    </div>
+
+    <!-- 3. 文件 -->
+    <div id="tab-files" class="tab-pane">
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3>扫描文档列表</h3><button class="btn btn-primary" onclick="loadFiles()">🔄 刷新</button>
+            </div>
+            <div class="preview-box" id="preview-area"><span style="color:#aaa;">点击下方“预览”在此查看</span></div>
+            <div id="file-list" style="margin-top:15px;"></div>
+        </div>
+    </div>
+
+    <!-- 4. 邮件与微信通知 -->
+    <div id="tab-mail" class="tab-pane">
+        <div class="card">
+            <h3>✉️ 邮件远程打印与 PushPlus 微信通知</h3>
+            <div id="mail-status-badge" class="status-badge">获取状态中...</div>
+            <div class="form-group">
+                <label style="cursor:pointer; font-weight:bold;">
+                    <input type="checkbox" id="mail-enabled"> 开启邮件云打印监听守护
+                </label>
+            </div>
+            <div class="form-group" style="background:#ebf8ff; padding:12px; border-radius:6px; border:1px solid #bee3f8;">
+                <label style="color:#2b6cb0; font-weight:bold;">📲 PushPlus (推送加) 微信通知 Token：</label>
+                <input type="text" id="mail-pushplus-token" placeholder="微信关注 pushplus推送加 获取 token 填入此处">
+                <div style="font-size:12px; color:#666; margin-top:4px;">打印完成自动推送到微信。留空不推送。</div>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <div class="form-group" style="flex:2;"><label>POP3 接收服务器：</label><input type="text" id="mail-pop"></div>
+                <div class="form-group" style="flex:1;"><label>端口：</label><input type="number" id="mail-pop-port" value="995"></div>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <div class="form-group" style="flex:1;"><label>邮箱账号：</label><input type="text" id="mail-user"></div>
+                <div class="form-group" style="flex:1;"><label>授权码/密码：</label><input type="password" id="mail-pass"></div>
+            </div>
+            <div class="form-group">
+                <label>发件人白名单 (留空允许所有人，多个逗号隔开)：</label>
+                <input type="text" id="mail-whitelist" placeholder="如 abc@qq.com, xyz@163.com">
+            </div>
+            <div class="form-group">
+                <label style="color:#2b6cb0; cursor:pointer;">
+                    <input type="checkbox" id="mail-auto-enhance" checked>
+                    ✨ 邮件附件拍照作业/试卷自动去除阴影黑底与纠偏
+                </label>
+            </div>
+            <button class="btn btn-primary" onclick="saveMailConfig()">💾 保存云打印配置</button>
+            <div id="mail-save-msg" style="margin-top:10px; font-weight:500;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+    if (name === 'files') loadFiles();
+    if (name === 'mail') loadMailConfig();
+}
+function loadDevices() {
+    fetch('/api/devices').then(r => r.json()).then(d => {
+        const pSel = document.getElementById('printer-select');
+        pSel.innerHTML = d.printers.length ? d.printers.map(p => `<option value="${p}">${p}</option>`).join('') : '<option value="">未找到打印机</option>';
+        const sSel = document.getElementById('scanner-select');
+        sSel.innerHTML = d.scanners.length ? d.scanners.map(s => `<option value="${s.id}">${s.name}</option>`).join('') : '<option value="">未找到扫描仪</option>';
+    });
+}
+function doPrint() {
+    const p = document.getElementById('printer-select').value;
+    const fi = document.getElementById('print-file-input');
+    const st = document.getElementById('print-status');
+    if (!p || !fi.files.length) return alert('请选择打印机和文件！');
+    const fd = new FormData();
+    fd.append('printer', p);
+    fd.append('file', fi.files[0]);
+    fd.append('copies', document.getElementById('print-copies').value);
+    fd.append('fitplot', document.getElementById('print-fit').value);
+    fd.append('enhance', document.getElementById('print-enhance').checked);
+    st.style.color = '#0066cc'; st.innerText = '正在提交...';
+    fetch('/api/print', { method: 'POST', body: fd }).then(r => r.json()).then(res => {
+        st.style.color = res.success ? '#28a745' : '#e53e3e';
+        st.innerText = res.msg;
+        if(res.success) fi.value = '';
+    });
+}
+function triggerScan(act) {
+    const dev = document.getElementById('scanner-select').value;
+    const st = document.getElementById('scan-status');
+    if (!dev) return alert('请选择扫描仪！');
+    st.style.color = '#0066cc'; st.innerText = '正在扫描...';
+    fetch('/api/do_scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            device: dev, mode: document.getElementById('scan-mode').value,
+            resolution: document.getElementById('scan-dpi').value,
+            format: document.getElementById('scan-fmt').value, action: act,
+            printer: document.getElementById('printer-select').value
+        })
+    }).then(r => r.json()).then(res => {
+        st.style.color = res.success ? '#28a745' : '#e53e3e';
+        st.innerText = res.msg;
+        if (res.success) { loadFiles(); previewFile(res.url, res.filename.endsWith('.pdf')); }
+    });
+}
+function loadFiles() {
+    fetch('/api/scans').then(r => r.json()).then(d => {
+        const box = document.getElementById('file-list');
+        box.innerHTML = (d.files || []).map(f => `
+            <div class="file-item">
+                <div><b>${f.filename}</b><div style="font-size:12px;color:#777;">${f.mtime} (${f.size})</div></div>
+                <div class="btn-group">
+                    <button class="btn btn-success" onclick="previewFile('${f.url}', ${f.is_pdf})">👁 预览</button>
+                    <a class="btn btn-primary" href="${f.url}" download>⬇ 下载</a>
+                    <button class="btn btn-danger" onclick="deleteFile('${f.filename}')">🗑 删除</button>
+                </div>
+            </div>
+        `).join('') || '<div style="color:#aaa;text-align:center;padding:10px;">暂无存档</div>';
+    });
+}
+function previewFile(url, isPdf) {
+    document.getElementById('preview-area').innerHTML = isPdf ? `<iframe src="${url}"></iframe>` : `<img src="${url}?t=${Date.now()}">`;
+}
+function deleteFile(fname) {
+    if (!confirm('确定删除 ' + fname + ' 吗？')) return;
+    fetch('/api/delete_scan', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename: fname}) })
+    .then(r => r.json()).then(res => { if(res.success) { document.getElementById('preview-area').innerHTML = ''; loadFiles(); } });
+}
+function loadMailConfig() {
+    fetch('/api/mail_config').then(r => r.json()).then(d => {
+        const c = d.config;
+        document.getElementById('mail-status-badge').innerText = '当前状态: ' + d.status;
+        document.getElementById('mail-enabled').checked = c.enabled;
+        document.getElementById('mail-pushplus-token').value = c.pushplus_token || '';
+        document.getElementById('mail-pop').value = c.pop_server || 'pop.qq.com';
+        document.getElementById('mail-pop-port').value = c.pop_port || 995;
+        document.getElementById('mail-user').value = c.email_user || '';
+        document.getElementById('mail-pass').value = c.email_pass || '';
+        document.getElementById('mail-whitelist').value = c.whitelist || '';
+        document.getElementById('mail-auto-enhance').checked = c.auto_enhance !== false;
+    });
+}
+function saveMailConfig() {
+    const msg = document.getElementById('mail-save-msg');
+    msg.style.color = '#0066cc'; msg.innerText = '正在保存...';
+    fetch('/api/mail_config', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+            enabled: document.getElementById('mail-enabled').checked,
+            pushplus_token: document.getElementById('mail-pushplus-token').value.trim(),
+            pop_server: document.getElementById('mail-pop').value.trim(),
+            pop_port: parseInt(document.getElementById('mail-pop-port').value),
+            email_user: document.getElementById('mail-user').value.trim(),
+            email_pass: document.getElementById('mail-pass').value,
+            whitelist: document.getElementById('mail-whitelist').value.trim(),
+            printer_name: document.getElementById('printer-select').value,
+            auto_enhance: document.getElementById('mail-auto-enhance').checked
+        })
+    }).then(r => r.json()).then(res => {
+        msg.style.color = res.success ? '#28a745' : '#e53e3e';
+        msg.innerText = res.msg;
+        setTimeout(loadMailConfig, 1500);
+    });
+}
+loadDevices();
+</script>
+</body>
+</html>
