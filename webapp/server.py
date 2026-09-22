@@ -2,38 +2,38 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import tornado.ioloop
 import tornado.web
 
-# 导入同级 handlers 模块
-sys.path.append(os.path.dirname(__file__))
-from handlers.print_handler import PrintUploadHandler
-from handlers.scan_handler import DevicesHandler, DoScanHandler
-from handlers.file_handler import ScanListHandler, ScanDeleteHandler
+from handlers.device_handler import DeviceHandler
+try:
+    from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
+except ImportError:
+    from handlers.print_handler import PrintHandler as PrintHandlerCls
+
+from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
 from handlers.mail_handler import MailConfigHandler
 
-SCAN_DIR = "/scans"
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-
-class MainHandler(tornado.web.RequestHandler):
-    def get(self):
-        with open(os.path.join(STATIC_DIR, "index.html"), "r", encoding="utf-8") as f:
-            self.write(f.read())
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 def make_app():
     return tornado.web.Application([
-        (r"/", MainHandler),
-        (r"/api/devices", DevicesHandler),
-        (r"/api/print", PrintUploadHandler),
-        (r"/api/do_scan", DoScanHandler),
-        (r"/api/scans", ScanListHandler),
-        (r"/api/delete_scan", ScanDeleteHandler),
+        (r"/", tornado.web.RedirectHandler, {"url": "/index.html"}),
+        (r"/api/devices", DeviceHandler),
+        (r"/api/print", PrintHandlerCls),
+        (r"/api/do_scan", ScanHandler),
+        (r"/api/scans", ScanFileHandler),
+        (r"/api/delete_scan", DeleteScanHandler),
         (r"/api/mail_config", MailConfigHandler),
-        (r"/scans/(.*)", tornado.web.StaticFileHandler, {"path": SCAN_DIR}),
-    ])
+        (r"/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR, "default_filename": "index.html"}),
+    ],
+    autoreload=False,
+    debug=False
+    )
 
 if __name__ == "__main__":
     app = make_app()
     app.listen(8088, address="0.0.0.0")
+    print(">>> 8088 Web 综合控制台已监听在 0.0.0.0:8088")
     tornado.ioloop.IOLoop.current().start()
