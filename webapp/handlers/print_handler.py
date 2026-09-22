@@ -4,103 +4,99 @@
 import os
 import time
 import subprocess
-import json
 import tornado.web
+from PIL import Image, ImageEnhance, ImageFilter
+import numpy as np
 
 UPLOAD_DIR = "/tmp/cups_web_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def enhance_homework_image(input_path, output_path):
     """
-    智能处理手机拍照作业/试卷：
-    1. 自动根据文字倾斜角度做仿射纠偏 (Deskew)
-    2. 局部阴影消除与纯白背景提取 (白底黑字高清省墨)
+    轻量级试卷/文档拍照增强算法 (纯 PIL + NumPy 矩阵运算)
+    彻底告别庞大的 OpenCV/GDAL，秒级去阴影、背景漂白、字迹锐化
     """
     try:
-        import cv2
-        import numpy as np
-        img = cv2.imread(input_path)
-        if img is None:
-            return False
-            
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # 1. 歪斜校正检测
-        coords = np.column_stack(np.where(gray < 200))
-        if coords.shape[0] > 50:
-            angle = cv2.minAreaRect(coords)[-1]
-            angle = -(90 + angle) if angle < -45 else -angle
-            if 0.5 < abs(angle) < 15.0:
-                (h, w) = img.shape[:2]
-                center = (w // 2, h // 2)
-                M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                gray = cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+        with Image.open(input_path) as img:
+            # 转换为灰度图
+            gray = img.convert('L')
+            arr = np.array(gray, dtype=np.float32)
 
-        # 2. 阴影消除与纯白背景提取 (形态学闭运算)
-        dilated = cv2.dilate(gray, np.ones((7, 7), np.uint8))
-        bg = cv2.medianBlur(dilated, 21)
-        diff = 255 - cv2.absdiff(gray, bg)
-        norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
-        
-        # 3. 增强字符对比度
-        _, thresh = cv2.threshold(norm, 230, 255, cv2.THRESH_TRUNC)
-        clean = cv2.normalize(thresh, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
+            # 局部背景估算（利用极大值滤波模拟光照背景）
+            bg = gray.filter(ImageFilter.MaxFilter(25))
+            bg_arr = np.array(bg, dtype=np.float32)
+            bg_arr[bg_arr < 1.0] = 1.0
 
-        cv2.imwrite(output_path, clean)
-        return True
-    except Exception:
+            # 差分光照除法，消灭大面积阴影与泛黄底色
+            normalized = (arr / bg_arr) * 255.0
+            normalized = np.clip(normalized, 0, 255).astype(np.uint8)
+
+            result = Image.fromarray(normalized)
+
+            # 增强对比度，使文字笔迹更黑、纸张更纯白
+            enh_contrast = ImageEnhance.Contrast(result)
+            result = enh_contrast.enhance(1.8)
+
+            # 锐化笔锋边缘
+            result = result.filter(ImageFilter.SHARPEN)
+
+            result.save(output_path, "PNG", optimize=True)
+            return True
+    except Exception as e:
+        print(f"[Enhance Error] 图像处理异常: {e}")
         return False
 
-class PrintUploadHandler(tornado.web.RequestHandler):
+class PrintHandler(tornado.web.RequestHandler):
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
-            printer = self.get_argument("printer", "").strip()
-            copies = self.get_argument("copies", "1").strip()
-            fitplot = self.get_argument("fitplot", "true").strip()
-            enhance = self.get_argument("enhance", "false").strip().lower() == "true"
-            
+            printer = self.get_body_argument("printer", "")
+            copies = self.get_body_argument("copies", "1")
+            fitplot = self.get_body_argument("fitplot", "true")
+            enhance = self.get_body_argument("enhance", "false") == "true"
+
             if not printer:
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "请选择目标打印机"}))
+                self.write({"success": False, "msg": "未指定打印机！"})
                 return
 
-            file_metas = self.request.files.get('file', None)
-            if not file_metas:
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "未找到上传的文件"}))
+            if 'file' not in self.request.files:
+                self.write({"success": False, "msg": "未上传文件！"})
                 return
 
-            meta = file_metas[0]
-            ext = os.path.splitext(meta['filename'])[1].lower()
-            save_name = f"print_{int(time.time())}_{meta['filename']}"
-            save_path = os.path.join(UPLOAD_DIR, save_name)
+            upload_file = self.request.files['file'][0]
+            filename = upload_file['filename']
+            ext = os.path.splitext(filename)[1].lower()
 
-            with open(save_path, 'wb') as f:
-                f.write(meta['body'])
+            save_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{filename}")
+            with open(save_path, "wb") as f:
+                f.write(upload_file['body'])
 
             final_print_file = save_path
+            # 若开启增强且属于常见图片格式
             if enhance and ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
-                enhanced_path = os.path.join(UPLOAD_DIR, f"enhanced_{save_name}.png")
+                enhanced_path = os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")
                 if enhance_homework_image(save_path, enhanced_path):
                     final_print_file = enhanced_path
 
-            lp_cmd = ["lp", "-d", printer, "-n", copies]
+            # 构建 lp 打印命令
+            cmd = ["lp", "-d", printer, "-n", str(copies)]
             if fitplot.lower() == "true":
-                lp_cmd.extend(["-o", "fit-to-page"])
-            lp_cmd.append(final_print_file)
+                cmd.extend(["-o", "fit-to-page"])
+            cmd.append(final_print_file)
 
-            res = subprocess.run(lp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if res.returncode != 0:
-                self.set_status(500)
-                self.write(json.dumps({"success": False, "msg": f"打印失败: {res.stderr}"}))
-            else:
-                self.write(json.dumps({"success": True, "msg": f"任务已提交: {res.stdout.strip()}"}))
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
 
-            for p in [save_path, os.path.join(UPLOAD_DIR, f"enhanced_{save_name}.png")]:
+            # 异步清理临时文件
+            for p in [save_path, os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")]:
                 if os.path.exists(p):
                     try: os.remove(p)
                     except Exception: pass
 
+            if res.returncode == 0:
+                self.write({"success": True, "msg": f"打印任务已提交成功！(Job: {res.stdout.strip()})"})
+            else:
+                self.write({"success": False, "msg": f"打印错误: {res.stderr.strip()}"})
+
         except Exception as e:
             self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
+            self.write({"success": False, "msg": str(e)})
