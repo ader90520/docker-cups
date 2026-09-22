@@ -24,11 +24,9 @@ EOF
 elif [ -d "/etc/udev/rules.d" ]; then
     echo ">>> 检测到系统为 海纳思 / Debian / Ubuntu / x86，配置 udev 规则与内核黑名单..."
     
-    # 屏蔽 usblp 内核加载
     mkdir -p /etc/modprobe.d
     echo "blacklist usblp" > /etc/modprobe.d/blacklist-usblp.conf
     
-    # 编写 udev 规则
     cat << 'EOF' > /etc/udev/rules.d/99-printer-hotplug.rules
 ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", RUN+="/bin/chmod -R 666 /dev/bus/usb", RUN+="/usr/bin/docker exec cups chmod -R 666 /dev/bus/usb"
 EOF
