@@ -4,23 +4,43 @@
 import os
 import sys
 
-# 强制将 /opt/webapp 和 handlers 所在真实目录推入 sys.path 第一顺位
+# 1. 绝对路径优先注入
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+HANDLERS_DIR = os.path.join(CURRENT_DIR, "handlers")
+
+for path in [CURRENT_DIR, HANDLERS_DIR]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 import tornado.ioloop
 import tornado.web
 
-# 优先直接导入同目录包
-from handlers.device_handler import DeviceHandler
+# 2. 兼容导入方式（包导入或单模块直导）
 try:
-    from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
+    from handlers.device_handler import DeviceHandler
 except ImportError:
-    from handlers.print_handler import PrintHandler as PrintHandlerCls
+    from device_handler import DeviceHandler
 
-from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
-from handlers.mail_handler import MailConfigHandler
+try:
+    try:
+        from handlers.print_handler import PrintUploadHandler as PrintHandlerCls
+    except ImportError:
+        from handlers.print_handler import PrintHandler as PrintHandlerCls
+except ImportError:
+    try:
+        from print_handler import PrintUploadHandler as PrintHandlerCls
+    except ImportError:
+        from print_handler import PrintHandler as PrintHandlerCls
+
+try:
+    from handlers.scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
+except ImportError:
+    from scan_handler import ScanHandler, ScanFileHandler, DeleteScanHandler
+
+try:
+    from handlers.mail_handler import MailConfigHandler
+except ImportError:
+    from mail_handler import MailConfigHandler
 
 STATIC_DIR = os.path.join(CURRENT_DIR, "static")
 
@@ -42,5 +62,5 @@ def make_app():
 if __name__ == "__main__":
     app = make_app()
     app.listen(8088, address="0.0.0.0")
-    print(">>> 8088 Web 综合控制台已监听在 0.0.0.0:8088", flush=True)
+    print(">>> [Web] 8088 综合控制台服务已启动 (0.0.0.0:8088)", flush=True)
     tornado.ioloop.IOLoop.current().start()
