@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
 
-export LC_ALL="C"
-export LANG="C"
+export LC_ALL="zh_CN.UTF-8"
+export LANG="zh_CN.UTF-8"
+export LANGUAGE="zh_CN:zh"
 
 [ -n "$TZ" ] && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 1. 账户权限初始化
+# 1. CUPS 管理员账户初始化
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 if ! id "$CUPS_USER" &>/dev/null; then
@@ -15,10 +16,10 @@ fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
 # 2. 运行时目录及权限保障
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /usr/share/cups/templates/zh_CN
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 
-# 3. 容器内热插拔守护进程（静默防骚扰，确保拔插打印机 3 秒自愈）
+# 3. 容器内全自动热插拔自愈守护
 auto_usb_daemon() {
     echo ">>> [Hotplug] 容器内自动热插拔守护已上线..."
     while true; do
@@ -33,19 +34,90 @@ auto_usb_daemon() {
 }
 auto_usb_daemon &
 
-# 4. 基础服务唤醒
+# 4. 唤醒系统底层服务
 /bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
 /bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
 
-# 5. CUPS 服务端配置加固
-if [ ! -f /etc/cups/cupsd.conf ]; then
-    cp /etc/cups.orig/cupsd.conf /etc/cups/cupsd.conf 2>/dev/null || true
+# 5. 写入防跨域拦截、支持外部 IP 访问的 cupsd.conf
+cat << 'EOF' > /etc/cups/cupsd.conf
+LogLevel warn
+PageLogFormat
+MaxLogSize 1m
+ErrorPolicy retry-job
+Port 631
+Listen /run/cups/cups.sock
+Browsing On
+BrowseLocalProtocols dnssd
+DefaultAuthType Basic
+WebInterface Yes
+ServerAlias *
+DefaultLanguage zh_CN
+
+<Location />
+  Order allow,deny
+  Allow all
+</Location>
+
+<Location /admin>
+  Order allow,deny
+  Allow all
+  AuthType Default
+  Require valid-user
+</Location>
+
+<Location /admin/conf>
+  AuthType Default
+  Require user @SYSTEM
+  Order allow,deny
+  Allow all
+</Location>
+
+<Policy default>
+  JobPrivateAccess default
+  JobPrivateValues default
+  SubscriptionPrivateAccess default
+  SubscriptionPrivateValues default
+
+  <Limit Create-Job Print-Job Print-URI Validate-Job>
+    Order deny,allow
+  </Limit>
+
+  <Limit Send-Document Send-URI Hold-Job Release-Job Restart-Job Purge-Jobs Set-Job-Attributes Create-Job-Subscription Renew-Subscription Cancel-Subscription Get-Notifications Reprocess-Job Cancel-Current-Job Suspend-Current-Job Resume-Job Cancel-My-Jobs Close-Job CUPS-Move-Job CUPS-Get-Document>
+    Require user @OWNER @SYSTEM
+    Order deny,allow
+  </Limit>
+
+  <Limit CUPS-Add-Modify-Printer CUPS-Delete-Printer CUPS-Add-Modify-Class CUPS-Delete-Class CUPS-Set-Default CUPS-Get-Devices>
+    AuthType Default
+    Require user @SYSTEM
+    Order deny,allow
+    Allow all
+  </Limit>
+
+  <Limit Pause-Printer Resume-Printer Enable-Printer Disable-Printer Pause-Printer-After-Current-Job Hold-New-Jobs Release-Held-New-Jobs Deactivate-Printer Activate-Printer Restart-Printer Shutdown-Printer Startup-Printer Promote-Job Schedule-Job-After Cancel-Jobs CUPS-Accept-Jobs CUPS-Reject-Jobs>
+    AuthType Default
+    Require user @SYSTEM
+    Order deny,allow
+    Allow all
+  </Limit>
+
+  <Limit Cancel-Job CUPS-Authenticate-Job>
+    Require user @OWNER @SYSTEM
+    Order deny,allow
+  </Limit>
+
+  <Limit All>
+    Order deny,allow
+  </Limit>
+</Policy>
+EOF
+
+# 恢复并补齐中文模板
+if [ -d /tmp/zh_templates ]; then
+    cp -rn /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
 fi
-if [ -f /etc/cups/cupsd.conf ]; then
-    sed -i 's/Listen localhost:631/Port 631/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/>/<Location \/>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin>/<Location \/admin>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
-    sed -i 's/<Location \/admin\/conf>/<Location \/admin\/conf>\n  Allow All/' /etc/cups/cupsd.conf 2>/dev/null || true
+if [ -f /tmp/index.html ]; then
+    cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
 echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
@@ -54,6 +126,6 @@ sleep 2
 
 service avahi-daemon start 2>/dev/null || true
 
-# 6. 前台交付 8088 Web 智能控制台
+# 6. 前台交付 8088 智能控制台
 echo ">>> [2/2] 启动 8088 综合控制台..."
 exec python3 -u /opt/webapp/server.py
