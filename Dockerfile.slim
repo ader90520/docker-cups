@@ -6,8 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 深度精简依赖：剥离 GUI 视窗、视频解包、音频等打印无关包
-# 仅保留 CUPS 驱动核心、SANE 扫描以及纯图像数学计算核心 (OpenCV/NumPy/PIL)
+# 1. 深度精准安装：剔除所有 GUI、传真、多媒体无关组件，仅保留打印/扫描/图像去底核心
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -25,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     net-tools \
     printer-driver-foo2zjs \
     hplip \
-    hplip-data \
     sane-utils \
     libsane-hpaio \
     sane-airscan \
@@ -39,12 +37,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    # 彻底清理无用文档、手册、中间缓存，极大减轻 QEMU 模拟打包负担
+    # 彻底精简：删除无关的帮助手册、无用扫描仪微码、字体冗余及缓存
     && rm -rf /var/lib/apt/lists/* \
               /var/cache/apt/* \
               /usr/share/doc/* \
               /usr/share/man/* \
               /usr/share/info/* \
+              /usr/share/groff/* \
+              /usr/share/lintian/* \
               /tmp/*
 
 # 2. 拷贝拆分后的各个模块与入口文件
@@ -59,12 +59,12 @@ COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 分步执行模块（带容错保底）
+# 4. 执行驱动预装与主题补丁（安全保底）
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 5. 目录与运行权限就绪
+# 5. 准备工作目录与权限
 RUN mkdir -p /opt/cups_data /scans /tmp/cups_web_uploads /tmp/mail_print_tasks /etc/cups/ssl /var/lock/sane /var/run/dbus && \
     chmod 777 /scans /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
     chmod 700 /etc/cups/ssl && \
@@ -73,4 +73,3 @@ RUN mkdir -p /opt/cups_data /scans /tmp/cups_web_uploads /tmp/mail_print_tasks /
 EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
-CMD []
