@@ -1,4 +1,4 @@
-FROM debian:bookworm
+FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=zh_CN.UTF-8 \
@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础系统套件、全量驱动包与核心图像运算库 (集成 dos2unix 并清理无关缓存)
+# 1. 基础系统套件、全量驱动与纯轻量图像核心 (剔除 opencv/gdal 垃圾库)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -25,7 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     printer-driver-all \
     printer-driver-foo2zjs \
     hplip \
-    hplip-data \
     sane-utils \
     libsane-hpaio \
     sane-airscan \
@@ -34,16 +33,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tornado \
     python3-requests \
     python3-numpy \
-    python3-opencv \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    # 彻底清理非必要的手册文档与构建缓存
     && rm -rf /var/lib/apt/lists/* \
               /var/cache/apt/* \
               /usr/share/doc/* \
               /usr/share/man/* \
               /usr/share/info/* \
+              /usr/share/groff/* \
               /tmp/*
 
 # 2. 拷贝拆分后的各个模块与入口文件
@@ -72,4 +72,3 @@ RUN mkdir -p /opt/cups_data /scans /tmp/cups_web_uploads /tmp/mail_print_tasks /
 EXPOSE 631 8088
 VOLUME ["/etc/cups", "/scans"]
 ENTRYPOINT ["/entrypoint.sh"]
-CMD []
