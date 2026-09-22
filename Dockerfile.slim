@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础系统套件及作业图像预处理依赖 (内置 dos2unix 消除手机换行符污染)
+# 1. 深度精简依赖：剥离 GUI 视窗、视频解包、音频等打印无关包
+# 仅保留 CUPS 驱动核心、SANE 扫描以及纯图像数学计算核心 (OpenCV/NumPy/PIL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -36,9 +37,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-opencv \
     xz-utils \
     dos2unix \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /tmp/* \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
-    && locale-gen
+    && locale-gen \
+    # 彻底清理无用文档、手册、中间缓存，极大减轻 QEMU 模拟打包负担
+    && rm -rf /var/lib/apt/lists/* \
+              /var/cache/apt/* \
+              /usr/share/doc/* \
+              /usr/share/man/* \
+              /usr/share/info/* \
+              /tmp/*
 
 # 2. 拷贝拆分后的各个模块与入口文件
 COPY modules/ /opt/modules/
@@ -48,11 +55,11 @@ COPY i18/zh_CN/cups_zh.po /tmp/cups_zh.po
 COPY i18/zh_CN/index.html /tmp/index.html
 COPY i18/zh_CN/zh_CN/ /tmp/zh_templates/
 
-# 3. 递归清洗换行符并安全赋权（彻底消灭手机粘贴引入的 \r 报错）
+# 3. 递归清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 分步安全执行模块（增加容错保底，绝不硬中断构建）
+# 4. 分步执行模块（带容错保底）
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
