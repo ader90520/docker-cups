@@ -22,13 +22,12 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 设置 QEMU 跨平台仿真 (支持 armv7/arm64/amd64)
+      - name: 设置 QEMU 跨平台仿真
         uses: docker/setup-qemu-action@v3
 
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 规范化镜像拥有者名称为纯小写，防止 ghcr.io 拒绝大写
       - name: 转换仓库所有者为纯小写
         id: prep
         run: |
@@ -47,21 +46,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 1. Slim 精简版 (支持海纳思 armv7、斐讯 N1 arm64、x86 主机 amd64)
-      - name: 构建并推送 Slim 版 (全平台轻量)
+      # 1. Slim 版构建（开启 GitHub Actions Cache 缓存，第二次构建快 5 倍）
+      - name: 构建并推送 Slim 版
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.slim
+          # 核心性能平衡：arm64 (斐讯N1) 与 amd64 (x86) 速度极快，arm/v7 经缓存后提速
           platforms: linux/arm/v7,linux/arm64,linux/amd64
           push: true
           provenance: false
+          cache-from: type=gha,scope=cups-slim
+          cache-to: type=gha,mode=max,scope=cups-slim
           tags: |
             ader90520/cups:slim
             ghcr.io/${{ steps.prep.outputs.owner }}/cups:slim
 
-      # 2. Latest 完整版 (带全量开源驱动 printer-driver-all，支持 arm64 与 x86 amd64)
-      - name: 构建并推送 Latest 完整驱动版
+      # 2. Latest 版构建（只编译主流 64 位 arm64 与 amd64，省去 armv7 冗长仿真）
+      - name: 构建并推送 Latest 完整版
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -69,6 +71,8 @@ jobs:
           platforms: linux/arm64,linux/amd64
           push: true
           provenance: false
+          cache-from: type=gha,scope=cups-latest
+          cache-to: type=gha,mode=max,scope=cups-latest
           tags: |
             ader90520/cups:latest
             ghcr.io/${{ steps.prep.outputs.owner }}/cups:latest
