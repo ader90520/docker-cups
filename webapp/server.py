@@ -13,7 +13,7 @@ for p in [BASE_DIR, HANDLERS_DIR]:
 import tornado.ioloop
 import tornado.web
 
-# 导入与各个 handler 文件完全匹配的真实类名
+# 导入与实际文件完全匹配的真实 Handler 类名
 from handlers.scan_handler import DevicesHandler, DoScanHandler
 from handlers.file_handler import ScanListHandler, ScanDeleteHandler
 from handlers.print_handler import PrintHandler
