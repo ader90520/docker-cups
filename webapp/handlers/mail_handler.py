@@ -3,246 +3,175 @@
 
 import os
 import time
-import json
-import poplib
 import email
-from email.header import decode_header
-import smtplib
-from email.mime.text import MIMEText
+import imaplib
+import uuid
 import threading
 import subprocess
-import requests
-import tornado.web
+import numpy as np
+from PIL import Image
+from email.header import decode_header
+from handlers.base_handler import BaseHandler
 
-from handlers.print_handler import enhance_homework_image
+MAIL_TASK_DIR = "/tmp/mail_print_tasks"
+os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
-CONFIG_FILE = "/etc/cups/mail_print_config.json"
-TASK_DIR = "/tmp/mail_print_tasks"
-os.makedirs(TASK_DIR, exist_ok=True)
-
-DEFAULT_CONFIG = {
-    "enabled": True,
-    "pushplus_token": "",
-    "accounts": [],
-    "printer_name": "",
-    "check_interval": 30
-}
-
-def load_config():
-    cfg = DEFAULT_CONFIG.copy()
-    if os.path.exists(CONFIG_FILE):
+class ImageEnhancer:
+    """针对海思机顶盒的轻量级纯 NumPy/PIL 图像增强引擎"""
+    @staticmethod
+    def deskew_and_clean(img_path):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                cfg.update(saved)
+            with Image.open(img_path) as src:
+                img = src.convert("L")
+                if max(img.size) > 2000:
+                    img.thumbnail((2000, 2000), Image.Resampling.BILINEAR)
+                arr = np.array(img, dtype=np.uint8)
+
+                # 快速水平投影方差法算倾斜角度
+                angle = ImageEnhancer._detect_skew_angle(arr)
+                if abs(angle) >= 0.5:
+                    img = img.rotate(angle, expand=True, fillcolor=255)
+                    arr = np.array(img, dtype=np.uint8)
+
+                # 动态阴影消除与背景漂白
+                farr = arr.astype(np.float32)
+                clean_arr = np.clip((farr - 55.0) * (255.0 / (195.0 - 55.0)), 0, 255).astype(np.uint8)
+
+                out_path = os.path.join(MAIL_TASK_DIR, f"mail_clean_{uuid.uuid4().hex[:8]}.jpg")
+                Image.fromarray(clean_arr).save(out_path, format="JPEG", quality=85)
+                return out_path
+        except Exception as e:
+            print(f"[MailEnhance] 增强处理跳过: {e}")
+            return img_path
+
+    @staticmethod
+    def _detect_skew_angle(arr):
+        try:
+            small = arr[::4, ::4]
+            bin_arr = (small < 180).astype(np.uint8)
+            best_angle = 0.0
+            max_variance = -1.0
+            for ang in range(-12, 13, 2):
+                rotated = Image.fromarray(bin_arr).rotate(ang, resample=Image.Resampling.NEAREST, fillcolor=0)
+                proj = np.sum(np.array(rotated), axis=1)
+                variance = np.var(proj)
+                if variance > max_variance:
+                    max_variance = variance
+                    best_angle = ang
+            return best_angle
         except Exception:
-            pass
-    return cfg
-
-def save_config(cfg):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=4, ensure_ascii=False)
-
-def decode_str(s):
-    if not s:
-        return ""
-    try:
-        decoded_list = decode_header(s)
-        res = []
-        for value, charset in decoded_list:
-            if isinstance(value, bytes):
-                res.append(value.decode(charset or 'utf-8', errors='ignore'))
-            else:
-                res.append(str(value))
-        return "".join(res)
-    except Exception:
-        return str(s)
-
-def send_pushplus(token, title, content):
-    if not token or not token.strip():
-        return
-    try:
-        requests.post("https://www.pushplus.plus/send", json={
-            "token": token.strip(),
-            "title": title[:30],
-            "content": content,
-            "template": "html"
-        }, timeout=8)
-    except Exception as e:
-        print(f"[PushPlus] 推送失败: {e}")
+            return 0.0
 
 class MultiMailWorker(threading.Thread):
-    def __init__(self):
+    def __init__(self, check_interval=30):
         super().__init__()
+        self.interval = check_interval
         self.daemon = True
-        self.running = True
-        self.statuses = {}
+        self.is_running = True
 
     def run(self):
-        while self.running:
+        print(">>> [MailWorker] 邮件自动抓取打印守护线程已就绪...")
+        while self.is_running:
             try:
-                cfg = load_config()
-                if not cfg.get("enabled"):
-                    self.statuses = {"global": "云打印已暂停"}
-                    time.sleep(10)
-                    continue
-
-                accounts = cfg.get("accounts", [])
-                if not accounts:
-                    self.statuses = {"global": "暂未配置任何邮箱"}
-                    time.sleep(10)
-                    continue
-
-                target_printer = cfg.get("printer_name", "")
-                push_token = cfg.get("pushplus_token", "")
-
-                for acc in accounts:
-                    acc_user = acc.get("email_user", "").strip()
-                    if not acc_user or not acc.get("email_pass") or not acc.get("active", True):
-                        continue
-
-                    try:
-                        self.check_single_account(acc, target_printer, push_token)
-                        self.statuses[acc_user] = f"正常运行 (最后巡检: {time.strftime('%H:%M:%S')})"
-                    except Exception as err:
-                        self.statuses[acc_user] = f"连接受阻: {str(err)[:40]}"
-
-                interval = int(cfg.get("check_interval", 30))
-                time.sleep(max(10, interval))
-            except Exception as e:
-                time.sleep(10)
-
-    def check_single_account(self, acc, target_printer, push_token):
-        user = acc["email_user"].strip()
-        server_host = acc.get("pop_server", "pop.qq.com").strip()
-        server_port = int(acc.get("pop_port", 995))
-
-        server = poplib.POP3_SSL(server_host, server_port, timeout=15)
-        try:
-            server.user(user)
-            server.pass_(acc["email_pass"].strip())
-            
-            num_messages = len(server.list()[1])
-            if num_messages == 0:
-                return
-
-            whitelist_raw = acc.get("whitelist", "")
-            whitelist = [x.strip().lower() for x in whitelist_raw.split(",") if x.strip()]
-
-            # 仅处理最近 5 封未删邮件
-            for i in range(num_messages, max(0, num_messages - 5), -1):
-                try:
-                    raw_email = b"\n".join(server.retr(i)[1])
-                    msg = email.message_from_bytes(raw_email)
-
-                    sender = decode_str(msg.get("From", ""))
-                    subject = decode_str(msg.get("Subject", "无主题"))
-                    sender_email = email.utils.parseaddr(sender)[1].lower()
-
-                    if whitelist and sender_email not in whitelist:
-                        continue
-
-                    printed_files = []
-                    for part in msg.walk():
-                        if part.get_content_disposition() == 'attachment':
-                            filename = part.get_filename()
-                            if filename:
-                                filename = decode_str(filename)
-                                ext = os.path.splitext(filename)[1].lower()
-                                save_path = os.path.join(TASK_DIR, f"task_{int(time.time())}_{filename}")
-                                with open(save_path, "wb") as f:
-                                    f.write(part.get_payload(decode=True))
-
-                                final_file = save_path
-                                # 图像作业自动增强处理
-                                if acc.get("auto_enhance", True) and ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
-                                    enh_path = os.path.join(TASK_DIR, f"enh_{filename}.png")
-                                    if enhance_homework_image(save_path, enh_path):
-                                        final_file = enh_path
-
-                                # 提交 CUPS 打印
-                                lp_cmd = ["lp"]
-                                if target_printer:
-                                    lp_cmd.extend(["-d", target_printer])
-                                lp_cmd.extend(["-o", "fit-to-page", final_file])
-
-                                res = subprocess.run(lp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-                                if res.returncode == 0:
-                                    printed_files.append(filename)
-
-                                for p in [save_path, os.path.join(TASK_DIR, f"enh_{filename}.png")]:
-                                    if os.path.exists(p):
-                                        try: os.remove(p)
-                                        except Exception: pass
-
-                    if printed_files:
-                        if push_token:
-                            file_html = "".join([f"<li><b>{f}</b></li>" for f in printed_files])
-                            body = f"""
-                            <div style="padding:10px; border-left:4px solid #0066cc; font-family:sans-serif;">
-                                <h3 style="color:#0066cc; margin:0 0 8px 0;">🖨️ 打印成功通知</h3>
-                                <p style="margin:4px 0;"><b>接收邮箱：</b><span style="color:#2b6cb0;">{user}</span></p>
-                                <p style="margin:4px 0;"><b>发件人：</b>{sender_email}</p>
-                                <p style="margin:4px 0;"><b>主题：</b>{subject}</p>
-                                <p style="margin:4px 0;"><b>已打印文件：</b></p>
-                                <ul>{file_html}</ul>
-                                <span style="font-size:12px; color:#888;">完成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}</span>
-                            </div>
-                            """
-                            send_pushplus(push_token, f"🖨️ [{user}] 已打印附件", body)
-                        # 成功打印后清除该邮件
-                        server.dele(i)
-                except Exception:
-                    continue
-        finally:
-            try:
-                server.quit()
+                self.process_mail_tasks()
             except Exception:
                 pass
+            time.sleep(self.interval)
 
-worker = MultiMailWorker()
-worker.start()
+    def process_mail_tasks(self):
+        config_path = "/opt/cups_data/mail_config.json"
+        if not os.path.exists(config_path):
+            return
 
-class MailConfigHandler(tornado.web.RequestHandler):
+        import json
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        if not cfg.get("enable"):
+            return
+
+        server = cfg.get("server")
+        port = int(cfg.get("port", 993))
+        user = cfg.get("user")
+        pwd = cfg.get("password")
+        printer = cfg.get("default_printer", "")
+
+        mail = imaplib.IMAP4_SSL(server, port)
+        mail.login(user, pwd)
+        mail.select("INBOX")
+
+        status, data = mail.search(None, "UNSEEN")
+        if status != "OK" or not data[0]:
+            mail.logout()
+            return
+
+        for num in data[0].split():
+            res, msg_data = mail.fetch(num, "(RFC822)")
+            if res != "OK":
+                continue
+
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            subject = self._decode_header(msg["Subject"])
+            need_enhance = any(k in subject for k in ["拍照", "试卷", "去底", "纠偏", "清晰"])
+
+            for part in msg.walk():
+                if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
+                    continue
+
+                filename = part.get_filename()
+                if not filename:
+                    continue
+
+                filename = self._decode_header(filename)
+                ext = os.path.splitext(filename)[-1].lower()
+
+                if ext in [".jpg", ".jpeg", ".png", ".pdf"]:
+                    file_path = os.path.join(MAIL_TASK_DIR, f"{uuid.uuid4().hex[:8]}_{filename}")
+                    with open(file_path, "wb") as f_out:
+                        f_out.write(part.get_payload(decode=True))
+
+                    ready_file = file_path
+                    if ext in [".jpg", ".jpeg", ".png"] and need_enhance:
+                        ready_file = ImageEnhancer.deskew_and_clean(file_path)
+
+                    cmd = ["lp"]
+                    if printer:
+                        cmd.extend(["-d", printer])
+                    cmd.extend(["-o", "fit-to-page", ready_file])
+                    subprocess.run(cmd, timeout=30)
+
+        mail.logout()
+
+    def _decode_header(self, text):
+        if not text:
+            return ""
+        decoded, encoding = decode_header(text)[0]
+        if isinstance(decoded, bytes):
+            return decoded.decode(encoding or "utf-8", errors="ignore")
+        return str(decoded)
+
+class MailConfigHandler(BaseHandler):
     def get(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        cfg = load_config()
-        safe_cfg = json.loads(json.dumps(cfg))
-        
-        for acc in safe_cfg.get("accounts", []):
-            if acc.get("email_pass"):
-                acc["email_pass"] = "******"
-        if safe_cfg.get("pushplus_token"):
-            token = safe_cfg["pushplus_token"]
-            safe_cfg["pushplus_token"] = token[:4] + "********" if len(token) > 4 else "******"
-
-        self.write(json.dumps({"config": safe_cfg, "statuses": worker.statuses}))
+        config_path = "/opt/cups_data/mail_config.json"
+        if os.path.exists(config_path):
+            import json
+            with open(config_path, "r", encoding="utf-8") as f:
+                self.write_json(True, data=json.load(f))
+        else:
+            self.write_json(True, data={"enable": False})
 
     def post(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
-            data = json.loads(self.request.body.decode('utf-8'))
-            cfg = load_config()
-
-            if "enabled" in data: cfg["enabled"] = bool(data["enabled"])
-            if "printer_name" in data: cfg["printer_name"] = str(data["printer_name"]).strip()
-            
-            new_token = data.get("pushplus_token", "").strip()
-            if new_token and "******" not in new_token:
-                cfg["pushplus_token"] = new_token
-
-            if "accounts" in data:
-                old_pass_map = {a.get("id"): a.get("email_pass") for a in cfg.get("accounts", [])}
-                new_accounts = []
-                for acc in data["accounts"]:
-                    acc_id = acc.get("id")
-                    if acc.get("email_pass") == "******":
-                        acc["email_pass"] = old_pass_map.get(acc_id, "")
-                    new_accounts.append(acc)
-                cfg["accounts"] = new_accounts
-
-            save_config(cfg)
-            self.write(json.dumps({"success": True, "msg": "配置已保存并即时生效！"}))
+            import json
+            body = json.loads(self.request.body.decode("utf-8"))
+            config_path = "/opt/cups_data/mail_config.json"
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+            self.write_json(True, "邮件配置已持久化保存")
         except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
+            self.write_json(False, f"保存失败: {str(e)}")
+
+# 启动邮件轮询常驻线程
+mail_thread = MultiMailWorker()
+mail_thread.start()
