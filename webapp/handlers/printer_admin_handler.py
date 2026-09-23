@@ -3,6 +3,7 @@
 
 import os
 import subprocess
+import urllib.parse
 from handlers.base_handler import BaseHandler
 
 class PrinterAdminHandler(BaseHandler):
@@ -13,32 +14,57 @@ class PrinterAdminHandler(BaseHandler):
     def set_cups_env(self):
         env = os.environ.copy()
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
+        env["LANG"] = "C"
+        env["LC_ALL"] = "C"
         return env
 
     def get(self):
         action = self.get_argument("action", "devices")
         env = self.set_cups_env()
 
-        # 扫描 USB / 网络物理打印机
+        # 1. 扫描 USB / 网络物理打印机（精确过滤掉 CUPS 协议伪设备）
         if action == "discovered_devices":
             devices = []
             try:
                 res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, text=True, timeout=8, env=env)
+                ignore_backends = ["beh", "ipp", "ipps", "http", "https", "lpd", "socket", "smb", "hpfax"]
+
                 for line in res.stdout.splitlines():
                     line = line.strip()
-                    if line.startswith("direct usb://") or line.startswith("network") or line.startswith("direct"):
-                        parts = line.split(" ", 1)
-                        if len(parts) == 2:
-                            uri = parts[1].strip()
-                            devices.append({
-                                "uri": uri,
-                                "name": uri.split("://")[-1].replace("/", " ")
-                            })
+                    if not line:
+                        continue
+                    
+                    parts = line.split(" ", 1)
+                    if len(parts) != 2:
+                        continue
+
+                    dev_type, uri = parts[0], parts[1].strip()
+
+                    # 仅保留含实际路径的真实硬件
+                    if "://" in uri:
+                        scheme = uri.split("://")[0].lower()
+                        path = uri.split("://")[1]
+
+                        if not path or path in ignore_backends:
+                            continue
+
+                        # 友好格式化设备显示名称（URL 解码）
+                        clean_path = urllib.parse.unquote(path.split("?")[0])
+                        display_name = clean_path.replace("/", " ").replace("_", " ").strip()
+                        
+                        is_usb = "usb" in scheme.lower()
+                        tag = "USB" if is_usb else "网络"
+
+                        devices.append({
+                            "uri": uri,
+                            "name": f"{display_name} ({tag})" if display_name else uri,
+                            "raw_name": display_name
+                        })
             except Exception:
                 pass
             self.write_json(True, data=devices)
 
-        # 获取 CUPS 系统安装的驱动库
+        # 2. 获取 CUPS 驱动库 (支持关键词搜索)
         elif action == "drivers":
             keyword = self.get_argument("q", "").lower()
             drivers = []
@@ -65,6 +91,7 @@ class PrinterAdminHandler(BaseHandler):
             self.write_json(True, data=drivers)
 
     def post(self):
+        """在 8088 页面直接添加并启用打印机，实时同步到 631"""
         env = self.set_cups_env()
         name = self.get_argument("name", "").strip().replace(" ", "_")
         uri = self.get_argument("uri", "").strip()
