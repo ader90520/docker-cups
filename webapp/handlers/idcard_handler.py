@@ -1,21 +1,24 @@
+cat << 'EOF' > /tmp/idcard_handler.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
 import uuid
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
 class IdCardPrintHandler(BaseHandler):
-    """
-    身份证双面排版打印处理器：
-    支持正反面独立裁剪幅度调节、智能背景去杂物与 300DPI 国标 A4 合成打印
-    """
-
     @staticmethod
     def crop_single_card(pil_img, margin_factor=1.0):
         try:
+            # 自动应用手机拍照 EXIF 姿态
+            pil_img = ImageOps.exif_transpose(pil_img)
+
+            # 强制横向排版：如果高度大于宽度，逆时针旋转 90 度
+            if pil_img.height > pil_img.width:
+                pil_img = pil_img.rotate(270, expand=True)
+
             gray = pil_img.convert("L")
             small = gray.copy()
             small.thumbnail((400, 400), Image.Resampling.BILINEAR)
@@ -60,10 +63,8 @@ class IdCardPrintHandler(BaseHandler):
             printer = self.get_argument("printer", "")
             copies = self.get_argument("copies", "1")
             
-            # 接收正反面独立裁剪参数，提供单参数兼容
-            default_margin = float(self.get_argument("crop_margin", "1.0"))
-            crop_front = float(self.get_argument("crop_front", str(default_margin)))
-            crop_back = float(self.get_argument("crop_back", str(default_margin)))
+            crop_front = float(self.get_argument("crop_front", "1.0"))
+            crop_back = float(self.get_argument("crop_back", "1.0"))
 
             files = self.request.files.get("file", [])
             if not files:
@@ -77,7 +78,7 @@ class IdCardPrintHandler(BaseHandler):
                     out.write(f["body"])
                 saved_paths.append(p)
 
-            # 300DPI 标准规范尺寸 (A4: 2480x3508, 身份证: 1012x638)
+            # 300DPI 标准国标尺寸：A4(2480x3508), 卡片(1012x638)
             a4_w, a4_h = 2480, 3508
             card_w, card_h = 1012, 638
 
@@ -88,15 +89,14 @@ class IdCardPrintHandler(BaseHandler):
             for idx, path in enumerate(saved_paths):
                 try:
                     with Image.open(path) as img:
-                        if img.height > img.width:
-                            img = img.rotate(270, expand=True)
-
-                        # 正反面分别按各自调节系数进行切边
                         cropped = self.crop_single_card(img, factors[idx] if idx < len(factors) else 1.0)
+                        # 确保最终卡片必为国标横向
+                        if cropped.height > cropped.width:
+                            cropped = cropped.rotate(270, expand=True)
                         card_ready = cropped.resize((card_w, card_h), Image.Resampling.LANCZOS)
                         canvas.paste(card_ready, positions[idx])
                 except Exception as e:
-                    print(f"[IdCard] 单张处理异常: {e}")
+                    print(f"[IdCard] 处理异常: {e}")
 
             out_file = os.path.join(UPLOAD_DIR, f"idcard_final_{uuid.uuid4().hex[:8]}.jpg")
             canvas.save(out_file, format="JPEG", quality=90)
@@ -107,4 +107,7 @@ class IdCardPrintHandler(BaseHandler):
             else:
                 self.write_json(False, f"CUPS 拒绝: {res.stderr.strip()}")
         except Exception as e:
-            self.write_json(False, f"合成处理异常: {str(e)}")
+            self.write_json(False, f"合成异常: {str(e)}")
+EOF
+
+docker cp /tmp/idcard_handler.py cups:/opt/webapp/handlers/idcard_handler.py
