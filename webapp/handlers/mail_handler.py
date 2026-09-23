@@ -17,7 +17,6 @@ MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
 class ImageEnhancer:
-    """针对海思机顶盒的轻量级纯 NumPy/PIL 图像增强引擎"""
     @staticmethod
     def deskew_and_clean(img_path):
         try:
@@ -27,64 +26,61 @@ class ImageEnhancer:
                     img.thumbnail((2000, 2000), Image.Resampling.BILINEAR)
                 arr = np.array(img, dtype=np.uint8)
 
-                # 快速水平投影方差法算倾斜角度
-                angle = ImageEnhancer._detect_skew_angle(arr)
+                # 快速文字水平投影倾斜检测
+                angle = ImageEnhancer._detect_skew(arr)
                 if abs(angle) >= 0.5:
                     img = img.rotate(angle, expand=True, fillcolor=255)
                     arr = np.array(img, dtype=np.uint8)
 
-                # 动态阴影消除与背景漂白
+                # 动态对比度去阴影/增白
                 farr = arr.astype(np.float32)
                 clean_arr = np.clip((farr - 55.0) * (255.0 / (195.0 - 55.0)), 0, 255).astype(np.uint8)
 
-                out_path = os.path.join(MAIL_TASK_DIR, f"mail_clean_{uuid.uuid4().hex[:8]}.jpg")
-                Image.fromarray(clean_arr).save(out_path, format="JPEG", quality=85)
-                return out_path
-        except Exception as e:
-            print(f"[MailEnhance] 增强处理跳过: {e}")
+                out = os.path.join(MAIL_TASK_DIR, f"mail_clean_{uuid.uuid4().hex[:8]}.jpg")
+                Image.fromarray(clean_arr).save(out, format="JPEG", quality=85)
+                return out
+        except Exception:
             return img_path
 
     @staticmethod
-    def _detect_skew_angle(arr):
+    def _detect_skew(arr):
         try:
             small = arr[::4, ::4]
             bin_arr = (small < 180).astype(np.uint8)
             best_angle = 0.0
-            max_variance = -1.0
+            max_var = -1.0
             for ang in range(-12, 13, 2):
-                rotated = Image.fromarray(bin_arr).rotate(ang, resample=Image.Resampling.NEAREST, fillcolor=0)
-                proj = np.sum(np.array(rotated), axis=1)
-                variance = np.var(proj)
-                if variance > max_variance:
-                    max_variance = variance
+                rot = Image.fromarray(bin_arr).rotate(ang, resample=Image.Resampling.NEAREST, fillcolor=0)
+                v = np.var(np.sum(np.array(rot), axis=1))
+                if v > max_var:
+                    max_var = v
                     best_angle = ang
             return best_angle
         except Exception:
             return 0.0
 
 class MultiMailWorker(threading.Thread):
-    def __init__(self, check_interval=30):
+    def __init__(self, check_interval=25):
         super().__init__()
         self.interval = check_interval
         self.daemon = True
         self.is_running = True
 
     def run(self):
-        print(">>> [MailWorker] 邮件自动抓取打印守护线程已就绪...")
         while self.is_running:
             try:
-                self.process_mail_tasks()
+                self.process_mail()
             except Exception:
                 pass
             time.sleep(self.interval)
 
-    def process_mail_tasks(self):
-        config_path = "/opt/cups_data/mail_config.json"
-        if not os.path.exists(config_path):
+    def process_mail(self):
+        cfg_file = "/opt/cups_data/mail_config.json"
+        if not os.path.exists(cfg_file):
             return
 
         import json
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(cfg_file, "r", encoding="utf-8") as f:
             cfg = json.load(f)
 
         if not cfg.get("enable"):
@@ -95,6 +91,10 @@ class MultiMailWorker(threading.Thread):
         user = cfg.get("user")
         pwd = cfg.get("password")
         printer = cfg.get("default_printer", "")
+        
+        # 安全防误打机制
+        sec_keyword = cfg.get("keyword", "").strip()     # 必选暗号：若设置，主题必须含有该词才打印
+        whitelist = [s.strip().lower() for s in cfg.get("whitelist", "").split(",") if s.strip()]
 
         mail = imaplib.IMAP4_SSL(server, port)
         mail.login(user, pwd)
@@ -112,22 +112,33 @@ class MultiMailWorker(threading.Thread):
 
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
-            subject = self._decode_header(msg["Subject"])
-            need_enhance = any(k in subject for k in ["拍照", "试卷", "去底", "纠偏", "清晰"])
+
+            # 1. 来源白名单安全拦截
+            from_addr = self._decode_header(msg.get("From", "")).lower()
+            if whitelist and not any(w in from_addr for w in whitelist):
+                continue
+
+            # 2. 主题暗号安全拦截（防广告骚扰）
+            subject = self._decode_header(msg.get("Subject", ""))
+            if sec_keyword and sec_keyword not in subject:
+                continue
+
+            # 3. 按需去黑底/纠偏识别（仅当主动声明“去底/纠偏/试卷/拍照”且非“原图”时触发）
+            need_enhance = any(k in subject for k in ["去底", "去黑", "纠偏", "试卷", "清晰"]) and ("原图" not in subject)
 
             for part in msg.walk():
                 if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
                     continue
 
-                filename = part.get_filename()
-                if not filename:
+                fname = part.get_filename()
+                if not fname:
                     continue
 
-                filename = self._decode_header(filename)
-                ext = os.path.splitext(filename)[-1].lower()
+                fname = self._decode_header(fname)
+                ext = os.path.splitext(fname)[-1].lower()
 
                 if ext in [".jpg", ".jpeg", ".png", ".pdf"]:
-                    file_path = os.path.join(MAIL_TASK_DIR, f"{uuid.uuid4().hex[:8]}_{filename}")
+                    file_path = os.path.join(MAIL_TASK_DIR, f"{uuid.uuid4().hex[:8]}_{fname}")
                     with open(file_path, "wb") as f_out:
                         f_out.write(part.get_payload(decode=True))
 
@@ -153,10 +164,10 @@ class MultiMailWorker(threading.Thread):
 
 class MailConfigHandler(BaseHandler):
     def get(self):
-        config_path = "/opt/cups_data/mail_config.json"
-        if os.path.exists(config_path):
+        cfg_file = "/opt/cups_data/mail_config.json"
+        if os.path.exists(cfg_file):
             import json
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(cfg_file, "r", encoding="utf-8") as f:
                 self.write_json(True, data=json.load(f))
         else:
             self.write_json(True, data={"enable": False})
@@ -165,13 +176,12 @@ class MailConfigHandler(BaseHandler):
         try:
             import json
             body = json.loads(self.request.body.decode("utf-8"))
-            config_path = "/opt/cups_data/mail_config.json"
-            with open(config_path, "w", encoding="utf-8") as f:
+            cfg_file = "/opt/cups_data/mail_config.json"
+            with open(cfg_file, "w", encoding="utf-8") as f:
                 json.dump(body, f, ensure_ascii=False, indent=2)
-            self.write_json(True, "邮件配置已持久化保存")
+            self.write_json(True, "云邮箱策略已成功保存")
         except Exception as e:
             self.write_json(False, f"保存失败: {str(e)}")
 
-# 启动邮件轮询常驻线程
 mail_thread = MultiMailWorker()
 mail_thread.start()
