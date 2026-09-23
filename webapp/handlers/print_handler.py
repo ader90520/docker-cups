@@ -8,12 +8,13 @@ from PIL import Image
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
 class PrintHandler(BaseHandler):
-    """通用/试卷打印处理器"""
+    """通用/试卷/去底灰打印处理器"""
     def post(self):
         try:
             printer = self.get_argument("printer", "")
             copies = self.get_argument("copies", "1")
-            mode = self.get_argument("mode", "normal")  # normal / exam
+            whiten = self.get_argument("whiten", "0")
+            deskew = self.get_argument("deskew", "0")
             files = self.request.files.get("file", [])
 
             if not files:
@@ -29,18 +30,22 @@ class PrintHandler(BaseHandler):
 
             target_path = src_path
 
-            # 试卷去黑底模式（NumPy 矢量加速计算，耗时 < 0.2 秒）
-            if mode == "exam" and ext in [".jpg", ".jpeg", ".png"]:
+            # 如果用户勾选了去底灰或倾斜纠正
+            if (whiten == "1" or deskew == "1") and ext in [".jpg", ".jpeg", ".png"]:
                 try:
-                    with Image.open(src_path).convert("L") as img:
-                        # 降分辨率保护（如果原图超过 2000px，适度降采样提升运算速度）
+                    with Image.open(src_path) as img:
+                        img = img.convert("L")
                         if max(img.size) > 2000:
                             img.thumbnail((2000, 2000), Image.Resampling.BILINEAR)
                         arr = np.array(img, dtype=np.float32)
-                        # 阶梯拉伸：浅灰强制漂白，深墨色强化
-                        arr = np.clip((arr - 50) * (255.0 / (205 - 50)), 0, 255).astype(np.uint8)
-                        target_path = os.path.join(UPLOAD_DIR, f"exam_{token}.jpg")
-                        Image.fromarray(arr).save(target_path, quality=85)
+
+                        # 去底灰阶梯拉伸
+                        if whiten == "1":
+                            arr = np.clip((arr - 45) * (255.0 / (200 - 45)), 0, 255)
+
+                        clean_arr = arr.astype(np.uint8)
+                        target_path = os.path.join(UPLOAD_DIR, f"clean_{token}.jpg")
+                        Image.fromarray(clean_arr).save(target_path, format="JPEG", quality=85)
                 except Exception:
                     target_path = src_path
 
