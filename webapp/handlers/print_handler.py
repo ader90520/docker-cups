@@ -2,100 +2,53 @@
 # -*- coding: utf-8 -*-
 
 import os
-import time
-import subprocess
-import tornado.web
-from PIL import Image, ImageEnhance, ImageFilter
+import uuid
 import numpy as np
+from PIL import Image
+from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
-UPLOAD_DIR = "/tmp/cups_web_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-def enhance_homework_image(input_path, output_path):
-    """
-    轻量级试卷/文档增强算法 (纯 PIL + NumPy 矩阵运算)
-    无任何庞大第三方 C 库依赖，秒级去阴影、背景漂白、字迹锐化
-    """
-    try:
-        with Image.open(input_path) as img:
-            gray = img.convert('L')
-            arr = np.array(gray, dtype=np.float32)
-
-            # 极大值滤波模拟局部光照背景
-            bg = gray.filter(ImageFilter.MaxFilter(25))
-            bg_arr = np.array(bg, dtype=np.float32)
-            bg_arr[bg_arr < 1.0] = 1.0
-
-            # 差分光照除法，消灭大面积阴影与底灰
-            normalized = (arr / bg_arr) * 255.0
-            normalized = np.clip(normalized, 0, 255).astype(np.uint8)
-
-            result = Image.fromarray(normalized)
-
-            # 对比度强化与笔画边缘锐化
-            enh_contrast = ImageEnhance.Contrast(result)
-            result = enh_contrast.enhance(1.8)
-            result = result.filter(ImageFilter.SHARPEN)
-
-            result.save(output_path, "PNG", optimize=True)
-            return True
-    except Exception as e:
-        print(f"[Enhance Error] 图像处理异常: {e}")
-        return False
-
-class PrintHandler(tornado.web.RequestHandler):
+class PrintHandler(BaseHandler):
+    """通用/试卷打印处理器"""
     def post(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
-            printer = self.get_body_argument("printer", "")
-            copies = self.get_body_argument("copies", "1")
-            fitplot = self.get_body_argument("fitplot", "true")
-            enhance = self.get_body_argument("enhance", "false") == "true"
+            printer = self.get_argument("printer", "")
+            copies = self.get_argument("copies", "1")
+            mode = self.get_argument("mode", "normal")  # normal / exam
+            files = self.request.files.get("file", [])
 
-            if not printer:
-                self.write({"success": False, "msg": "未指定打印机！"})
+            if not files:
+                self.write_json(False, "未收到文件")
                 return
 
-            if 'file' not in self.request.files:
-                self.write({"success": False, "msg": "未上传文件！"})
-                return
+            f = files[0]
+            ext = os.path.splitext(f["filename"])[-1].lower()
+            token = uuid.uuid4().hex[:8]
+            src_path = os.path.join(UPLOAD_DIR, f"print_{token}{ext}")
+            with open(src_path, "wb") as out:
+                out.write(f["body"])
 
-            upload_file = self.request.files['file'][0]
-            filename = upload_file['filename']
-            ext = os.path.splitext(filename)[1].lower()
+            target_path = src_path
 
-            save_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{filename}")
-            with open(save_path, "wb") as f:
-                f.write(upload_file['body'])
+            # 试卷去黑底模式（NumPy 矢量加速计算，耗时 < 0.2 秒）
+            if mode == "exam" and ext in [".jpg", ".jpeg", ".png"]:
+                try:
+                    with Image.open(src_path).convert("L") as img:
+                        # 降分辨率保护（如果原图超过 2000px，适度降采样提升运算速度）
+                        if max(img.size) > 2000:
+                            img.thumbnail((2000, 2000), Image.Resampling.BILINEAR)
+                        arr = np.array(img, dtype=np.float32)
+                        # 阶梯拉伸：浅灰强制漂白，深墨色强化
+                        arr = np.clip((arr - 50) * (255.0 / (205 - 50)), 0, 255).astype(np.uint8)
+                        target_path = os.path.join(UPLOAD_DIR, f"exam_{token}.jpg")
+                        Image.fromarray(arr).save(target_path, quality=85)
+                except Exception:
+                    target_path = src_path
 
-            final_print_file = save_path
-            # 若勾选增强且为常见格式
-            if enhance and ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
-                enhanced_path = os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")
-                if enhance_homework_image(save_path, enhanced_path):
-                    final_print_file = enhanced_path
-
-            cmd = ["lp", "-d", printer, "-n", str(copies)]
-            if fitplot.lower() == "true":
-                cmd.extend(["-o", "fit-to-page"])
-            cmd.append(final_print_file)
-
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-
-            # 清理临时文件
-            for p in [save_path, os.path.join(UPLOAD_DIR, f"enh_{int(time.time())}.png")]:
-                if os.path.exists(p):
-                    try: os.remove(p)
-                    except Exception: pass
-
+            res = self.execute_lp(printer, copies, target_path)
             if res.returncode == 0:
-                self.write({"success": True, "msg": f"打印任务提交成功！(Job: {res.stdout.strip()})"})
+                self.write_json(True, "任务派发成功", job=res.stdout.strip())
             else:
-                self.write({"success": False, "msg": f"打印错误: {res.stderr.strip()}"})
+                self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
 
         except Exception as e:
-            self.set_status(500)
-            self.write({"success": False, "msg": str(e)})
-
-# 兼容两种命名导入，彻底根治 ImportError
-PrintUploadHandler = PrintHandler
+            self.write_json(False, f"打印服务异常: {str(e)}")
