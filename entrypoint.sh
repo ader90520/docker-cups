@@ -16,7 +16,7 @@ fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
 # 2. 运行时目录及权限保障
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /usr/share/cups/templates/zh_CN
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 
 # 3. 容器内热插拔守护
@@ -118,12 +118,17 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# 恢复中文模板
+# 强制覆盖中文模板并修正权限
 if [ -d /tmp/zh_templates ]; then
-    cp -rn /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
+    chmod -R 755 /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh 2>/dev/null || true
 fi
+
+# 覆盖主页并保障权限
 if [ -f /tmp/index.html ]; then
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
 echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
@@ -132,12 +137,12 @@ sleep 2
 
 service avahi-daemon start 2>/dev/null || true
 
-# 6. 关闭 set -e 保护，确保哪怕 Python 崩溃容器也不会重启
+# 6. 关闭 set -e 保护，启动 8088 综合控制台
 set +e
 
 echo ">>> [2/2] 启动 8088 综合控制台..."
 cd /opt/webapp
-export PYTHONPATH="/opt/webapp:/opt/webapp/handlers:${PYTHONPATH}"
+export PYTHONPATH="/opt/webapp:${PYTHONPATH}"
 
 while true; do
     python3 -u server.py
