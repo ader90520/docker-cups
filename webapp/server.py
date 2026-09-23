@@ -17,11 +17,7 @@ for p in [BASE_DIR, HANDLERS_DIR]:
         sys.path.insert(0, p)
 
 def safe_import(module_name, class_name, fallback_msg="模块暂时不可用"):
-    """
-    容错加载器：
-    如果指定模块文件缺失、语法报错或类不存在，返回一个友好的降级 Handler，
-    保证 8088 核心服务永远不崩！
-    """
+    """安全隔离导入机制：单个模块故障绝不影响全局服务"""
     try:
         mod = __import__(f"handlers.{module_name}", fromlist=[class_name])
         cls = getattr(mod, class_name)
@@ -34,14 +30,16 @@ def safe_import(module_name, class_name, fallback_msg="模块暂时不可用"):
         class FaultFallbackHandler(tornado.web.RequestHandler):
             def set_default_headers(self):
                 self.set_header("Content-Type", "application/json; charset=UTF-8")
+                self.set_header("Access-Control-Allow-Origin", "*")
             def get(self, *args, **kwargs):
                 self.write({"success": False, "msg": f"{fallback_msg}: {str(e)}", "error_module": module_name})
             def post(self, *args, **kwargs):
                 self.write({"success": False, "msg": f"{fallback_msg}: {str(e)}", "error_module": module_name})
         return FaultFallbackHandler
 
-# 1. 安全解耦导入每个模块
+# 动态容错挂载全量模块
 DeviceHandler = safe_import("device_handler", "DeviceHandler", "设备探测服务异常")
+PrinterAdminHandler = safe_import("printer_admin_handler", "PrinterAdminHandler", "打印机管理服务异常")
 InvoiceHandler = safe_import("invoice_handler", "InvoicePrintHandler", "发票打印功能未就绪")
 IdCardHandler = safe_import("idcard_handler", "IdCardPrintHandler", "身份证打印功能未就绪")
 PrintHandler = safe_import("print_handler", "PrintHandler", "通用打印服务异常")
@@ -56,25 +54,26 @@ def make_app():
     return tornado.web.Application([
         (r"/", tornado.web.RedirectHandler, {"url": "/index.html"}),
         
-        # 设备状态接口
+        # 设备探测与 631 驱动管理同步接口
         (r"/api/devices", DeviceHandler),
+        (r"/api/printer_admin", PrinterAdminHandler),
         
-        # 打印系列独立路由（发票与身份证互不干扰）
+        # 打印业务接口
         (r"/api/print/invoice", InvoiceHandler),
         (r"/api/print_invoice", InvoiceHandler),
         (r"/api/print/idcard", IdCardHandler),
         (r"/api/print_idcard", IdCardHandler),
         (r"/api/print", PrintHandler),
         
-        # 扫描与文件路由
+        # 扫描仪与文件管理接口
         (r"/api/do_scan", ScanHandler),
         (r"/api/scans", ScanListHandler),
         (r"/api/delete_scan", ScanDeleteHandler),
         
-        # 邮件路由
+        # 云邮箱接口
         (r"/api/mail_config", MailConfigHandler),
         
-        # 静态 Web 资源托管 (放末尾)
+        # 静态资源托管
         (r"/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR, "default_filename": "index.html"}),
     ],
     autoreload=False,
