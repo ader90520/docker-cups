@@ -1,4 +1,3 @@
-cat << 'EOF' > /tmp/device_handler.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -16,6 +15,7 @@ class DeviceHandler(BaseHandler):
         printers = []
         default_printer = ""
         
+        # 强制指定英文环境，防止输出格式变异
         env = os.environ.copy()
         env["LANG"] = "C"
         env["LC_ALL"] = "C"
@@ -30,62 +30,72 @@ class DeviceHandler(BaseHandler):
         except Exception:
             pass
 
-        # 2. 深度获取打印机状态（诊断缺纸、缺墨、卡纸、脱机）
+        # 2. 获取所有打印机队列名 (双重保险：先 lpstat -a 必定能拿到队列名)
+        p_names = []
         try:
-            res_l = subprocess.run(["lpstat", "-p", "-l"], stdout=subprocess.PIPE, text=True, timeout=3, env=env)
-            current_p = None
-            p_map = {}
+            res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
+            for line in res_a.stdout.splitlines():
+                line = line.strip()
+                if line:
+                    p_names.append(line.split()[0])
+        except Exception:
+            pass
 
-            for line in res_l.stdout.splitlines():
-                line_str = line.strip()
-                if line.startswith("printer"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        current_p = parts[1]
-                        status = "空闲就绪"
-                        if "now printing" in line or "processing" in line:
-                            status = "正在打印"
-                        elif "disabled" in line or "paused" in line:
-                            status = "暂停"
-                        p_map[current_p] = {"name": current_p, "status": status, "alert": ""}
-                elif current_p and "Alerts:" in line:
-                    alert_raw = line.split("Alerts:")[-1].strip().lower()
-                    alerts = []
-                    if "media-empty" in alert_raw or "out-of-paper" in alert_raw or "empty" in alert_raw:
-                        alerts.append("⚠️ 缺纸")
-                    if "media-jam" in alert_raw or "jam" in alert_raw:
-                        alerts.append("🚨 机器卡纸")
-                    if "toner-low" in alert_raw or "marker-supply-low" in alert_raw:
-                        alerts.append("⚠️ 墨粉将尽")
-                    if "offline" in alert_raw:
-                        alerts.append("🔌 打印机脱机")
-                    
-                    if alerts:
-                        p_map[current_p]["alert"] = " | ".join(alerts)
+        # 如果 lpstat -a 没取到，尝试 lpstat -p
+        if not p_names:
+            try:
+                res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
+                for line in res_p.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("printer") or line.startswith("打印机"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            p_names.append(parts[1])
+            except Exception:
+                pass
 
-            for p_name, data in p_map.items():
-                display_status = data["status"]
-                if data["alert"]:
-                    display_status = f"{data['status']} ({data['alert']})"
+        # 3. 为每个打印机检测详细状态与告警 (缺纸、卡纸、脱机)
+        for p in set(p_names):
+            status = "就绪"
+            has_error = False
+            alerts = []
+
+            try:
+                res_detail = subprocess.run(["lpstat", "-p", p, "-l"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
+                out = res_detail.stdout.lower()
                 
-                printers.append({
-                    "name": p_name,
-                    "id": p_name,
-                    "status": display_status,
-                    "is_default": (p_name == default_printer),
-                    "has_error": bool(data["alert"])
-                })
+                if "now printing" in out or "processing" in out:
+                    status = "正在打印"
+                elif "disabled" in out or "paused" in out:
+                    status = "已暂停"
 
-            if not printers:
-                res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
-                for line in res_a.stdout.splitlines():
-                    if line.strip():
-                        name = line.split()[0]
-                        printers.append({"name": name, "id": name, "status": "空闲就绪", "is_default": (name == default_printer)})
-        except Exception as e:
-            print(f"[DeviceHandler] 状态探测异常: {e}")
+                if "media-empty" in out or "out-of-paper" in out:
+                    alerts.append("⚠️ 缺纸")
+                    has_error = True
+                if "media-jam" in out or "jam" in out:
+                    alerts.append("🚨 卡纸")
+                    has_error = True
+                if "toner-low" in out or "marker-supply-low" in out:
+                    alerts.append("⚠️ 墨粉将尽")
+                if "offline" in out or "not connected" in out:
+                    alerts.append("🔌 脱机")
+                    has_error = True
+            except Exception:
+                pass
 
-        # 3. 扫描仪探测 (带 60 秒内存缓存)
+            display_status = status
+            if alerts:
+                display_status = f"{status} ({' | '.join(alerts)})"
+
+            printers.append({
+                "name": p,
+                "id": p,
+                "status": display_status,
+                "is_default": (p == default_printer),
+                "has_error": has_error
+            })
+
+        # 4. 扫描仪探测 (带 60 秒内存缓存，避免拖慢网页)
         now = time.time()
         scanners = CACHED_SCANNERS
         if now - LAST_SCAN_TIME > 60:
@@ -106,6 +116,3 @@ class DeviceHandler(BaseHandler):
                 LAST_SCAN_TIME = now
 
         self.write_json(True, printers=printers, devices=printers, scanners=scanners, data={"printers": printers, "scanners": scanners})
-EOF
-
-docker cp /tmp/device_handler.py cups:/opt/webapp/handlers/device_handler.py
