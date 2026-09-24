@@ -118,33 +118,30 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ==================== 纯净修复 631 中文与二级页面 ====================
-echo ">>> [Patch] 部署纯净 CUPS 中文模板（绝不篡改动态 tmpl 文件）..."
+# ==================== 全量部署纯净中文，彻底剔除所有跳转代码 ====================
+echo ">>> [Patch] 部署纯净全中文模板（彻底剔除任何跳转代码）..."
 
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 
-# 拷贝原生模板作为兜底基础
-for tmpl in /usr/share/cups/templates/*.tmpl; do
-    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
-done
-
-# 增量覆盖中文翻译包（保持原始文件语法，禁止任何 sed 侵入）
+# 将中文包直接覆盖到根目录、zh_CN 以及 zh，双重保证绝不回退英文
 if [ -d /tmp/zh_templates ]; then
+    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
 fi
+
+# 确保所有模板文件没有任何 8088 污染代码
+for tmpl in $(find /usr/share/cups/templates -name "*.tmpl" 2>/dev/null); do
+    sed -i '/btn-to-8088/d' "$tmpl" 2>/dev/null || true
+    sed -i '/8088/d' "$tmpl" 2>/dev/null || true
+done
 chmod -R 755 /usr/share/cups/templates
 
-# 中文主页部署
+# 中文纯净首页部署
 if [ -f /tmp/index.html ]; then
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
-fi
-
-# 跳转按钮仅注入静态 index.html，彻底杜绝破坏 CGI
-if [ -f /usr/share/cups/doc-root/index.html ]; then
     sed -i '/btn-to-8088/d' /usr/share/cups/doc-root/index.html 2>/dev/null || true
-    sed -i 's|</body>|<div style="position:fixed;bottom:25px;right:25px;z-index:9999;"><a class="btn-to-8088" style="background:#10b981;color:#fff!important;font-weight:bold;padding:12px 18px;border-radius:8px;text-decoration:none;box-shadow:0 4px 12px rgba(0,0,0,0.2);font-size:14px;display:inline-block;" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 返回 8088 智能打印控制台</a></div></body>|g' /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    sed -i '/8088/d' /usr/share/cups/doc-root/index.html 2>/dev/null || true
     chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 # ======================================================================
