@@ -42,7 +42,6 @@
     .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 6px; color: #0284c7; }
     .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
 
-    /* 真实国标视口裁剪框 (严格 85.6 : 54 比例) */
     .idcard-grid { display: flex; gap: 10px; margin-bottom: 10px; }
     .idcard-item { flex: 1; display: flex; flex-direction: column; gap: 6px; }
     .idcard-viewport {
@@ -182,7 +181,7 @@
           <div class="file-list" id="invoiceFileList"></div>
         </div>
 
-        <!-- 3. 身份证打印面板 (国标视口物理裁剪) -->
+        <!-- 3. 身份证打印面板 -->
         <div class="card tab-pane" id="pane-idcard">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-size: 13px; font-weight: 600; color: #1e293b;">🪪 身份证正反面取景裁剪</span>
@@ -192,7 +191,6 @@
           </div>
 
           <div class="idcard-grid">
-            <!-- 正面视口 -->
             <div class="idcard-item">
               <div class="idcard-viewport" id="frontBox" onclick="document.getElementById('idFront').click()">
                 <input type="file" id="idFront" accept="image/*" onchange="handleCardUpload(this, 'frontBox', 'frontMeta', 'frontImg')">
@@ -206,7 +204,6 @@
               <input type="range" class="crop-slider" id="fRange" min="0.8" max="2.0" step="0.05" value="1.0" oninput="updateCrop(this.value, 'fVal', 'frontImg')">
             </div>
 
-            <!-- 反面视口 -->
             <div class="idcard-item">
               <div class="idcard-viewport" id="backBox" onclick="document.getElementById('idBack').click()">
                 <input type="file" id="idBack" accept="image/*" onchange="handleCardUpload(this, 'backBox', 'backMeta', 'backImg')">
@@ -454,6 +451,7 @@
         const delBtn = document.createElement('button');
         delBtn.className = 'btn-del';
         delBtn.innerHTML = '❌';
+        delBtn.title = '删除此文件';
         delBtn.onclick = (e) => {
           e.stopPropagation();
           uploadedFiles.splice(index, 1);
@@ -511,7 +509,6 @@
       if (mobBox) mobBox.innerHTML = msg;
     }
 
-    // 真正视口放大拉近（截去窗口外的桌面多余杂物）
     function updateCrop(val, textId, imgId) {
       const floatVal = parseFloat(val);
       document.getElementById(textId).innerText = floatVal.toFixed(2) + 'x';
