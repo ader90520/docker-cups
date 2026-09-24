@@ -21,23 +21,18 @@
       width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; background: #fff;
     }
 
-    /* Tab 严格物理隔离，防止穿透串屏 */
     .tab-pane { display: none !important; }
     .tab-pane.active { display: block !important; }
 
-    /* 顶部 Tabs */
     .nav-tabs { display: flex; background: #e2e8f0; border-radius: 10px; padding: 3px; gap: 4px; margin-bottom: 12px; }
     .nav-tab { flex: 1; text-align: center; padding: 9px 0; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer; color: #64748b; }
     .nav-tab.active { background: #fff; color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 
-    /* 卡片设计 */
     .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
     .card-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; color: #1e293b; }
 
-    /* 上传框 */
     .upload-zone { border: 2px dashed #93c5fd; border-radius: 10px; padding: 22px 12px; text-align: center; cursor: pointer; background: #eff6ff; }
     
-    /* 上传文件列表管理 */
     .file-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
     .file-item {
       display: flex; align-items: center; justify-content: space-between; padding: 8px 10px;
@@ -46,9 +41,7 @@
     .file-item.selected { background: #e0f2fe; border-color: #7dd3fc; }
     .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 6px; color: #0284c7; }
     .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
-    .btn-del:hover { background: #fee2e2; }
 
-    /* 身份证正反独立卡片 */
     .idcard-grid { display: flex; gap: 10px; margin-bottom: 10px; }
     .idcard-item { flex: 1; display: flex; flex-direction: column; gap: 8px; }
     .idcard-box {
@@ -60,7 +53,6 @@
     .img-meta { font-size: 10px; color: #0284c7; background: #e0f2fe; padding: 2px 4px; border-radius: 4px; text-align: center; }
     .crop-slider { width: 100%; accent-color: var(--primary); cursor: pointer; }
 
-    /* 表单与按钮 */
     .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
     .form-col { flex: 1; }
     .form-label { font-size: 12px; color: #64748b; margin-bottom: 5px; display: block; }
@@ -70,15 +62,13 @@
 
     .btn-submit { background: var(--primary); color: #fff; border: none; padding: 13px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
 
-    /* 预览容器 */
     .preview-box { border: 1px solid #e2e8f0; height: 290px; background: #fafafa; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #94a3b8; overflow: hidden; position: relative; }
     .preview-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
     .preview-box embed { width: 100%; height: 100%; }
 
-    /* 状态栏条 (置于预览窗口上方) */
     .status-bar-top { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 8px 12px; border-radius: 8px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .status-bar-top.has-error { background: #fef2f2; border-color: #fecaca; color: #dc2626; font-weight: bold; }
 
-    /* 响应式样式 */
     @media (min-width: 769px) {
       .nav-tab.active { color: #fff; background: var(--primary); }
       .pc-layout { display: flex; gap: 15px; }
@@ -93,7 +83,6 @@
       .btn-submit { background: var(--m-primary); }
     }
 
-    /* 抽屉式管理区域 */
     .drawer { display: none; margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; }
   </style>
 </head>
@@ -112,7 +101,7 @@
       </div>
     </div>
 
-    <!-- 打印机选择区 (带二级抽屉管理打印机) -->
+    <!-- 打印机选择区 -->
     <div class="card" style="padding: 12px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
         <span class="form-label" style="margin:0;">选择目标打印机</span>
@@ -122,7 +111,6 @@
         <option value="">正在检测打印机...</option>
       </select>
 
-      <!-- 二级抽屉：添加新打印机与驱动管理 -->
       <div class="drawer" id="adminDrawer">
         <div style="font-weight:600; font-size:13px; margin-bottom:8px; color:#0f172a;">🛠️ 打印机驱动配置</div>
         <div style="margin-bottom:8px;">
@@ -133,7 +121,7 @@
           </div>
         </div>
         <div style="margin-bottom:8px;">
-          <span class="form-label">2. 打印机名称 (英文字母/数字)</span>
+          <span class="form-label">2. 打印机名称</span>
           <input type="text" id="newPrinterName" placeholder="例如: HP_LaserJet_1020">
         </div>
         <div style="margin-bottom:10px;">
@@ -156,8 +144,8 @@
       <div class="nav-tab" onclick="switchTab('mail', this)">📧 云邮件打印</div>
     </div>
 
-    <!-- 手机端专属：预览及状态展示位 -->
-    <div class="mobile-only" style="margin-bottom: 12px;">
+    <!-- 手机端预览区 (云邮件下隐藏) -->
+    <div class="mobile-only" id="mobPreviewArea" style="margin-bottom: 12px;">
       <div class="status-bar-top" id="mobStatusTop">
         <span id="mobStatusText">🖨️ 打印机: 检测中...</span>
       </div>
@@ -167,8 +155,6 @@
     </div>
 
     <div class="pc-layout">
-      
-      <!-- 主工作区 -->
       <div class="pc-left">
 
         <!-- 1. 标准打印面板 -->
@@ -193,7 +179,7 @@
           <div class="file-list" id="invoiceFileList"></div>
         </div>
 
-        <!-- 3. 身份证打印面板 (带一键清空与独立裁剪调节) -->
+        <!-- 3. 身份证打印面板 -->
         <div class="card tab-pane" id="pane-idcard">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-size: 13px; font-weight: 600; color: #1e293b;">🪪 身份证正反面采集</span>
@@ -203,7 +189,6 @@
           </div>
 
           <div class="idcard-grid">
-            <!-- 正面 -->
             <div class="idcard-item">
               <div class="idcard-box" id="frontBox" onclick="document.getElementById('idFront').click()">
                 <input type="file" id="idFront" accept="image/*" onchange="handleCardUpload(this, 'frontBox', 'frontMeta', 'frontImg')">
@@ -217,7 +202,6 @@
               <input type="range" class="crop-slider" id="fRange" min="0.6" max="1.4" step="0.05" value="1.0" oninput="updateCrop(this.value, 'fVal', 'frontImg')">
             </div>
 
-            <!-- 反面 -->
             <div class="idcard-item">
               <div class="idcard-box" id="backBox" onclick="document.getElementById('idBack').click()">
                 <input type="file" id="idBack" accept="image/*" onchange="handleCardUpload(this, 'backBox', 'backMeta', 'backImg')">
@@ -233,7 +217,7 @@
           </div>
         </div>
 
-        <!-- 4. 云邮件打印面板 -->
+        <!-- 4. 云邮件打印面板 (带清晰的 PushPlus 配置) -->
         <div class="card tab-pane" id="pane-mail">
           <div class="card-title">📧 云邮箱配置与防误打</div>
           <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -270,7 +254,16 @@
               <span class="form-label" style="color:#0284c7; font-weight:600;">🛡️ 发件人白名单</span>
               <input type="text" id="mailWhitelist" placeholder="如: my@qq.com, work@163.com">
             </div>
-            <button class="btn-submit" style="background:#0284c7;" onclick="saveMail()">💾 保存邮箱配置</button>
+            
+            <div style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 4px;">
+              <span class="form-label" style="color:#16a34a; font-weight:700;">📲 PushPlus 微信推送 Token</span>
+              <input type="text" id="pushplusToken" placeholder="输入 pushplus.plus 提供的 Token">
+              <div style="font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.4;">
+                💡 打印机真正出纸完成后，将自动通过微信公众号推送“出纸成功”通知。
+              </div>
+            </div>
+
+            <button class="btn-submit" style="background:#0284c7; margin-top: 8px;" onclick="saveMail()">💾 保存云邮件与微信推送设置</button>
           </div>
         </div>
 
@@ -340,8 +333,8 @@
 
       </div>
 
-      <!-- PC 右侧专属：排版预览与状态 -->
-      <div class="pc-right pc-only">
+      <!-- PC 右侧专属预览 (云邮件下隐藏) -->
+      <div class="pc-right pc-only" id="pcPreviewArea">
         <div class="status-bar-top" id="pcStatusTop">
           <span id="pcStatusText">🖨️ 打印机: 检测中...</span>
           <button onclick="fetchDevices()" style="background:none; border:none; color:#166534; cursor:pointer; font-weight:600;">刷新</button>
@@ -369,7 +362,6 @@
     let curOri = 'portrait';
     let cropFrontVal = 1.0;
     let cropBackVal = 1.0;
-
     let uploadedFiles = [];
 
     window.onload = function() {
@@ -395,7 +387,18 @@
       document.getElementById('pane-' + tab).classList.add('active');
 
       const cardParams = document.getElementById('cardParams');
-      cardParams.style.display = (tab === 'mail') ? 'none' : 'block';
+      const mobPreview = document.getElementById('mobPreviewArea');
+      const pcPreview = document.getElementById('pcPreviewArea');
+
+      if (tab === 'mail') {
+        cardParams.style.display = 'none';
+        if (mobPreview) mobPreview.style.display = 'none';
+        if (pcPreview) pcPreview.style.display = 'none';
+      } else {
+        cardParams.style.display = 'block';
+        if (mobPreview) mobPreview.style.display = 'block';
+        if (pcPreview) pcPreview.style.display = 'block';
+      }
 
       uploadedFiles = [];
       renderFileList();
@@ -443,7 +446,6 @@
         const delBtn = document.createElement('button');
         delBtn.className = 'btn-del';
         delBtn.innerHTML = '❌';
-        delBtn.title = '删除此文件';
         delBtn.onclick = (e) => {
           e.stopPropagation();
           uploadedFiles.splice(index, 1);
@@ -483,7 +485,7 @@
         } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
           contentHtml = `<img src="${url}">`;
         } else {
-          contentHtml = `<div style="text-align:center;">📄<br>${file.name}<br>(此格式暂不支持内嵌预览)</div>`;
+          contentHtml = `<div style="text-align:center;">📄<br>${file.name}<br>(暂不支持直接内嵌预览)</div>`;
         }
 
         if (pcBox) pcBox.innerHTML = contentHtml;
@@ -547,7 +549,6 @@
       }
     }
 
-    // 渲染身份证 A4 实时双面合成效果
     function renderIdCardA4Preview() {
       if (curTab !== 'idcard') return;
       const fImg = document.getElementById('frontImg');
@@ -560,13 +561,15 @@
         return;
       }
 
+      const getCardStyle = (factor) => `width:100%; height:100%; object-fit:cover; transform:scale(${1.0/factor});`;
+
       const html = `
-        <div style="display:flex; flex-direction:column; gap:12px; align-items:center; width:100%; height:100%; justify-content:center; padding:10px;">
-          <div style="border:1px dashed #0284c7; width:62%; height:42%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
-            ${fImg ? `<img src="${fImg.src}" style="width:100\%; height:100\%; object-fit:cover; transform:scale(${1.0/cropFrontVal});">` : '<span style="color:#94a3b8;font-size:11px;">正面未上传</span>'}
+        <div style="display:flex; flex-direction:column; gap:10px; align-items:center; width:100%; height:100%; justify-content:center; padding:10px;">
+          <div style="border:1px dashed #0284c7; width:65%; height:44%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
+            ${fImg ? `<img src="${fImg.src}" style="${getCardStyle(cropFrontVal)}">` : '<span style="color:#94a3b8;font-size:11px;">正面待上传</span>'}
           </div>
-          <div style="border:1px dashed #0284c7; width:62%; height:42%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
-            ${bImg ? `<img src="${bImg.src}" style="width:100\%; height:100\%; object-fit:cover; transform:scale(${1.0/cropBackVal});">` : '<span style="color:#94a3b8;font-size:11px;">反面未上传</span>'}
+          <div style="border:1px dashed #0284c7; width:65%; height:44%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
+            ${bImg ? `<img src="${bImg.src}" style="${getCardStyle(cropBackVal)}">` : '<span style="color:#94a3b8;font-size:11px;">反面待上传</span>'}
           </div>
         </div>
       `;
@@ -574,7 +577,6 @@
       if (mobBox) mobBox.innerHTML = html;
     }
 
-    // 一键重置清空身份证
     function resetIdCard() {
       document.getElementById('idFront').value = '';
       document.getElementById('idBack').value = '';
@@ -611,27 +613,44 @@
           const list = res.printers || (res.data && res.data.printers) || [];
           if (list.length === 0) {
             sel.innerHTML = '<option value="">未发现可用打印机 (点击右上角添加)</option>';
-            updateStatusText("未连接打印机");
+            updateStatusText("未连接打印机", false);
             return;
           }
           let currentStatus = "";
+          let hasError = false;
           list.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id || p.name;
-            opt.innerText = `${p.name} (${p.status || '空闲'})`;
+            opt.innerText = `${p.name} [${p.status || '就绪'}]`;
             if (p.is_default) opt.selected = true;
             sel.appendChild(opt);
             currentStatus = `🖨️ ${p.name} [${p.status || '就绪'}]`;
+            if (p.has_error) hasError = true;
           });
-          updateStatusText(currentStatus);
+          updateStatusText(currentStatus, hasError);
+        })
+        .catch(() => {
+          sel.innerHTML = '<option value="">检测服务超时</option>';
+          updateStatusText("探测服务未响应", true);
         });
     }
 
-    function updateStatusText(text) {
+    function updateStatusText(text, isError) {
       const mob = document.getElementById('mobStatusText');
       const pc = document.getElementById('pcStatusText');
+      const mobTop = document.getElementById('mobStatusTop');
+      const pcTop = document.getElementById('pcStatusTop');
+
       if (mob) mob.innerText = text;
       if (pc) pc.innerText = text;
+
+      if (isError) {
+        if (mobTop) mobTop.classList.add('has-error');
+        if (pcTop) pcTop.classList.add('has-error');
+      } else {
+        if (mobTop) mobTop.classList.remove('has-error');
+        if (pcTop) pcTop.classList.remove('has-error');
+      }
     }
 
     function submitPrint() {
@@ -740,20 +759,30 @@
     }
 
     function loadMailConfig() {
-      fetch('/api/mail_config').then(r=>r.json()).then(res=>{
-        if (res.success && res.data) {
-          document.getElementById('mailEnable').value = res.data.enable ? "true" : "false";
-          document.getElementById('mailServer').value = res.data.server || "";
-          document.getElementById('mailPort').value = res.data.port || 993;
-          document.getElementById('mailUser').value = res.data.user || "";
-          document.getElementById('mailPwd').value = res.data.password || "";
-          document.getElementById('mailKeyword').value = res.data.keyword || "";
-          document.getElementById('mailWhitelist').value = res.data.whitelist || "";
-        }
-      });
+      fetch('/api/mail_config')
+        .then(r => r.json())
+        .then(res => {
+          if (res.success && res.data) {
+            const d = res.data;
+            document.getElementById('mailEnable').value = d.enable ? "true" : "false";
+            document.getElementById('mailServer').value = d.server || "";
+            document.getElementById('mailPort').value = d.port || 993;
+            document.getElementById('mailUser').value = d.user || "";
+            document.getElementById('mailPwd').value = d.password || "";
+            document.getElementById('mailKeyword').value = d.keyword || "";
+            document.getElementById('mailWhitelist').value = d.whitelist || "";
+            // 安全读取 PushPlus Token
+            const tokenInput = document.getElementById('pushplusToken');
+            if (tokenInput) {
+              tokenInput.value = d.pushplus_token || "";
+            }
+          }
+        })
+        .catch(() => {});
     }
 
     function saveMail() {
+      const tokenInput = document.getElementById('pushplusToken');
       const cfg = {
         enable: document.getElementById('mailEnable').value === "true",
         server: document.getElementById('mailServer').value.trim(),
@@ -762,6 +791,7 @@
         password: document.getElementById('mailPwd').value.trim(),
         keyword: document.getElementById('mailKeyword').value.trim(),
         whitelist: document.getElementById('mailWhitelist').value.trim(),
+        pushplus_token: tokenInput ? tokenInput.value.trim() : "",
         default_printer: document.getElementById('printerSelect').value
       };
       fetch('/api/mail_config', {
@@ -769,7 +799,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg)
       }).then(r=>r.json()).then(res=>{
-        alert(res.success ? "邮箱防骚扰设置已生效！" : res.msg);
+        alert(res.success ? "云邮件及 PushPlus 微信通知设置已保存生效！" : res.msg);
       });
     }
   </script>
