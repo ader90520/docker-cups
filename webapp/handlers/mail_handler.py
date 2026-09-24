@@ -273,6 +273,7 @@ class MultiMailWorker(threading.Thread):
         if not printer:
             printer = self.get_fallback_printer()
 
+        # 确保打印机处于接收并就绪状态（解除脱机与暂停）
         if printer:
             env = os.environ.copy()
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
@@ -353,11 +354,12 @@ class MultiMailWorker(threading.Thread):
 
                         if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
                             conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
-                            print(f"[MailWorker] 正在执行全能王 v5 细节保全线稿锐化算法...")
+                            print(f"[MailWorker] 正在执行全能王细节保全线稿锐化算法...")
                             if process_camscanner_a4(raw_save_path, conv_path):
                                 ready_file = conv_path
                                 print(f"[MailWorker] ✔ 图像处理完成，准备交由 CUPS 打印")
 
+                        # 显式传递标准 A4 与适合纸张参数
                         cmd = ["lp"]
                         if printer:
                             cmd.extend(["-d", printer])
