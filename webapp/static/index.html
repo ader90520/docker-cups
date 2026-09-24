@@ -15,7 +15,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background-color: var(--bg); color: var(--text); padding-bottom: 40px; }
 
-    .container { max-width: 1060px; margin: 0 auto; padding: 12px; }
+    .container { max-width: 1080px; margin: 0 auto; padding: 12px; }
     select, input[type="text"], input[type="number"], input[type="password"] {
       width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; background: #fff;
     }
@@ -30,9 +30,9 @@
     .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
     .card-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; color: #1e293b; }
 
-    /* 拖拽上传热区：强力防拦截与防抖动 */
+    /* 上传热区 */
     .upload-zone {
-      border: 2px dashed #93c5fd; border-radius: 10px; padding: 28px 12px; text-align: center; cursor: pointer; background: #eff6ff;
+      border: 2px dashed #93c5fd; border-radius: 10px; padding: 26px 12px; text-align: center; cursor: pointer; background: #eff6ff;
       transition: all 0.2s ease-in-out; position: relative; user-select: none;
     }
     .upload-zone * { pointer-events: none !important; }
@@ -50,6 +50,7 @@
     .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 6px; color: #0284c7; }
     .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
 
+    /* 身份证取景视口 */
     .idcard-grid { display: flex; gap: 10px; margin-bottom: 10px; }
     .idcard-item { flex: 1; display: flex; flex-direction: column; gap: 6px; }
     .idcard-viewport {
@@ -77,9 +78,34 @@
 
     .btn-submit { background: var(--primary); color: #fff; border: none; padding: 13px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
 
-    .preview-box { border: 1px solid #e2e8f0; height: 290px; background: #fafafa; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #94a3b8; overflow: hidden; position: relative; }
-    .preview-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
-    .preview-box embed { width: 100%; height: 100%; }
+    /* 增强型预览视口与缩放控制工具栏 */
+    .preview-wrapper { position: relative; border: 1px solid #e2e8f0; border-radius: 8px; background: #f1f5f9; overflow: hidden; }
+    .preview-toolbar {
+      position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; gap: 4px; background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(4px); padding: 4px 6px; border-radius: 6px; align-items: center; color: #fff; font-size: 12px;
+    }
+    .preview-tool-btn {
+      background: rgba(255, 255, 255, 0.2); border: none; color: #fff; border-radius: 4px; width: 24px; height: 24px;
+      display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; font-weight: bold;
+    }
+    .preview-tool-btn:hover { background: rgba(255, 255, 255, 0.4); }
+    .preview-scale-text { min-width: 44px; text-align: center; font-size: 11px; font-weight: 600; }
+
+    .preview-box { height: 320px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #94a3b8; overflow: auto; position: relative; }
+    .preview-inner { transition: transform 0.15s ease-out; transform-origin: center center; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+    .preview-inner img { max-width: 95%; max-height: 95%; object-fit: contain; }
+    .preview-inner embed { width: 100%; height: 100%; }
+
+    /* 仿真 A4 纸张排版容器（身份证专属合并展示） */
+    .a4-canvas-sheet {
+      width: 220px; aspect-ratio: 1 / 1.414; background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 4px;
+      display: flex; flex-direction: column; align-items: center; justify-content: space-evenly; padding: 12px;
+    }
+    .a4-card-slot {
+      width: 100%; aspect-ratio: 85.6 / 54; border: 1px dashed #0284c7; border-radius: 4px; background: #f8fafc;
+      overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center;
+    }
+    .a4-card-slot img { width: 100%; height: 100%; object-fit: cover; }
 
     .status-bar-top { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 8px 12px; border-radius: 8px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
     .status-bar-top.has-error { background: #fef2f2; border-color: #fecaca; color: #dc2626; font-weight: bold; }
@@ -103,7 +129,7 @@
 </head>
 <body>
 
-  <!-- 隐藏的文件选择器（移出点击热区，避免与拖放事件互相死锁） -->
+  <!-- 隐藏的文件选择器（移出热区，防 Native 事件冒泡死锁） -->
   <input type="file" id="fileNormal" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none;" onchange="handleMultiFiles(this.files)">
   <input type="file" id="fileInvoice" multiple accept="image/*,.pdf,.ofd" style="display:none;" onchange="handleMultiFiles(this.files)">
   <input type="file" id="idFront" accept="image/*" style="display:none;" onchange="handleCardUpload(this.files[0], 'frontBox', 'frontMeta', 'frontImg')">
@@ -170,8 +196,16 @@
       <div class="status-bar-top" id="mobStatusTop">
         <span id="mobStatusText">🖨️ 打印机: 检测中...</span>
       </div>
-      <div class="preview-box" id="mobPreviewBox" style="height: 200px;">
-        选择文件后在此预览
+      <div class="preview-wrapper">
+        <div class="preview-toolbar">
+          <button class="preview-tool-btn" onclick="adjustZoom(-0.25)">-</button>
+          <span class="preview-scale-text" id="mobZoomText">100%</span>
+          <button class="preview-tool-btn" onclick="adjustZoom(0.25)">+</button>
+          <button class="preview-tool-btn" onclick="resetZoom()" title="重置">↺</button>
+        </div>
+        <div class="preview-box" id="mobPreviewBox" style="height: 220px;">
+          <div class="preview-inner" id="mobPreviewInner">选择文件后在此预览</div>
+        </div>
       </div>
     </div>
 
@@ -185,6 +219,10 @@
             <div style="font-weight: 600; font-size: 14px; color:#1e293b;">点击选择 或 <b>直接将电脑/微信文件拖到这里</b></div>
             <div style="font-size: 12px; color:#64748b; margin-top: 4px;">支持 PDF / 图片 / Office 文档 (支持 Ctrl+V 粘贴截图)</div>
           </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <span style="font-size:12px; color:#64748b;" id="normalCountText">待打印队列 (0)</span>
+            <button onclick="clearAllFiles()" style="background:#fee2e2; border:1px solid #fecaca; color:#ef4444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">🗑️ 清空列表</button>
+          </div>
           <div class="file-list" id="normalFileList"></div>
         </div>
 
@@ -194,6 +232,10 @@
             <div style="font-size: 32px; margin-bottom: 6px;">🧾</div>
             <div style="font-weight: 600; font-size: 14px; color:#1e293b;">点击选择 或 <b>直接将电子发票拖到这里</b></div>
             <div style="font-size: 12px; color:#64748b; margin-top: 4px;">支持 PDF / OFD / 发票图片 (支持 Ctrl+V 粘贴)</div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <span style="font-size:12px; color:#64748b;" id="invoiceCountText">待打印发票 (0)</span>
+            <button onclick="clearAllFiles()" style="background:#fee2e2; border:1px solid #fecaca; color:#ef4444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">🗑️ 清空列表</button>
           </div>
           <div class="file-list" id="invoiceFileList"></div>
         </div>
@@ -233,7 +275,7 @@
             </div>
           </div>
           <div style="font-size:11px; color:#0284c7; background:#f0f9ff; padding:6px 10px; border-radius:6px;">
-            💡 <b>物理视口说明</b>：边框内即为最终打印出来的完整身份证。拖动滑块拉近镜头，窗口之外的多余桌面杂边将被彻底切除！
+            💡 <b>右侧预览说明</b>：系统已将正反两面自动合成到一张标准的单页 A4 纸张居中排版，打印即是标准 1:1 复印件！
           </div>
         </div>
 
@@ -361,9 +403,22 @@
         </div>
 
         <div class="card">
-          <div class="card-title">👁️ 排版视口预览</div>
-          <div class="preview-box" id="pcPreviewBox">
-            点击或拖拽文件后在此预览
+          <div class="card-title">
+            <span>👁️ 排版视口预览</span>
+            <span style="font-size:11px; color:#94a3b8; font-weight:normal;">(滚轮或按钮可缩放)</span>
+          </div>
+          <div class="preview-wrapper">
+            <div class="preview-toolbar">
+              <button class="preview-tool-btn" onclick="adjustZoom(-0.25)" title="缩小">-</button>
+              <span class="preview-scale-text" id="pcZoomText">100%</span>
+              <button class="preview-tool-btn" onclick="adjustZoom(0.25)" title="放大">+</button>
+              <button class="preview-tool-btn" onclick="resetZoom()" title="重置">↺</button>
+            </div>
+            <div class="preview-box" id="pcPreviewBox" onwheel="handleWheelZoom(event)">
+              <div class="preview-inner" id="pcPreviewInner">
+                点击或拖拽文件后在此预览
+              </div>
+            </div>
           </div>
         </div>
 
@@ -383,10 +438,40 @@
     let cropFrontVal = 1.0;
     let cropBackVal = 1.0;
     let uploadedFiles = [];
+    let currentZoom = 1.0;
+
+    // ==================== 预览窗口放大 / 缩小引擎 ====================
+    function setZoom(scale) {
+      currentZoom = Math.min(Math.max(scale, 0.4), 3.0);
+      const text = Math.round(currentZoom * 100) + '%';
+      const pcText = document.getElementById('pcZoomText');
+      const mobText = document.getElementById('mobZoomText');
+      if (pcText) pcText.innerText = text;
+      if (mobText) mobText.innerText = text;
+
+      const pcInner = document.getElementById('pcPreviewInner');
+      const mobInner = document.getElementById('mobPreviewInner');
+      if (pcInner) pcInner.style.transform = `scale(${currentZoom})`;
+      if (mobInner) mobInner.style.transform = `scale(${currentZoom})`;
+    }
+
+    function adjustZoom(delta) {
+      setZoom(currentZoom + delta);
+    }
+
+    function resetZoom() {
+      setZoom(1.0);
+    }
+
+    function handleWheelZoom(e) {
+      if (!uploadedFiles.length && curTab !== 'idcard') return;
+      e.preventDefault();
+      const delta = (e.deltaY < 0) ? 0.15 : -0.15;
+      adjustZoom(delta);
+    }
 
     // ==================== 工业级防阻断拖拽驱动 ====================
     function setupDragAndDrop() {
-      // 1. 全局阻止浏览器默认将拖入的文件作为网页打开
       window.addEventListener("dragenter", function(e) { e.preventDefault(); }, false);
       window.addEventListener("dragover", function(e) { 
         e.preventDefault(); 
@@ -395,21 +480,18 @@
       window.addEventListener("dragleave", function(e) { e.preventDefault(); }, false);
       window.addEventListener("drop", function(e) { e.preventDefault(); }, false);
 
-      // 2. 绑定普通打印区 (点击 + 拖入)
       const zoneNormal = document.getElementById("zoneNormal");
       if (zoneNormal) {
         zoneNormal.onclick = function() { document.getElementById("fileNormal").click(); };
         bindDropBox(zoneNormal, function(files) { handleMultiFiles(files); });
       }
 
-      // 3. 绑定发票打印区 (点击 + 拖入)
       const zoneInvoice = document.getElementById("zoneInvoice");
       if (zoneInvoice) {
         zoneInvoice.onclick = function() { document.getElementById("fileInvoice").click(); };
         bindDropBox(zoneInvoice, function(files) { handleMultiFiles(files); });
       }
 
-      // 4. 绑定身份证正面与反面 (点击 + 拖入)
       const frontBox = document.getElementById("frontBox");
       if (frontBox) {
         frontBox.onclick = function() { document.getElementById("idFront").click(); };
@@ -426,7 +508,7 @@
         });
       }
 
-      // 5. 微信聊天复制 -> 网页一键粘贴 (Ctrl + V)
+      // 微信聊天复制 -> 网页一键粘贴 (Ctrl + V)
       window.addEventListener("paste", function(e) {
         if (e.clipboardData && e.clipboardData.files.length > 0) {
           const files = e.clipboardData.files;
@@ -446,27 +528,23 @@
 
     function bindDropBox(elem, callback) {
       elem.addEventListener("dragenter", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         elem.classList.add("dragover");
       }, false);
 
       elem.addEventListener("dragover", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         if (e.dataTransfer) { e.dataTransfer.dropEffect = "copy"; }
         elem.classList.add("dragover");
       }, false);
 
       elem.addEventListener("dragleave", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         elem.classList.remove("dragover");
       }, false);
 
       elem.addEventListener("drop", function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         elem.classList.remove("dragover");
 
         let files = [];
@@ -555,11 +633,21 @@
       if (fi) fi.value = "";
     }
 
+    function clearAllFiles() {
+      uploadedFiles = [];
+      renderFileList();
+      clearPreview();
+    }
+
     function renderFileList() {
-      const containerId = (curTab === "invoice") ? "invoiceFileList" : "normalFileList";
+      const isInvoice = (curTab === "invoice");
+      const containerId = isInvoice ? "invoiceFileList" : "normalFileList";
+      const countId = isInvoice ? "invoiceCountText" : "normalCountText";
       const box = document.getElementById(containerId);
+      const countEl = document.getElementById(countId);
       if (!box) return;
 
+      if (countEl) countEl.innerText = `待打印队列 (${uploadedFiles.length})`;
       box.innerHTML = "";
       uploadedFiles.forEach((file, index) => {
         const item = document.createElement("div");
@@ -601,9 +689,10 @@
       if (!file) return;
 
       const ext = file.name.split(".").pop().toLowerCase();
-      const pcBox = document.getElementById("pcPreviewBox");
-      const mobBox = document.getElementById("mobPreviewBox");
+      const pcInner = document.getElementById("pcPreviewInner");
+      const mobInner = document.getElementById("mobPreviewInner");
 
+      resetZoom();
       const reader = new FileReader();
       reader.onload = e => {
         const url = e.target.result;
@@ -614,22 +703,23 @@
         } else if (["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext)) {
           contentHtml = `<img src="${url}">`;
         } else {
-          contentHtml = `<div style="text-align:center;">📄<br>${file.name}<br>(暂不支持直接内嵌预览)</div>`;
+          contentHtml = `<div style="text-align:center;">📄<br>${file.name}<br>(此格式暂不支持内嵌渲染预览)</div>`;
         }
 
-        if (pcBox) pcBox.innerHTML = contentHtml;
-        if (mobBox) mobBox.innerHTML = contentHtml;
+        if (pcInner) pcInner.innerHTML = contentHtml;
+        if (mobInner) mobInner.innerHTML = contentHtml;
       };
 
       reader.readAsDataURL(file);
     }
 
     function clearPreview() {
+      resetZoom();
       const msg = "选择或拖拽文件后在此预览 (支持多图与 PDF)";
-      const pcBox = document.getElementById("pcPreviewBox");
-      const mobBox = document.getElementById("mobPreviewBox");
-      if (pcBox) pcBox.innerHTML = msg;
-      if (mobBox) mobBox.innerHTML = msg;
+      const pcInner = document.getElementById("pcPreviewInner");
+      const mobInner = document.getElementById("mobPreviewInner");
+      if (pcInner) pcInner.innerHTML = msg;
+      if (mobInner) mobInner.innerHTML = msg;
     }
 
     function updateCrop(val, textId, imgId) {
@@ -678,32 +768,35 @@
       r.readAsDataURL(file);
     }
 
+    // ==================== 身份证正反面合成在同一张标准 A4 纸显示 ====================
     function renderIdCardA4Preview() {
       if (curTab !== "idcard") return;
       const fImg = document.getElementById("frontImg");
       const bImg = document.getElementById("backImg");
-      const pcBox = document.getElementById("pcPreviewBox");
-      const mobBox = document.getElementById("mobPreviewBox");
+      const pcInner = document.getElementById("pcPreviewInner");
+      const mobInner = document.getElementById("mobPreviewInner");
 
       if (!fImg && !bImg) {
         clearPreview();
         return;
       }
 
-      const getCardStyle = (factor) => `width:100%; height:100%; object-fit:cover; transform:scale(${factor});`;
+      const getStyle = (scale) => `width:100%; height:100%; object-fit:cover; transform:scale(${scale});`;
 
       const html = `
-        <div style="display:flex; flex-direction:column; gap:10px; align-items:center; width:100%; height:100%; justify-content:center; padding:10px;">
-          <div style="border:1px dashed #0284c7; width:65%; height:44%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
-            ${fImg ? `<img src="${fImg.src}" style="${getCardStyle(cropFrontVal)}">` : '<span style="color:#94a3b8;font-size:11px;">正面待上传</span>'}
+        <div class="a4-canvas-sheet">
+          <div style="font-size:10px; color:#94a3b8; width:100%; text-align:center;">标准 A4 排版视口 (1:1 实物打印效果)</div>
+          <div class="a4-card-slot">
+            ${fImg ? `<img src="${fImg.src}" style="${getStyle(cropFrontVal)}">` : '<span style="color:#94a3b8;font-size:11px;">国徽面（正面）</span>'}
           </div>
-          <div style="border:1px dashed #0284c7; width:65%; height:44%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; background:#fff;">
-            ${bImg ? `<img src="${bImg.src}" style="${getCardStyle(cropBackVal)}">` : '<span style="color:#94a3b8;font-size:11px;">反面待上传</span>'}
+          <div class="a4-card-slot">
+            ${bImg ? `<img src="${bImg.src}" style="${getStyle(cropBackVal)}">` : '<span style="color:#94a3b8;font-size:11px;">人像面（反面）</span>'}
           </div>
         </div>
       `;
-      if (pcBox) pcBox.innerHTML = html;
-      if (mobBox) mobBox.innerHTML = html;
+
+      if (pcInner) pcInner.innerHTML = html;
+      if (mobInner) mobInner.innerHTML = html;
     }
 
     function resetIdCard() {
@@ -817,9 +910,15 @@
         .then(r => r.json())
         .then(d => {
           if (d.success) {
-            alert("打印任务已派发！" + (d.msg || ""));
+            alert("打印任务已成功派发！" + (d.msg || ""));
             document.getElementById("statusBox").innerText = "✔ " + (d.job || "任务派发完成");
             document.getElementById("printHistory").innerText = `${new Date().toLocaleTimeString()} - ${printer} 打印完成`;
+            
+            // 自动清空已打印成功的待选列表，杜绝重复手动删除
+            clearAllFiles();
+            if (curTab === "idcard") {
+              resetIdCard();
+            }
           } else {
             alert("打印失败: " + d.msg);
             document.getElementById("statusBox").innerText = "✖ " + d.msg;
