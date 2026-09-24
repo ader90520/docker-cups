@@ -51,7 +51,6 @@ BrowseLocalProtocols dnssd
 DefaultAuthType Basic
 WebInterface Yes
 ServerAlias *
-DefaultLanguage zh_CN
 
 DefaultEncryption Never
 
@@ -119,18 +118,20 @@ DefaultEncryption Never
 EOF
 
 # ==================== 彻底修复 631 二级页面空白 ====================
-echo ">>> [Patch] 补齐 CUPS 模板并修复二级页面空白..."
+echo ">>> [Patch] 补齐 CUPS 原生模板，彻底消除二级页面空白..."
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
-# 优先拷贝原生模板作为兜底，防止缺少 admin.tmpl、printers.tmpl 导致空白
-cp -n /usr/share/cups/templates/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-cp -n /usr/share/cups/templates/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true
 
-# 覆盖自定义中文模板
+# 确保原生模板全部作为底座拷入中文目录，避免缺失 admin.tmpl、printers.tmpl 导致白屏
+for tmpl in /usr/share/cups/templates/*.tmpl; do
+    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null && cp -f "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
+done
+
+# 如果有自定义中文模板，增量覆盖
 if [ -d /tmp/zh_templates ]; then
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
 fi
-chmod -R 755 /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh /usr/share/cups/templates 2>/dev/null || true
+chmod -R 755 /usr/share/cups/templates
 
 # 覆盖主页并保障权限
 if [ -f /tmp/index.html ]; then
@@ -138,15 +139,13 @@ if [ -f /tmp/index.html ]; then
     chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
-# 优化 631 布局与 8088 动态跳转
-for tmpl in $(find /usr/share/cups/templates -name "header.tmpl" 2>/dev/null); do
-    sed -i 's/max-width:[^;]*;//g' "$tmpl" 2>/dev/null || true
-    sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$tmpl" 2>/dev/null || true
-    sed -i 's|http://{server_name}:8088|javascript:void(0);|g' "$tmpl" 2>/dev/null || true
-
-    if ! grep -q "btn-to-8088" "$tmpl"; then
-        sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:4px 10px;border-radius:4px;text-decoration:none;margin-left:15px;display:inline-block;font-size:12px;vertical-align:middle;} .btn-to-8088:hover{background:#059669;} html,body{height:100%;margin:0;} body{display:flex;flex-direction:column;} .body{flex:1 0 auto;width:100%!important;box-sizing:border-box;padding:15px 20px;} .footer{flex-shrink:0;width:100%;}</style></head>|g' "$tmpl"
-        sed -i 's|<div class="nav">|<div class="nav"><a class="btn-to-8088" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 返回智能打印控制台 (8088)</a>|g' "$tmpl"
+# 安全注入 8088 导航跳转（避免破坏 CGI 解析宏）
+for f in $(find /usr/share/cups/templates -name "header.tmpl"); do
+    sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$f" 2>/dev/null || true
+    sed -i 's|http://{server_name}:8088|javascript:void(0);|g' "$f" 2>/dev/null || true
+    if ! grep -q "btn-to-8088" "$f"; then
+        sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:4px 10px;border-radius:4px;text-decoration:none;margin-left:15px;display:inline-block;font-size:12px;vertical-align:middle;}</style></head>|g' "$f" 2>/dev/null || true
+        sed -i 's|<div class="nav">|<div class="nav"><a class="btn-to-8088" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 8088 控制台</a>|g' "$f" 2>/dev/null || true
     fi
 done
 # ======================================================================
