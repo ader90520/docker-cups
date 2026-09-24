@@ -25,31 +25,36 @@ def process_camscanner_a4(input_path, output_path):
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
 
-            gray = img.convert("L")
-            if max(gray.size) > 2200:
-                gray.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
+            w, h = img.size
+            crop_x = int(w * 0.035)
+            crop_y = int(h * 0.035)
+            img = img.crop((crop_x, crop_y, w - crop_x, h - crop_y))
 
-            bg = gray.filter(ImageFilter.GaussianBlur(radius=25))
-            orig_arr = np.array(gray, dtype=np.float32)
-            bg_arr = np.array(bg, dtype=np.float32) + 1e-5
+            if max(img.size) > 2400:
+                img.thumbnail((2400, 2400), Image.Resampling.BILINEAR)
+
+            rgb_img = img.convert("RGB")
+            bg = rgb_img.filter(ImageFilter.GaussianBlur(radius=30))
+
+            orig_arr = np.array(rgb_img, dtype=np.float32)
+            bg_arr = np.array(bg, dtype=np.float32) + 1e-4
 
             divided = (orig_arr / bg_arr) * 255.0
-            divided = np.clip((divided - 50.0) * (255.0 / (205.0 - 50.0)), 0, 255)
-            clean_arr = divided.astype(np.uint8)
-            clean_arr[clean_arr > 215] = 255
+            clean = np.clip((divided - 70.0) * (255.0 / (200.0 - 70.0)), 0, 255)
+            clean[clean > 215] = 255
 
-            whitened_img = Image.fromarray(clean_arr)
+            whitened_img = Image.fromarray(clean.astype(np.uint8))
             a4_w, a4_h = 2480, 3508
-            canvas = Image.new("L", (a4_w, a4_h), 255)
+            canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
 
-            margin = 80
+            margin = 60
             target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
             ratio = min(target_w / whitened_img.width, target_h / whitened_img.height)
             new_w, new_h = int(whitened_img.width * ratio), int(whitened_img.height * ratio)
 
             resized = whitened_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
-            canvas.convert("RGB").save(output_path, format="JPEG", quality=92)
+            canvas.save(output_path, format="JPEG", quality=95)
             return True
     except Exception as e:
         print(f"[MailCamScanner] 算法异常: {e}")
