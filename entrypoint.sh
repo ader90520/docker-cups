@@ -118,12 +118,19 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# 强制覆盖中文模板并保障权限
+# ==================== 彻底修复 631 二级页面空白 ====================
+echo ">>> [Patch] 补齐 CUPS 模板并修复二级页面空白..."
+mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
+# 优先拷贝原生模板作为兜底，防止缺少 admin.tmpl、printers.tmpl 导致空白
+cp -n /usr/share/cups/templates/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+cp -n /usr/share/cups/templates/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true
+
+# 覆盖自定义中文模板
 if [ -d /tmp/zh_templates ]; then
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
-    chmod -R 755 /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh 2>/dev/null || true
 fi
+chmod -R 755 /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh /usr/share/cups/templates 2>/dev/null || true
 
 # 覆盖主页并保障权限
 if [ -f /tmp/index.html ]; then
@@ -131,8 +138,7 @@ if [ -f /tmp/index.html ]; then
     chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
-# ==================== 修复 631 模板、跳转链接与布局 ====================
-echo ">>> [Patch] 正在优化 631 页面布局与 8088 动态跳转..."
+# 优化 631 布局与 8088 动态跳转
 for tmpl in $(find /usr/share/cups/templates -name "header.tmpl" 2>/dev/null); do
     sed -i 's/max-width:[^;]*;//g' "$tmpl" 2>/dev/null || true
     sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$tmpl" 2>/dev/null || true
