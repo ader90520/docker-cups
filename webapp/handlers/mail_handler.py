@@ -19,7 +19,6 @@ MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
 def detect_skew_angle(gray_img):
-    """300px 极速微步进 Radon 投影纠偏 (耗时 < 0.2s)"""
     try:
         w, h = gray_img.size
         scale = 320.0 / max(w, h)
@@ -39,32 +38,21 @@ def detect_skew_angle(gray_img):
                 max_var = var
                 best_angle = angle
         return best_angle
-    except Exception as e:
-        print(f"[Deskew] 倾斜估算跳过: {e}")
+    except Exception:
         return 0.0
 
 def process_camscanner_a4(input_path, output_path):
-    """
-    全能王 v4 印刷级线稿锐化引擎:
-    1. EXIF 纠正与文字倾斜拉平
-    2. 大窗口局部光照分离 (保护细小叶脉与禽鸟羽纹)
-    3. 红色线稿与迷宫路径深度暗化 (保证红虚线/红折线黑白打印完全清晰)
-    4. USM 高频边缘细节锐化
-    5. A4 居中排版输出
-    """
     try:
         with Image.open(input_path) as raw_img:
             img = ImageOps.exif_transpose(raw_img)
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
 
-            # 倾斜纠正
             gray_deskew = img.convert("L")
             angle = detect_skew_angle(gray_deskew)
             if abs(angle) > 0.15:
                 img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(255, 255, 255))
 
-            # 切除拍摄周边杂边 (3.5%)
             w, h = img.size
             cx, cy = int(w * 0.035), int(h * 0.035)
             img = img.crop((cx, cy, w - cx, h - cy))
@@ -75,8 +63,7 @@ def process_camscanner_a4(input_path, output_path):
             rgb = img.convert("RGB")
             arr = np.array(rgb, dtype=np.float32)
 
-            # 大核高斯模糊分离背景光照
-            bg = rgb.filter(ImageFilter.GaussianBlur(radius=45))
+            bg = rgb.filter(ImageFilter.GaussianBlur(radius=50))
             bg_arr = np.array(bg, dtype=np.float32) + 1e-4
 
             divided = (arr / bg_arr) * 255.0
@@ -86,21 +73,27 @@ def process_camscanner_a4(input_path, output_path):
             min_c = np.minimum(np.minimum(r, g), b)
             chroma = max_c - min_c
 
-            # 识别偏红元素（迷宫红线、红题号、红字）
-            is_red = (r > (g + 15.0)) & (r > (b + 15.0)) & (chroma > 18.0)
+            is_red = (r > (g + 12.0)) & (r > (b + 12.0)) & (chroma > 15.0)
             lum = 0.299 * r + 0.587 * g + 0.114 * b
 
-            effective_lum = np.where(is_red, lum * 0.55, lum)
+            effective_lum = np.where(is_red, lum * 0.50, lum)
             effective_lum = np.where(~is_red & (chroma > 15.0), effective_lum * 0.75, effective_lum)
 
-            boosted = np.clip((effective_lum - 50.0) * (255.0 / (185.0 - 50.0)), 0, 255)
-            boosted = (boosted / 255.0) ** 1.3 * 255.0
+            lum_pil = Image.fromarray(effective_lum.astype(np.uint8))
+            min_filtered = lum_pil.filter(ImageFilter.MinFilter(size=3))
+            min_arr = np.array(min_filtered, dtype=np.float32)
 
-            boosted[boosted > 208] = 255
-            boosted[boosted < 110] = boosted[boosted < 110] * 0.45
+            line_detail = np.maximum(0.0, effective_lum - min_arr)
+            enhanced_lum = effective_lum - line_detail * 0.55
+
+            boosted = np.clip((enhanced_lum - 45.0) * (255.0 / (220.0 - 45.0)), 0, 255)
+            boosted = (boosted / 255.0) ** 1.25 * 255.0
+
+            boosted[boosted > 216] = 255
+            boosted[boosted < 125] = boosted[boosted < 125] * 0.40
 
             clean_img = Image.fromarray(boosted.astype(np.uint8))
-            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=180, threshold=2))
 
             a4_w, a4_h = 2480, 3508
             canvas = Image.new("L", (a4_w, a4_h), 255)
@@ -280,7 +273,6 @@ class MultiMailWorker(threading.Thread):
         if not printer:
             printer = self.get_fallback_printer()
 
-        # 确保打印机处于可用就绪状态（解除暂停）
         if printer:
             env = os.environ.copy()
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
@@ -361,12 +353,11 @@ class MultiMailWorker(threading.Thread):
 
                         if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
                             conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
-                            print(f"[MailWorker] 正在执行印刷级线稿锐化算法...")
+                            print(f"[MailWorker] 正在执行全能王 v5 细节保全线稿锐化算法...")
                             if process_camscanner_a4(raw_save_path, conv_path):
                                 ready_file = conv_path
                                 print(f"[MailWorker] ✔ 图像处理完成，准备交由 CUPS 打印")
 
-                        # 构建高兼容性 CUPS 打印管道
                         cmd = ["lp"]
                         if printer:
                             cmd.extend(["-d", printer])
