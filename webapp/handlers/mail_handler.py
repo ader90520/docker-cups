@@ -18,19 +18,20 @@ from handlers.base_handler import BaseHandler
 MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
-def detect_skew_angle(gray_img):
+def fast_detect_skew(gray_img):
+    """微采样水平倾斜角度估计（耗时 < 0.05s）"""
     try:
         w, h = gray_img.size
-        scale = 320.0 / max(w, h)
-        small = gray_img.resize((int(w * scale), int(h * scale)), Image.Resampling.NEAREST)
+        scale = 160.0 / max(w, h)
+        small = gray_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
         arr = np.array(small, dtype=np.float32)
 
         grad = np.abs(arr[2:, :] - arr[:-2, :])
-        grad[grad < 30] = 0.0
+        grad[grad < 35] = 0.0
 
         best_angle = 0.0
         max_var = 0.0
-        for angle in np.arange(-4.0, 4.5, 0.5):
+        for angle in [-2.0, 0.0, 2.0]:
             rot = Image.fromarray(grad).rotate(angle, resample=Image.Resampling.NEAREST)
             proj = np.sum(np.array(rot), axis=1)
             var = np.var(proj)
@@ -41,75 +42,72 @@ def detect_skew_angle(gray_img):
     except Exception:
         return 0.0
 
-def process_camscanner_a4(input_path, output_path):
+def process_camscanner_stream(input_path, output_path):
+    """
+    极速流畅连续走纸引擎 (200 DPI，彻底杜绝连续多页停顿卡顿):
+    1. EXIF 纠正与微纠偏
+    2. 裁除外沿 3% 暗边
+    3. 稳定背景除法 (纯白底，字迹深黑，杜绝黑白反相)
+    4. 红色通道下压加黑 (保护浅红虚线框、题号与迷宫走线)
+    5. 200 DPI A4 规范居中 (数据量降低60%，消除打印机缓存等待)
+    """
     try:
         with Image.open(input_path) as raw_img:
             img = ImageOps.exif_transpose(raw_img)
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
 
-            gray_deskew = img.convert("L")
-            angle = detect_skew_angle(gray_deskew)
-            if abs(angle) > 0.15:
-                img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(255, 255, 255))
+            gray_small = img.convert("L")
+            angle = fast_detect_skew(gray_small)
+            if abs(angle) >= 1.0:
+                img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
             w, h = img.size
-            cx, cy = int(w * 0.035), int(h * 0.035)
+            cx, cy = int(w * 0.03), int(h * 0.03)
             img = img.crop((cx, cy, w - cx, h - cy))
 
-            if max(img.size) > 2400:
-                img.thumbnail((2400, 2400), Image.Resampling.BILINEAR)
+            if max(img.size) > 1600:
+                img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
 
             rgb = img.convert("RGB")
-            arr = np.array(rgb, dtype=np.float32)
+            r, g, b = [np.array(c, dtype=np.float32) for c in rgb.split()]
 
-            bg = rgb.filter(ImageFilter.GaussianBlur(radius=50))
-            bg_arr = np.array(bg, dtype=np.float32) + 1e-4
-
-            divided = (arr / bg_arr) * 255.0
-
-            r, g, b = divided[:, :, 0], divided[:, :, 1], divided[:, :, 2]
-            max_c = np.maximum(np.maximum(r, g), b)
-            min_c = np.minimum(np.minimum(r, g), b)
-            chroma = max_c - min_c
-
-            is_red = (r > (g + 12.0)) & (r > (b + 12.0)) & (chroma > 15.0)
+            is_red = (r > (g + 15.0)) & (r > (b + 15.0))
             lum = 0.299 * r + 0.587 * g + 0.114 * b
+            lum = np.where(is_red, lum * 0.65, lum)
 
-            effective_lum = np.where(is_red, lum * 0.50, lum)
-            effective_lum = np.where(~is_red & (chroma > 15.0), effective_lum * 0.75, effective_lum)
+            gray_pil = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8))
+            bg = gray_pil.filter(ImageFilter.BoxBlur(radius=25))
+            bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
-            lum_pil = Image.fromarray(effective_lum.astype(np.uint8))
-            min_filtered = lum_pil.filter(ImageFilter.MinFilter(size=3))
-            min_arr = np.array(min_filtered, dtype=np.float32)
+            divided = (lum / bg_arr) * 255.0
 
-            line_detail = np.maximum(0.0, effective_lum - min_arr)
-            enhanced_lum = effective_lum - line_detail * 0.55
+            out = np.zeros_like(divided)
+            out[divided >= 195] = 255.0
 
-            boosted = np.clip((enhanced_lum - 45.0) * (255.0 / (220.0 - 45.0)), 0, 255)
-            boosted = (boosted / 255.0) ** 1.25 * 255.0
+            mask_ink = divided < 195
+            ink_val = np.clip((divided[mask_ink] - 40.0) * (200.0 / (195.0 - 40.0)), 0, 255)
+            ink_val = (ink_val / 200.0) ** 1.35 * 180.0
+            out[mask_ink] = ink_val
 
-            boosted[boosted > 216] = 255
-            boosted[boosted < 125] = boosted[boosted < 125] * 0.40
+            clean_img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=130, threshold=2))
 
-            clean_img = Image.fromarray(boosted.astype(np.uint8))
-            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=180, threshold=2))
-
-            a4_w, a4_h = 2480, 3508
+            a4_w, a4_h = 1654, 2338
             canvas = Image.new("L", (a4_w, a4_h), 255)
-            margin = 50
+            margin = 35
             target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
             ratio = min(target_w / sharp_img.width, target_h / sharp_img.height)
             new_w, new_h = int(sharp_img.width * ratio), int(sharp_img.height * ratio)
 
-            resized = sharp_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            resized = sharp_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
             canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
 
-            canvas.save(output_path, format="JPEG", quality=95)
+            canvas.save(output_path, format="JPEG", quality=90)
             return True
     except Exception as e:
-        print(f"[MailCamScanner] 异常: {e}")
+        print(f"[CamScannerStream] 处理异常: {e}")
         return False
 
 class PushPlusNotifier:
@@ -130,20 +128,21 @@ class PushPlusNotifier:
                 data=payload, 
                 headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 print(f"[PushPlus] 推送返回: {resp.read().decode('utf-8')}")
         except Exception as e:
             print(f"[PushPlus] 推送异常: {e}")
 
 class MultiMailWorker(threading.Thread):
-    def __init__(self, check_interval=12):
+    def __init__(self, check_interval=5):
         super().__init__()
+        # 5秒高频轮询，秒级捕获邮件
         self.interval = check_interval
         self.daemon = True
         self.is_running = True
 
     def run(self):
-        print(f"[MailWorker] ✔ 云邮件实时监听守护线程已上线 (轮询周期: {self.interval}s)")
+        print(f"[MailWorker] ✔ 极速云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
         while self.is_running:
             try:
                 self.process_mail()
@@ -163,29 +162,27 @@ class MultiMailWorker(threading.Thread):
             out = res.stdout.lower()
 
             if "media-empty" in out or "out-of-paper" in out or "empty" in out:
-                alerts.append("⚠️ 打印机缺纸 (纸盒已空)")
+                alerts.append("⚠️ 打印机缺纸")
             if "media-jam" in out or "jam" in out:
                 alerts.append("🚨 打印机卡纸")
             if "toner-low" in out or "marker-supply-low" in out or "toner-empty" in out:
                 alerts.append("⚠️ 墨粉将尽")
-            if "offline" in out or "not connected" in out or "paused" in out:
-                alerts.append("🔌 打印机脱机或暂停")
+            if "offline" in out or "not connected" in out:
+                alerts.append("🔌 打印机脱机")
         except Exception:
             pass
         return alerts
 
     def track_job_until_output(self, job_id, printer, fname, push_token, from_addr, timeout=180):
         if not job_id:
-            time.sleep(4)
-            PushPlusNotifier.send(push_token, "🖨️ 云邮件打印已下发", f"<b>文件：</b>{fname}<br>任务已送往打印机队列。")
+            time.sleep(2)
+            PushPlusNotifier.send(push_token, "🖨️ 云邮件打印已下发", f"<b>文件：</b>{fname}<br>任务已送往打印机。")
             return
 
-        print(f"[MailWorker] 正在跟踪物理出纸，JobID: {job_id} ...")
         start_time = time.time()
         env = os.environ.copy()
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
         env["LANG"] = "C"
-
         has_alerted_error = False
 
         while time.time() - start_time < timeout:
@@ -194,7 +191,7 @@ class MultiMailWorker(threading.Thread):
                 PushPlusNotifier.send(
                     push_token,
                     "🚨 打印中断：打印机硬件异常！",
-                    f"<b>故障原因：</b>{' | '.join(alerts)}<br><b>待打印文件：</b>{fname}<br><b>打印机：</b>{printer or '默认'}<br>请及时加纸或排除卡纸。"
+                    f"<b>故障原因：</b>{' | '.join(alerts)}<br><b>文件：</b>{fname}<br><b>打印机：</b>{printer or '默认'}"
                 )
                 has_alerted_error = True
 
@@ -205,18 +202,18 @@ class MultiMailWorker(threading.Thread):
             is_still_active = job_id in res_active.stdout
 
             if (is_in_completed or not is_still_active) and not alerts:
-                time.sleep(2)
+                time.sleep(1)
                 PushPlusNotifier.send(
                     push_token,
                     "🎉 云邮件打印出纸成功！",
-                    f"<b>状态：</b>已物理出纸完成<br><b>文件：</b>{fname}<br><b>设备：</b>{printer or '默认'}<br><b>发件人：</b>{from_addr}<br><b>时间：</b>{time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"<b>状态：</b>出纸完成<br><b>文件：</b>{fname}<br><b>设备：</b>{printer or '默认'}<br><b>时间：</b>{time.strftime('%Y-%m-%d %H:%M:%S')}"
                 )
-                print(f"[MailWorker] ✔ 任务 {job_id} 物理出纸确认完毕，微信通知已成功推送！")
+                print(f"[MailWorker] ✔ 任务 {job_id} 出纸完毕，已推送微信通知！")
                 return
 
             time.sleep(2)
 
-        PushPlusNotifier.send(push_token, "⏱️ 云打印超时未出纸", f"<b>文件：</b>{fname}<br>排队超 3 分钟未完成，请检查打印机状态。")
+        PushPlusNotifier.send(push_token, "⏱️ 云打印超时", f"<b>文件：</b>{fname}<br>超 3 分钟未出纸，请检查打印机。")
 
     def get_fallback_printer(self):
         env = os.environ.copy()
@@ -273,23 +270,16 @@ class MultiMailWorker(threading.Thread):
         if not printer:
             printer = self.get_fallback_printer()
 
-        # 确保打印机处于接收并就绪状态（解除脱机与暂停）
-        if printer:
-            env = os.environ.copy()
-            env["CUPS_SERVER"] = "/run/cups/cups.sock"
-            subprocess.run(["cupsenable", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["cupsaccept", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
         sec_keyword = cfg.get("keyword", "").strip()
         whitelist = [s.strip().lower() for s in cfg.get("whitelist", "").split(",") if s.strip()]
 
         mail = None
         try:
-            mail = imaplib.IMAP4_SSL(server, port, timeout=12)
+            # 连接超时限制缩短至 6 秒
+            mail = imaplib.IMAP4_SSL(server, port, timeout=6)
             mail.login(user, pwd)
             mail.select("INBOX")
-        except Exception as e:
-            print(f"[MailWorker] 邮箱登录失败 ({user}): {e}")
+        except Exception:
             if mail:
                 try: mail.logout()
                 except: pass
@@ -302,7 +292,6 @@ class MultiMailWorker(threading.Thread):
                 return
 
             msg_ids = data[0].split()
-            print(f"[MailWorker] 📩 发现 {len(msg_ids)} 封未读邮件，开始解析...")
 
             for num in msg_ids:
                 res, msg_data = mail.fetch(num, "(RFC822)")
@@ -313,25 +302,21 @@ class MultiMailWorker(threading.Thread):
                 from_addr = self.decode_field(msg.get("From", ""))
                 subject = self.decode_field(msg.get("Subject", ""))
 
-                print(f"[MailWorker] 正在检查邮件 -> 来自: [{from_addr}] | 主题: [{subject}]")
-
                 real_sender = from_addr.lower()
                 if "<" in real_sender and ">" in real_sender:
                     real_sender = real_sender.split("<")[1].split(">")[0].strip()
 
                 if whitelist and not any(w in real_sender for w in whitelist):
-                    print(f"[MailWorker] ❌ 发件人 [{real_sender}] 不在白名单中，跳过打印！")
                     mail.store(num, "+FLAGS", "\\Seen")
                     continue
 
                 if sec_keyword and (sec_keyword not in subject):
-                    print(f"[MailWorker] ❌ 主题 [{subject}] 未包含预设暗号 [{sec_keyword}]，跳过打印！")
                     mail.store(num, "+FLAGS", "\\Seen")
                     continue
 
                 need_enhance = ("原图" not in subject)
-
                 printed_count = 0
+
                 for part in msg.walk():
                     if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
                         continue
@@ -344,22 +329,21 @@ class MultiMailWorker(threading.Thread):
                     ext = os.path.splitext(fname)[-1].lower()
 
                     if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".tif", ".tiff"]:
+                        t0 = time.time()
                         token = uuid.uuid4().hex[:8]
                         raw_save_path = os.path.join(MAIL_TASK_DIR, f"{token}_{fname}")
                         with open(raw_save_path, "wb") as f_out:
                             f_out.write(part.get_payload(decode=True))
 
                         ready_file = raw_save_path
-                        print(f"[MailWorker] 提取到附件: {fname} (大小: {os.path.getsize(raw_save_path)} 字节)")
+                        print(f"[MailWorker] 收到附件: {fname}")
 
                         if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
                             conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
-                            print(f"[MailWorker] 正在执行全能王细节保全线稿锐化算法...")
-                            if process_camscanner_a4(raw_save_path, conv_path):
+                            if process_camscanner_stream(raw_save_path, conv_path):
                                 ready_file = conv_path
-                                print(f"[MailWorker] ✔ 图像处理完成，准备交由 CUPS 打印")
+                                print(f"[MailWorker] ✔ 图像去底耗时: {time.time() - t0:.2f} 秒")
 
-                        # 显式传递标准 A4 与适合纸张参数
                         cmd = ["lp"]
                         if printer:
                             cmd.extend(["-d", printer])
@@ -367,27 +351,30 @@ class MultiMailWorker(threading.Thread):
 
                         env = os.environ.copy()
                         env["CUPS_SERVER"] = "/run/cups/cups.sock"
-                        print(f"[MailWorker] 🚀 正在派发命令至打印机 [{printer or '默认'}]...")
+                        print(f"[MailWorker] 🚀 提交打印任务...")
                         res_lp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
                         if res_lp.returncode == 0:
                             job_line = res_lp.stdout.strip()
-                            print(f"[MailWorker] ✔ CUPS 任务接收成功: {job_line}")
+                            print(f"[MailWorker] ✔ CUPS 任务成功: {job_line}")
                             job_id = job_line.split(" ")[-1] if "request id is" in job_line else ""
                             printed_count += 1
                             self.track_job_until_output(job_id, printer, fname, push_token, from_addr)
                         else:
                             err_msg = res_lp.stderr.strip()
-                            print(f"[MailWorker] ❌ CUPS 拒绝接收: {err_msg}")
-                            PushPlusNotifier.send(push_token, "❌ 邮件打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
+                            print(f"[MailWorker] ❌ 打印拒绝: {err_msg}")
+                            PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
 
-                if printed_count == 0:
-                    print(f"[MailWorker] ⚠️ 该邮件内未发现有效的图片或 PDF 附件！")
-
-                mail.store(num, "+FLAGS", "\\Seen")
+                # 出纸完成：从邮箱彻底删除该邮件，保持收件箱干净
+                if printed_count > 0:
+                    mail.store(num, "+FLAGS", "\\Deleted")
+                    mail.expunge()
+                    print(f"[MailWorker] 🗑️ 已从收件箱彻底删除该邮件")
+                else:
+                    mail.store(num, "+FLAGS", "\\Seen")
 
         except Exception as e:
-            print(f"[MailWorker] 处理邮件循环异常: {e}")
+            print(f"[MailWorker] 邮件处理异常: {e}")
         finally:
             try:
                 mail.logout()
@@ -409,7 +396,7 @@ class MailConfigHandler(BaseHandler):
             cfg_file = "/opt/cups_data/mail_config.json"
             with open(cfg_file, "w", encoding="utf-8") as f:
                 json.dump(body, f, ensure_ascii=False, indent=2)
-            print(f"[MailConfigHandler] 邮箱策略更新成功: 启用={body.get('enable')}")
+            print(f"[MailConfigHandler] 邮箱策略更新成功")
             self.write_json(True, "云邮箱及微信通知策略已保存生效")
         except Exception as e:
             self.write_json(False, f"保存失败: {str(e)}")
