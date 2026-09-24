@@ -38,7 +38,7 @@ auto_usb_daemon &
 /bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
 /bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
 
-# 5. 彻底关闭 Upgrade 强制重定向，允许全端口直达
+# 5. 彻底关闭 Upgrade 强制重定向，允许全端口直达并设定默认中文
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -51,6 +51,7 @@ BrowseLocalProtocols dnssd
 DefaultAuthType Basic
 WebInterface Yes
 ServerAlias *
+DefaultLanguage zh_CN
 
 DefaultEncryption Never
 
@@ -117,34 +118,42 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ==================== 彻底修复 631 二级页面空白 ====================
-echo ">>> [Patch] 补齐 CUPS 原生模板，彻底消除二级页面空白..."
+# ==================== 彻底修复 631 中文汉化与二级页面空白 ====================
+echo ">>> [Patch] 补齐 CUPS 中文模板与系统原生模板..."
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 
-# 确保原生模板全部作为底座拷入中文目录，避免缺失 admin.tmpl、printers.tmpl 导致白屏
+# 1. 确保模板根目录的原生模板作为基础保底拷入 zh_CN 和 zh
 for tmpl in /usr/share/cups/templates/*.tmpl; do
-    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null && cp -f "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
+    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
 done
 
-# 如果有自定义中文模板，增量覆盖
+# 2. 覆盖中文模板（同时覆盖至根目录、zh_CN 以及 zh，确保任意调用路径均能命中中文）
 if [ -d /tmp/zh_templates ]; then
+    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
 fi
+
+# 3. 再次补齐缺失模板，确保动态 CGI 永不缺少模板崩溃
+for tmpl in /usr/share/cups/templates/*.tmpl; do
+    [ -f "$tmpl" ] && cp -n "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    [ -f "$tmpl" ] && cp -n "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
+done
 chmod -R 755 /usr/share/cups/templates
 
-# 覆盖主页并保障权限
+# 4. 覆盖中文主页并保障权限
 if [ -f /tmp/index.html ]; then
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
     chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
-# 安全注入 8088 导航跳转（避免破坏 CGI 解析宏）
-for f in $(find /usr/share/cups/templates -name "header.tmpl"); do
+# 5. 安全注入 8088 导航跳转（避免破坏 CGI 标签解析）
+for f in $(find /usr/share/cups/templates -name "header.tmpl" 2>/dev/null); do
     sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$f" 2>/dev/null || true
     sed -i 's|http://{server_name}:8088|javascript:void(0);|g' "$f" 2>/dev/null || true
     if ! grep -q "btn-to-8088" "$f"; then
-        sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:4px 10px;border-radius:4px;text-decoration:none;margin-left:15px;display:inline-block;font-size:12px;vertical-align:middle;}</style></head>|g' "$f" 2>/dev/null || true
+        sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;margin-left:12px;display:inline-block;font-size:12px;vertical-align:middle;}</style></head>|g' "$f" 2>/dev/null || true
         sed -i 's|<div class="nav">|<div class="nav"><a class="btn-to-8088" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 8088 控制台</a>|g' "$f" 2>/dev/null || true
     fi
 done
