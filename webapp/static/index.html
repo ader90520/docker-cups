@@ -217,7 +217,7 @@
           </div>
         </div>
 
-        <!-- 4. 云邮件打印面板 (带清晰的 PushPlus 配置) -->
+        <!-- 4. 云邮件打印面板 -->
         <div class="card tab-pane" id="pane-mail">
           <div class="card-title">📧 云邮箱配置与防误打</div>
           <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -771,7 +771,6 @@
             document.getElementById('mailPwd').value = d.password || "";
             document.getElementById('mailKeyword').value = d.keyword || "";
             document.getElementById('mailWhitelist').value = d.whitelist || "";
-            // 安全读取 PushPlus Token
             const tokenInput = document.getElementById('pushplusToken');
             if (tokenInput) {
               tokenInput.value = d.pushplus_token || "";
@@ -783,6 +782,7 @@
 
     function saveMail() {
       const tokenInput = document.getElementById('pushplusToken');
+      const pSel = document.getElementById('printerSelect');
       const cfg = {
         enable: document.getElementById('mailEnable').value === "true",
         server: document.getElementById('mailServer').value.trim(),
@@ -792,14 +792,19 @@
         keyword: document.getElementById('mailKeyword').value.trim(),
         whitelist: document.getElementById('mailWhitelist').value.trim(),
         pushplus_token: tokenInput ? tokenInput.value.trim() : "",
-        default_printer: document.getElementById('printerSelect').value
+        default_printer: pSel ? pSel.value : ""
       };
+      if (cfg.enable && (!cfg.server || !cfg.user || !cfg.password)) {
+        alert("开启云邮件打印时，请完整填写 IMAP服务器、邮箱账号和授权码！");
+        return;
+      }
       fetch('/api/mail_config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg)
       }).then(r=>r.json()).then(res=>{
         alert(res.success ? "云邮件及 PushPlus 微信通知设置已保存生效！" : res.msg);
+        fetchDevices();
       });
     }
   </script>
