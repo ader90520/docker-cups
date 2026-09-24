@@ -7,69 +7,91 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
+def detect_skew_angle(gray_img):
+    try:
+        w, h = gray_img.size
+        scale = 320.0 / max(w, h)
+        small = gray_img.resize((int(w * scale), int(h * scale)), Image.Resampling.NEAREST)
+        arr = np.array(small, dtype=np.float32)
+
+        grad = np.abs(arr[2:, :] - arr[:-2, :])
+        grad[grad < 30] = 0.0
+
+        best_angle = 0.0
+        max_var = 0.0
+        for angle in np.arange(-4.0, 4.5, 0.5):
+            rot = Image.fromarray(grad).rotate(angle, resample=Image.Resampling.NEAREST)
+            proj = np.sum(np.array(rot), axis=1)
+            var = np.var(proj)
+            if var > max_var:
+                max_var = var
+                best_angle = angle
+        return best_angle
+    except Exception:
+        return 0.0
+
 def process_camscanner_a4(input_path, output_path):
-    """
-    工业级扫描全能王去底引擎 (CamScanner Level):
-    1. EXIF 方向校正 & 竖版自动摆正
-    2. 主动切除外沿 3.5% 拍摄黑边/桌布/装订暗影
-    3. RGB 局部背景相除 (Background Division) 彻底漂白，消除背面透字
-    4. 文本加深锐化 & 规范填充至 300DPI A4 标准画布
-    """
     try:
         with Image.open(input_path) as raw_img:
-            # 1. 姿态纠正
             img = ImageOps.exif_transpose(raw_img)
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
 
-            # 2. 切除外围黑边与杂边 (边缘 3.5% 容错切除，彻底去掉床单与装订线黑框)
-            w, h = img.size
-            crop_x = int(w * 0.035)
-            crop_y = int(h * 0.035)
-            img = img.crop((crop_x, crop_y, w - crop_x, h - crop_y))
+            gray_deskew = img.convert("L")
+            angle = detect_skew_angle(gray_deskew)
+            if abs(angle) > 0.15:
+                img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(255, 255, 255))
 
-            # 缩放至适中尺寸提高处理效率与防 OOM
+            w, h = img.size
+            cx, cy = int(w * 0.035), int(h * 0.035)
+            img = img.crop((cx, cy, w - cx, h - cy))
+
             if max(img.size) > 2400:
                 img.thumbnail((2400, 2400), Image.Resampling.BILINEAR)
 
-            # 3. 局部高斯模糊估计光照背景
-            rgb_img = img.convert("RGB")
-            bg = rgb_img.filter(ImageFilter.GaussianBlur(radius=30))
+            rgb = img.convert("RGB")
+            arr = np.array(rgb, dtype=np.float32)
 
-            orig_arr = np.array(rgb_img, dtype=np.float32)
+            bg = rgb.filter(ImageFilter.GaussianBlur(radius=45))
             bg_arr = np.array(bg, dtype=np.float32) + 1e-4
 
-            # 背景除法：消除阴影、暗斑和背面透光虚影
-            divided = (orig_arr / bg_arr) * 255.0
+            divided = (arr / bg_arr) * 255.0
 
-            # 动态非线性拉伸：消除背底灰度，加深文字黑色
-            clean = np.clip((divided - 70.0) * (255.0 / (200.0 - 70.0)), 0, 255)
+            r, g, b = divided[:, :, 0], divided[:, :, 1], divided[:, :, 2]
+            max_c = np.maximum(np.maximum(r, g), b)
+            min_c = np.minimum(np.minimum(r, g), b)
+            chroma = max_c - min_c
 
-            # 阈值白化兜底：凡是大于 215 的灰阶强制设为纯白
-            mask = clean > 215
-            clean[mask] = 255
+            is_red = (r > (g + 15.0)) & (r > (b + 15.0)) & (chroma > 18.0)
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
 
-            whitened_img = Image.fromarray(clean.astype(np.uint8))
+            effective_lum = np.where(is_red, lum * 0.55, lum)
+            effective_lum = np.where(~is_red & (chroma > 15.0), effective_lum * 0.75, effective_lum)
 
-            # 4. 规范排版至标准 300DPI A4 纸张 (2480 x 3508)
+            boosted = np.clip((effective_lum - 50.0) * (255.0 / (185.0 - 50.0)), 0, 255)
+            boosted = (boosted / 255.0) ** 1.3 * 255.0
+
+            boosted[boosted > 208] = 255
+            boosted[boosted < 110] = boosted[boosted < 110] * 0.45
+
+            clean_img = Image.fromarray(boosted.astype(np.uint8))
+            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+
             a4_w, a4_h = 2480, 3508
-            canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-
-            # 四周留 60px 打印安全边距
-            margin = 60
+            canvas = Image.new("L", (a4_w, a4_h), 255)
+            margin = 50
             target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
-            ratio = min(target_w / whitened_img.width, target_h / whitened_img.height)
-            new_w = int(whitened_img.width * ratio)
-            new_h = int(whitened_img.height * ratio)
+            ratio = min(target_w / sharp_img.width, target_h / sharp_img.height)
+            new_w, new_h = int(sharp_img.width * ratio), int(sharp_img.height * ratio)
 
-            resized = whitened_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            resized = sharp_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
 
             canvas.save(output_path, format="JPEG", quality=95)
             return True
     except Exception as e:
-        print(f"[CamScannerEngine] 处理异常: {e}")
+        print(f"[CamScannerEngine] 异常: {e}")
         return False
 
 class PrintHandler(BaseHandler):
@@ -93,7 +115,6 @@ class PrintHandler(BaseHandler):
                     out.write(f["body"])
 
                 target_path = src_path
-                # 勾选去黑底漂白时，执行全能王级漂白
                 if whiten == "1" and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
                     enhanced_path = os.path.join(UPLOAD_DIR, f"cam_{token}.jpg")
                     if process_camscanner_a4(src_path, enhanced_path):
@@ -106,6 +127,6 @@ class PrintHandler(BaseHandler):
                     self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
                     return
 
-            self.write_json(True, f"共 {len(files)} 个文件任务已按全能王标准排版打印", job=", ".join(jobs))
+            self.write_json(True, f"共 {len(files)} 个文件已按印刷级全能王标准排版打印", job=", ".join(jobs))
         except Exception as e:
             self.write_json(False, f"打印服务异常: {str(e)}")
