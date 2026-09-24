@@ -16,7 +16,7 @@ fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
 # 2. 运行时目录及权限保障
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
 
 # 3. 容器内热插拔守护
@@ -38,7 +38,7 @@ auto_usb_daemon &
 /bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
 /bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
 
-# 5. 彻底关闭 Upgrade 强制重定向，允许全端口直达并设定默认中文
+# 5. 生成标准健壮的 cupsd.conf
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -118,45 +118,35 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ==================== 彻底修复 631 中文汉化与二级页面空白 ====================
-echo ">>> [Patch] 补齐 CUPS 中文模板与系统原生模板..."
+# ==================== 纯净修复 631 中文与二级页面 ====================
+echo ">>> [Patch] 部署纯净 CUPS 中文模板（绝不篡改动态 tmpl 文件）..."
+
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 
-# 1. 确保模板根目录的原生模板作为基础保底拷入 zh_CN 和 zh
+# 拷贝原生模板作为兜底基础
 for tmpl in /usr/share/cups/templates/*.tmpl; do
     [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     [ -f "$tmpl" ] && cp -f "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
 done
 
-# 2. 覆盖中文模板（同时覆盖至根目录、zh_CN 以及 zh，确保任意调用路径均能命中中文）
+# 增量覆盖中文翻译包（保持原始文件语法，禁止任何 sed 侵入）
 if [ -d /tmp/zh_templates ]; then
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
 fi
-
-# 3. 再次补齐缺失模板，确保动态 CGI 永不缺少模板崩溃
-for tmpl in /usr/share/cups/templates/*.tmpl; do
-    [ -f "$tmpl" ] && cp -n "$tmpl" /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-    [ -f "$tmpl" ] && cp -n "$tmpl" /usr/share/cups/templates/zh/ 2>/dev/null || true
-done
 chmod -R 755 /usr/share/cups/templates
 
-# 4. 覆盖中文主页并保障权限
+# 中文主页部署
 if [ -f /tmp/index.html ]; then
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
-    chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
 
-# 5. 安全注入 8088 导航跳转（避免破坏 CGI 标签解析）
-for f in $(find /usr/share/cups/templates -name "header.tmpl" 2>/dev/null); do
-    sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$f" 2>/dev/null || true
-    sed -i 's|http://{server_name}:8088|javascript:void(0);|g' "$f" 2>/dev/null || true
-    if ! grep -q "btn-to-8088" "$f"; then
-        sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;margin-left:12px;display:inline-block;font-size:12px;vertical-align:middle;}</style></head>|g' "$f" 2>/dev/null || true
-        sed -i 's|<div class="nav">|<div class="nav"><a class="btn-to-8088" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 8088 控制台</a>|g' "$f" 2>/dev/null || true
-    fi
-done
+# 跳转按钮仅注入静态 index.html，彻底杜绝破坏 CGI
+if [ -f /usr/share/cups/doc-root/index.html ]; then
+    sed -i '/btn-to-8088/d' /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    sed -i 's|</body>|<div style="position:fixed;bottom:25px;right:25px;z-index:9999;"><a class="btn-to-8088" style="background:#10b981;color:#fff!important;font-weight:bold;padding:12px 18px;border-radius:8px;text-decoration:none;box-shadow:0 4px 12px rgba(0,0,0,0.2);font-size:14px;display:inline-block;" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 返回 8088 智能打印控制台</a></div></body>|g' /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
+fi
 # ======================================================================
 
 echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
