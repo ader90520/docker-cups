@@ -31,17 +31,27 @@ def detect_skew_angle(gray_img):
         return 0.0
 
 def process_camscanner_a4(input_path, output_path):
+    """
+    全能王 v5 细节线稿保全与纯净去底引擎:
+    1. EXIF 纠正与文字倾斜拉平
+    2. 大窗口高斯局部背景除法 (消除大面积阴影)
+    3. 形态学局部暗线保护 (保留树叶细脉、鸟羽、微弱拼音与虚线框)
+    4. 红色线稿与迷宫折线强化
+    5. USM 线稿锐化与 A4 300DPI 居中排版
+    """
     try:
         with Image.open(input_path) as raw_img:
             img = ImageOps.exif_transpose(raw_img)
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
 
+            # 倾斜纠正
             gray_deskew = img.convert("L")
             angle = detect_skew_angle(gray_deskew)
             if abs(angle) > 0.15:
                 img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(255, 255, 255))
 
+            # 切除周边暗影杂边 (3.5%)
             w, h = img.size
             cx, cy = int(w * 0.035), int(h * 0.035)
             img = img.crop((cx, cy, w - cx, h - cy))
@@ -52,7 +62,8 @@ def process_camscanner_a4(input_path, output_path):
             rgb = img.convert("RGB")
             arr = np.array(rgb, dtype=np.float32)
 
-            bg = rgb.filter(ImageFilter.GaussianBlur(radius=45))
+            # 1. 大核高斯模糊分离光照背景 (radius=50，避免细线被模糊成背景)
+            bg = rgb.filter(ImageFilter.GaussianBlur(radius=50))
             bg_arr = np.array(bg, dtype=np.float32) + 1e-4
 
             divided = (arr / bg_arr) * 255.0
@@ -62,21 +73,42 @@ def process_camscanner_a4(input_path, output_path):
             min_c = np.minimum(np.minimum(r, g), b)
             chroma = max_c - min_c
 
-            is_red = (r > (g + 15.0)) & (r > (b + 15.0)) & (chroma > 18.0)
+            # 识别偏红元素（红虚线、迷宫折线、红数字）
+            is_red = (r > (g + 12.0)) & (r > (b + 12.0)) & (chroma > 15.0)
             lum = 0.299 * r + 0.587 * g + 0.114 * b
 
-            effective_lum = np.where(is_red, lum * 0.55, lum)
+            # 对红线深度加黑，对其他彩色适度暗化
+            effective_lum = np.where(is_red, lum * 0.50, lum)
             effective_lum = np.where(~is_red & (chroma > 15.0), effective_lum * 0.75, effective_lum)
 
-            boosted = np.clip((effective_lum - 50.0) * (255.0 / (185.0 - 50.0)), 0, 255)
-            boosted = (boosted / 255.0) ** 1.3 * 255.0
+            # 2. 核心细节保全：提取细小暗线（局部 Min Filter 补偿）
+            # 用 3x3 最小滤波找出周围最暗的点，专门捕获纤细叶脉和小鸟羽毛
+            lum_pil = Image.fromarray(effective_lum.astype(np.uint8))
+            min_filtered = lum_pil.filter(ImageFilter.MinFilter(size=3))
+            min_arr = np.array(min_filtered, dtype=np.float32)
 
-            boosted[boosted > 208] = 255
-            boosted[boosted < 110] = boosted[boosted < 110] * 0.45
+            # 将细线特征融合进原亮度（细线处加重 30% 黑色）
+            line_detail = np.maximum(0.0, effective_lum - min_arr)
+            enhanced_lum = effective_lum - line_detail * 0.55
+
+            # 3. 平缓的扫描全能王对比度拉伸曲线（放宽上限，不扼杀淡线）
+            # 50 以下为纯黑，220 以上为纯白，中间留足 170 阶过渡空间
+            boosted = np.clip((enhanced_lum - 45.0) * (255.0 / (220.0 - 45.0)), 0, 255)
+
+            # 强化中暗部（让文字和细线浓度更深）
+            boosted = (boosted / 255.0) ** 1.25 * 255.0
+
+            # 纯白底色截断：高于 216 的全部设为 255 纯白
+            boosted[boosted > 216] = 255
+            # 暗部沉降：低于 125 的线条强力加深，保证激光打印机喷实碳粉
+            boosted[boosted < 125] = boosted[boosted < 125] * 0.40
 
             clean_img = Image.fromarray(boosted.astype(np.uint8))
-            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
 
+            # 4. USM 高频线稿边缘锐化（半径 1.5，强度 180%，阈值 2）
+            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=180, threshold=2))
+
+            # 5. 排版至标准 300DPI A4 (2480 x 3508)
             a4_w, a4_h = 2480, 3508
             canvas = Image.new("L", (a4_w, a4_h), 255)
             margin = 50
