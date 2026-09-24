@@ -136,7 +136,6 @@ class PushPlusNotifier:
 class MultiMailWorker(threading.Thread):
     def __init__(self, check_interval=5):
         super().__init__()
-        # 5秒高频轮询，秒级捕获邮件
         self.interval = check_interval
         self.daemon = True
         self.is_running = True
@@ -275,7 +274,6 @@ class MultiMailWorker(threading.Thread):
 
         mail = None
         try:
-            # 连接超时限制缩短至 6 秒
             mail = imaplib.IMAP4_SSL(server, port, timeout=6)
             mail.login(user, pwd)
             mail.select("INBOX")
@@ -365,7 +363,6 @@ class MultiMailWorker(threading.Thread):
                             print(f"[MailWorker] ❌ 打印拒绝: {err_msg}")
                             PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
 
-                # 出纸完成：从邮箱彻底删除该邮件，保持收件箱干净
                 if printed_count > 0:
                     mail.store(num, "+FLAGS", "\\Deleted")
                     mail.expunge()
