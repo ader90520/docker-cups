@@ -134,14 +134,10 @@ fi
 # ==================== 修复 631 模板、跳转链接与布局 ====================
 echo ">>> [Patch] 正在优化 631 页面布局与 8088 动态跳转..."
 for tmpl in $(find /usr/share/cups/templates -name "header.tmpl" 2>/dev/null); do
-    # 1. 清除以往误注入的限宽与缩小样式
     sed -i 's/max-width:[^;]*;//g' "$tmpl" 2>/dev/null || true
-
-    # 2. 修复 {server_name} 无法解析的 bug，改为纯前端 JS 动态获取 Host 跳转
     sed -i 's|http://{server_name}:8088/|javascript:void(0);|g' "$tmpl" 2>/dev/null || true
     sed -i 's|http://{server_name}:8088|javascript:void(0);|g' "$tmpl" 2>/dev/null || true
 
-    # 3. 注入标准自适应 Flex 布局：保证内容宽度 100%、底部声明自然沉底、添加高亮跳转按钮
     if ! grep -q "btn-to-8088" "$tmpl"; then
         sed -i 's|</head>|<style>.btn-to-8088{background:#10b981;color:#fff!important;font-weight:bold;padding:4px 10px;border-radius:4px;text-decoration:none;margin-left:15px;display:inline-block;font-size:12px;vertical-align:middle;} .btn-to-8088:hover{background:#059669;} html,body{height:100%;margin:0;} body{display:flex;flex-direction:column;} .body{flex:1 0 auto;width:100%!important;box-sizing:border-box;padding:15px 20px;} .footer{flex-shrink:0;width:100%;}</style></head>|g' "$tmpl"
         sed -i 's|<div class="nav">|<div class="nav"><a class="btn-to-8088" href="javascript:void(0)" onclick="window.location.href=\x27http://\x27+window.location.hostname+\x27:8088/\x27">🚀 返回智能打印控制台 (8088)</a>|g' "$tmpl"
