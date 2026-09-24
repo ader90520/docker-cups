@@ -42,16 +42,19 @@
     .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 6px; color: #0284c7; }
     .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
 
+    /* 真实国标视口裁剪框 (严格 85.6 : 54 比例) */
     .idcard-grid { display: flex; gap: 10px; margin-bottom: 10px; }
-    .idcard-item { flex: 1; display: flex; flex-direction: column; gap: 8px; }
-    .idcard-box {
-      border: 2px dashed #cbd5e1; border-radius: 8px; height: 130px;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    .idcard-item { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .idcard-viewport {
+      border: 2px dashed #0284c7; border-radius: 8px; aspect-ratio: 85.6 / 54; width: 100%;
+      display: flex; align-items: center; justify-content: center;
       background: #f8fafc; cursor: pointer; position: relative; overflow: hidden;
     }
-    .idcard-box img { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform 0.2s ease; }
-    .img-meta { font-size: 10px; color: #0284c7; background: #e0f2fe; padding: 2px 4px; border-radius: 4px; text-align: center; }
+    .idcard-viewport img {
+      position: absolute; width: 100%; height: 100%; object-fit: cover; transition: transform 0.15s ease-out;
+    }
     .crop-slider { width: 100%; accent-color: var(--primary); cursor: pointer; }
+    .img-meta { font-size: 10px; color: #0284c7; background: #e0f2fe; padding: 2px 4px; border-radius: 4px; text-align: center; }
 
     .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
     .form-col { flex: 1; }
@@ -179,41 +182,46 @@
           <div class="file-list" id="invoiceFileList"></div>
         </div>
 
-        <!-- 3. 身份证打印面板 -->
+        <!-- 3. 身份证打印面板 (国标视口物理裁剪) -->
         <div class="card tab-pane" id="pane-idcard">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-size: 13px; font-weight: 600; color: #1e293b;">🪪 身份证正反面采集</span>
+            <span style="font-size: 13px; font-weight: 600; color: #1e293b;">🪪 身份证正反面取景裁剪</span>
             <button onclick="resetIdCard()" style="background: #fee2e2; border: 1px solid #fca5a5; color: #dc2626; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
               🗑️ 一键清空重置
             </button>
           </div>
 
           <div class="idcard-grid">
+            <!-- 正面视口 -->
             <div class="idcard-item">
-              <div class="idcard-box" id="frontBox" onclick="document.getElementById('idFront').click()">
+              <div class="idcard-viewport" id="frontBox" onclick="document.getElementById('idFront').click()">
                 <input type="file" id="idFront" accept="image/*" onchange="handleCardUpload(this, 'frontBox', 'frontMeta', 'frontImg')">
-                <div id="frontPrompt" style="display:flex; flex-direction:column; align-items:center;">
+                <div id="frontPrompt" style="display:flex; flex-direction:column; align-items:center; color:#94a3b8;">
                   <div style="font-size: 26px;">🪪+</div>
-                  <div style="font-size: 12px; margin-top:4px;">身份证正面</div>
+                  <div style="font-size: 12px; margin-top:4px; font-weight:500;">点击上传正面</div>
                 </div>
               </div>
               <div class="img-meta" id="frontMeta" style="display:none;"></div>
-              <span class="form-label" style="font-size:11px; margin:0;">正面去杂边: <b id="fVal">1.00x</b></span>
-              <input type="range" class="crop-slider" id="fRange" min="0.6" max="1.4" step="0.05" value="1.0" oninput="updateCrop(this.value, 'fVal', 'frontImg')">
+              <span class="form-label" style="font-size:11px; margin:0;">正面取景视口: <b id="fVal">1.00x</b></span>
+              <input type="range" class="crop-slider" id="fRange" min="0.8" max="2.0" step="0.05" value="1.0" oninput="updateCrop(this.value, 'fVal', 'frontImg')">
             </div>
 
+            <!-- 反面视口 -->
             <div class="idcard-item">
-              <div class="idcard-box" id="backBox" onclick="document.getElementById('idBack').click()">
+              <div class="idcard-viewport" id="backBox" onclick="document.getElementById('idBack').click()">
                 <input type="file" id="idBack" accept="image/*" onchange="handleCardUpload(this, 'backBox', 'backMeta', 'backImg')">
-                <div id="backPrompt" style="display:flex; flex-direction:column; align-items:center;">
+                <div id="backPrompt" style="display:flex; flex-direction:column; align-items:center; color:#94a3b8;">
                   <div style="font-size: 26px;">🪪+</div>
-                  <div style="font-size: 12px; margin-top:4px;">身份证反面</div>
+                  <div style="font-size: 12px; margin-top:4px; font-weight:500;">点击上传反面</div>
                 </div>
               </div>
               <div class="img-meta" id="backMeta" style="display:none;"></div>
-              <span class="form-label" style="font-size:11px; margin:0;">反面去杂边: <b id="bVal">1.00x</b></span>
-              <input type="range" class="crop-slider" id="bRange" min="0.6" max="1.4" step="0.05" value="1.0" oninput="updateCrop(this.value, 'bVal', 'backImg')">
+              <span class="form-label" style="font-size:11px; margin:0;">反面取景视口: <b id="bVal">1.00x</b></span>
+              <input type="range" class="crop-slider" id="bRange" min="0.8" max="2.0" step="0.05" value="1.0" oninput="updateCrop(this.value, 'bVal', 'backImg')">
             </div>
+          </div>
+          <div style="font-size:11px; color:#0284c7; background:#f0f9ff; padding:6px 10px; border-radius:6px;">
+            💡 <b>物理视口说明</b>：边框内即为最终打印出来的完整身份证。拖动下方滑块拉近镜头，窗口之外的多余桌面杂边将被彻底切除！
           </div>
         </div>
 
@@ -256,10 +264,10 @@
             </div>
             
             <div style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 4px;">
-              <span class="form-label" style="color:#16a34a; font-weight:700;">📲 PushPlus 微信推送 Token</span>
-              <input type="text" id="pushplusToken" placeholder="输入 pushplus.plus 提供的 Token">
+              <span class="form-label" style="color:#16a34a; font-weight:700;">📲 PushPlus 微信推送 Token (出纸成功/故障告警)</span>
+              <input type="text" id="pushplusToken" placeholder="输入 pushplus.plus 提供的 Token 码">
               <div style="font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.4;">
-                💡 打印机真正出纸完成后，将自动通过微信公众号推送“出纸成功”通知。
+                💡 打印机真正出纸完成后推送“出纸成功”；发生缺纸、卡纸或墨尽时立即向微信告警！
               </div>
             </div>
 
@@ -503,6 +511,7 @@
       if (mobBox) mobBox.innerHTML = msg;
     }
 
+    // 真正视口放大拉近（截去窗口外的桌面多余杂物）
     function updateCrop(val, textId, imgId) {
       const floatVal = parseFloat(val);
       document.getElementById(textId).innerText = floatVal.toFixed(2) + 'x';
@@ -510,7 +519,9 @@
       if (textId === 'bVal') cropBackVal = floatVal;
 
       const img = document.getElementById(imgId);
-      if (img) img.style.transform = `scale(${1.0 / floatVal})`;
+      if (img) {
+        img.style.transform = `scale(${floatVal})`;
+      }
 
       renderIdCardA4Preview();
     }
@@ -535,7 +546,7 @@
             existingImg.src = e.target.result;
             
             const curFactor = (imgId === 'frontImg') ? cropFrontVal : cropBackVal;
-            existingImg.style.transform = `scale(${1.0 / curFactor})`;
+            existingImg.style.transform = `scale(${curFactor})`;
 
             const meta = document.getElementById(metaId);
             meta.style.display = 'block';
@@ -561,7 +572,7 @@
         return;
       }
 
-      const getCardStyle = (factor) => `width:100%; height:100%; object-fit:cover; transform:scale(${1.0/factor});`;
+      const getCardStyle = (factor) => `width:100%; height:100%; object-fit:cover; transform:scale(${factor});`;
 
       const html = `
         <div style="display:flex; flex-direction:column; gap:10px; align-items:center; width:100%; height:100%; justify-content:center; padding:10px;">
@@ -683,7 +694,7 @@
         if (curTab === 'invoice') api = '/api/print/invoice';
       }
 
-      document.getElementById('statusBox').innerText = "⏳ 正在上传并提交打印中...";
+      document.getElementById('statusBox').innerText = "⏳ 正在上传并按视口渲染打印中...";
       fetch(api, { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
