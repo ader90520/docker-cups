@@ -43,14 +43,7 @@ def fast_detect_skew(gray_img):
         return 0.0
 
 def process_camscanner_color_stream(input_path, output_path):
-    """
-    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出):
-    1. EXIF 方向修正与水平微纠偏
-    2. 裁剪 3% 暗黑外边沿
-    3. RGB 三通道分别做局部背景除法，纸张底色 100% 漂白为 (255, 255, 255)
-    4. 完美保留红章、红线、彩图、蓝黑墨水笔迹原生色彩
-    5. 居中排版至 200 DPI A4 画布，连续流畅吐纸
-    """
+    """全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)"""
     try:
         with Image.open(input_path) as raw_img:
             img = ImageOps.exif_transpose(raw_img)
@@ -106,7 +99,7 @@ def process_camscanner_color_stream(input_path, output_path):
             canvas.save(output_path, format="JPEG", quality=90)
             return True
     except Exception as e:
-        print(f"[CamScannerColor] 处理异常: {e}")
+        print(f"[MailWorker] 图像真彩色去底异常: {e}")
         return False
 
 class PushPlusNotifier:
@@ -128,7 +121,7 @@ class PushPlusNotifier:
                 headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
             )
             with urllib.request.urlopen(req, timeout=6) as resp:
-                print(f"[PushPlus] 推送返回: {resp.read().decode('utf-8')}")
+                print(f"[PushPlus] 推送成功: {resp.read().decode('utf-8')}")
         except Exception as e:
             print(f"[PushPlus] 推送异常: {e}")
 
@@ -140,12 +133,12 @@ class MultiMailWorker(threading.Thread):
         self.is_running = True
 
     def run(self):
-        print(f"[MailWorker] ✔ 极速真彩色云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
+        print(f"[MailWorker] ✔ 极速智能暗号云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
         while self.is_running:
             try:
                 self.process_mail()
             except Exception as e:
-                print(f"[MailWorker] 周期异常: {e}")
+                print(f"[MailWorker] 轮询异常: {e}")
             time.sleep(self.interval)
 
     def check_printer_hardware_alerts(self, printer):
@@ -204,7 +197,7 @@ class MultiMailWorker(threading.Thread):
                 PushPlusNotifier.send(
                     push_token,
                     "🎉 云邮件打印出纸成功！",
-                    f"<b>状态：</b>出纸完成<br><b>文件：</b>{fname}<br><b>设备：</b>{printer or '默认'}<br><b>时间：</b>{time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"<b>状态：</b>出纸完成<br><b>文件：</b>{fname}<br><b>发件人：</b>{from_addr}<br><b>设备：</b>{printer or '默认'}<br><b>时间：</b>{time.strftime('%Y-%m-%d %H:%M:%S')}"
                 )
                 print(f"[MailWorker] ✔ 任务 {job_id} 出纸完毕，已推送微信通知！")
                 return
@@ -244,6 +237,21 @@ class MultiMailWorker(threading.Thread):
             return str(header_val)
         return "".join(result).strip()
 
+    def extract_mail_text_body(self, msg):
+        """提取邮件的正文文本（用于检查暗号）"""
+        text_content = ""
+        try:
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                if ctype in ["text/plain", "text/html"]:
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        charset = part.get_content_charset() or "utf-8"
+                        text_content += payload.decode(charset, errors="ignore") + " "
+        except Exception:
+            pass
+        return text_content
+
     def process_mail(self):
         cfg_file = "/opt/cups_data/mail_config.json"
         if not os.path.exists(cfg_file):
@@ -269,11 +277,12 @@ class MultiMailWorker(threading.Thread):
             printer = self.get_fallback_printer()
 
         sec_keyword = cfg.get("keyword", "").strip()
+        # 白名单列表（为空表示允许所有人凭借暗号发送打印）
         whitelist = [s.strip().lower() for s in cfg.get("whitelist", "").split(",") if s.strip()]
 
         mail = None
         try:
-            mail = imaplib.IMAP4_SSL(server, port, timeout=6)
+            mail = imaplib.IMAP4_SSL(server, port, timeout=8)
             mail.login(user, pwd)
             mail.select("INBOX")
         except Exception:
@@ -298,79 +307,129 @@ class MultiMailWorker(threading.Thread):
                 msg = email.message_from_bytes(msg_data[0][1])
                 from_addr = self.decode_field(msg.get("From", ""))
                 subject = self.decode_field(msg.get("Subject", ""))
+                body_text = self.extract_mail_text_body(msg)
 
+                # 提取干净的发件人真实邮箱地址
                 real_sender = from_addr.lower()
                 if "<" in real_sender and ">" in real_sender:
                     real_sender = real_sender.split("<")[1].split(">")[0].strip()
 
-                if whitelist and not any(w in real_sender for w in whitelist):
-                    mail.store(num, "+FLAGS", "\\Seen")
-                    continue
+                print(f"[MailWorker] 收到新邮件: 主题='{subject}', 发件人='{real_sender}'")
 
-                if sec_keyword and (sec_keyword not in subject):
-                    mail.store(num, "+FLAGS", "\\Seen")
-                    continue
+                # ================= 策略逻辑 1：发件人白名单检测 =================
+                # 规则：若白名单填了邮箱，则严格限制；若白名单留空，则允许所有人！
+                if whitelist:
+                    is_in_whitelist = any(w in real_sender for w in whitelist)
+                    if not is_in_whitelist:
+                        print(f"[MailWorker] ⚠️ 拦截：发件人 '{real_sender}' 不在白名单授权列表中，跳过打印！")
+                        mail.store(num, "+FLAGS", "\\Seen")
+                        continue
+                else:
+                    print(f"[MailWorker] ℹ️ 当前发件人白名单留空：允许任意邮箱凭借暗号打印")
 
-                need_enhance = ("原图" not in subject)
+                # ================= 策略逻辑 2：打印暗号检测 =================
+                # 规则：若设置了暗号，标题或正文只要含有暗号即可放行！
+                if sec_keyword:
+                    has_keyword = (sec_keyword in subject) or (sec_keyword in body_text)
+                    if not has_keyword:
+                        print(f"[MailWorker] ⚠️ 拦截：主题与正文中均未包含暗号 '{sec_keyword}'，跳过打印！")
+                        mail.store(num, "+FLAGS", "\\Seen")
+                        continue
+                    else:
+                        print(f"[MailWorker] ✔ 暗号核验通过！")
+
+                # 判断是否整封邮件强制原图打印
+                subject_force_raw = ("原图" in subject or "原图" in body_text or "raw" in subject.lower())
                 printed_count = 0
 
+                # 稳健提取邮件里的图片或文档附件
+                part_index = 0
                 for part in msg.walk():
-                    if part.get_content_maintype() == "multipart" or part.get("Content-Disposition") is None:
+                    if part.is_multipart():
                         continue
 
                     fname = part.get_filename()
-                    if not fname:
+                    if fname:
+                        fname = self.decode_field(fname)
+                    else:
+                        # 兼容手机内嵌图片
+                        content_type = part.get_content_type().lower()
+                        part_index += 1
+                        if "image/jpeg" in content_type or "image/jpg" in content_type:
+                            fname = f"mobile_photo_{part_index}.jpg"
+                        elif "image/png" in content_type:
+                            fname = f"mobile_photo_{part_index}.png"
+                        elif "application/pdf" in content_type:
+                            fname = f"mobile_doc_{part_index}.pdf"
+                        else:
+                            continue
+
+                    ext = os.path.splitext(fname)[-1].lower()
+                    if ext not in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".tif", ".tiff"]:
                         continue
 
-                    fname = self.decode_field(fname)
-                    ext = os.path.splitext(fname)[-1].lower()
+                    payload = part.get_payload(decode=True)
+                    if not payload:
+                        continue
 
-                    if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".tif", ".tiff"]:
-                        t0 = time.time()
-                        token = uuid.uuid4().hex[:8]
-                        raw_save_path = os.path.join(MAIL_TASK_DIR, f"{token}_{fname}")
-                        with open(raw_save_path, "wb") as f_out:
-                            f_out.write(part.get_payload(decode=True))
+                    t0 = time.time()
+                    token = uuid.uuid4().hex[:8]
+                    raw_save_path = os.path.join(MAIL_TASK_DIR, f"{token}_{fname}")
+                    with open(raw_save_path, "wb") as f_out:
+                        f_out.write(payload)
 
-                        ready_file = raw_save_path
-                        print(f"[MailWorker] 收到附件: {fname}")
+                    ready_file = raw_save_path
+                    print(f"[MailWorker] 提取到打印附件: {fname}")
 
-                        if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
-                            conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
-                            if process_camscanner_color_stream(raw_save_path, conv_path):
-                                ready_file = conv_path
-                                print(f"[MailWorker] ✔ 真彩色保留去底耗时: {time.time() - t0:.2f} 秒")
+                    # 单张图片是否原图
+                    file_is_raw = ("原图" in fname or "raw" in fname.lower())
+                    need_enhance = (not subject_force_raw) and (not file_is_raw)
 
-                        cmd = ["lp"]
-                        if printer:
-                            cmd.extend(["-d", printer])
-                        cmd.extend(["-o", "media=A4", "-o", "fit-to-page", ready_file])
+                    if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
+                        conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
+                        if process_camscanner_color_stream(raw_save_path, conv_path):
+                            ready_file = conv_path
+                            print(f"[MailWorker] ✔ 真彩色保留去底耗时: {time.time() - t0:.2f} 秒")
+                    else:
+                        print(f"[MailWorker] ℹ️ 命中原图标记，按相机原图输出: {fname}")
 
-                        env = os.environ.copy()
-                        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-                        print(f"[MailWorker] 🚀 提交真彩色打印任务...")
-                        res_lp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                    # 自动唤醒并启用目标打印机
+                    env = os.environ.copy()
+                    env["CUPS_SERVER"] = "/run/cups/cups.sock"
+                    env["LANG"] = "C"
+                    if printer:
+                        subprocess.run(["cupsenable", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run(["cupsaccept", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                        if res_lp.returncode == 0:
-                            job_line = res_lp.stdout.strip()
-                            print(f"[MailWorker] ✔ CUPS 任务成功: {job_line}")
-                            job_id = job_line.split(" ")[-1] if "request id is" in job_line else ""
-                            printed_count += 1
-                            self.track_job_until_output(job_id, printer, fname, push_token, from_addr)
-                        else:
-                            err_msg = res_lp.stderr.strip()
-                            print(f"[MailWorker] ❌ 打印拒绝: {err_msg}")
-                            PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
+                    cmd = ["lp"]
+                    if printer:
+                        cmd.extend(["-d", printer])
+                    cmd.extend(["-o", "media=A4", "-o", "fit-to-page", ready_file])
 
+                    print(f"[MailWorker] 🚀 正在派发打印任务至 CUPS...")
+                    res_lp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+                    if res_lp.returncode == 0:
+                        job_line = res_lp.stdout.strip()
+                        print(f"[MailWorker] ✔ CUPS 任务下发成功: {job_line}")
+                        job_id = job_line.split(" ")[-1] if "request id is" in job_line else ""
+                        printed_count += 1
+                        self.track_job_until_output(job_id, printer, fname, push_token, from_addr)
+                    else:
+                        err_msg = res_lp.stderr.strip()
+                        print(f"[MailWorker] ❌ 打印下发拒绝: {err_msg}")
+                        PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
+
+                # 打印成功：从收件箱彻底清理该邮件
                 if printed_count > 0:
                     mail.store(num, "+FLAGS", "\\Deleted")
                     mail.expunge()
-                    print(f"[MailWorker] 🗑️ 已从收件箱彻底删除该邮件")
+                    print(f"[MailWorker] 🗑️ 邮件处理成功，已从收件箱彻底清理")
                 else:
                     mail.store(num, "+FLAGS", "\\Seen")
 
         except Exception as e:
-            print(f"[MailWorker] 邮件处理异常: {e}")
+            print(f"[MailWorker] 邮件解析异常: {e}")
         finally:
             try:
                 mail.logout()
@@ -393,7 +452,7 @@ class MailConfigHandler(BaseHandler):
             with open(cfg_file, "w", encoding="utf-8") as f:
                 json.dump(body, f, ensure_ascii=False, indent=2)
             print(f"[MailConfigHandler] 邮箱策略更新成功")
-            self.write_json(True, "云邮箱及微信通知策略已保存生效")
+            self.write_json(True, "云邮件智能暗号策略已保存生效")
         except Exception as e:
             self.write_json(False, f"保存失败: {str(e)}")
 
