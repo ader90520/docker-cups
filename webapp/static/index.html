@@ -158,32 +158,44 @@
         <option value="">正在检测打印机...</option>
       </select>
 
+      <!-- 驱动配置抽屉（彻底优化：移除手动输入名称，支持上传PPD） -->
       <div class="drawer" id="adminDrawer">
         <div style="font-weight:600; font-size:13px; margin-bottom:8px; color:#0f172a;">🛠️ 打印机驱动配置</div>
+        
+        <!-- 步骤 1：扫描并选择物理端口（选择后自动生成名称） -->
         <div style="margin-bottom:8px;">
           <span class="form-label">1. 扫描物理端口</span>
           <div style="display:flex; gap:6px;">
-            <select id="discoveredSelect"><option value="">点击扫描物理设备...</option></select>
-            <button onclick="scanDiscovered()" style="width:40px; background:#475569; color:#fff; border:none; border-radius:6px; cursor:pointer;">🔍</button>
+            <select id="discoveredSelect" onchange="onPortSelected(this.value)">
+              <option value="">点击右侧按钮扫描物理设备...</option>
+            </select>
+            <button onclick="scanDiscovered()" style="width:40px; background:#475569; color:#fff; border:none; border-radius:6px; cursor:pointer;" title="扫描端口">🔍</button>
           </div>
+          <div id="autoPrinterNameTip" style="font-size:11px; color:#0284c7; margin-top:3px; display:none;"></div>
         </div>
+
+        <!-- 步骤 2：驱动库检索与选择 -->
         <div style="margin-bottom:8px;">
-          <span class="form-label">2. 打印机名称</span>
-          <input type="text" id="newPrinterName" placeholder="例如: HP_LaserJet_M1005">
-        </div>
-        <div style="margin-bottom:10px;">
-          <span class="form-label">3. 驱动检索 (读取 631 驱动库)</span>
+          <span class="form-label">2. 从系统驱动库选择</span>
           <div style="display:flex; gap:6px; margin-bottom:6px;">
-            <input type="text" id="drvKey" placeholder="型号关键词 (如: 1005 / 1020)">
-            <button onclick="searchDrivers()" style="width:40px; background:#475569; color:#fff; border:none; border-radius:6px; cursor:pointer;">🔎</button>
+            <input type="text" id="drvKey" placeholder="型号关键词 (如: 1005 / 1020 / m126)">
+            <button onclick="searchDrivers()" style="width:40px; background:#475569; color:#fff; border:none; border-radius:6px; cursor:pointer;" title="检索驱动">🔎</button>
           </div>
           <select id="driverSelect"><option value="raw">通用透传驱动 (raw)</option></select>
         </div>
+
+        <!-- 步骤 3：直接上传本地 PPD 驱动 -->
+        <div style="margin-bottom:10px; background:#fff; border:1px dashed #cbd5e1; border-radius:6px; padding:8px;">
+          <span class="form-label" style="margin-bottom:4px; color:#0284c7; font-weight:600;">或者：上传自定义 PPD 驱动文件</span>
+          <input type="file" id="customPpdFile" accept=".ppd" style="font-size:12px; width:100%;">
+          <div style="font-size:10px; color:#64748b; margin-top:3px;">若上传了 PPD 文件，系统将优先使用上传的驱动。</div>
+        </div>
+
         <button class="btn-submit" style="background:#16a34a; padding:10px;" onclick="submitAddPrinter()">⚡ 确认添加并同步至 631</button>
       </div>
     </div>
 
-    <!-- 模式切换 Tabs（新增扫描 Tab） -->
+    <!-- 模式切换 Tabs -->
     <div class="nav-tabs">
       <div class="nav-tab active" onclick="switchTab('normal', this)">📄 标准打印</div>
       <div class="nav-tab" onclick="switchTab('scan', this)">📷 在线扫描</div>
@@ -227,7 +239,7 @@
           <div class="file-list" id="normalFileList"></div>
         </div>
 
-        <!-- 2. 新增：在线扫描面板 -->
+        <!-- 2. 在线扫描面板 -->
         <div class="card tab-pane" id="pane-scan">
           <div class="card-title">📷 一体机平板扫描</div>
           <div style="display:flex; flex-direction:column; gap:10px;">
@@ -281,21 +293,7 @@
           </div>
         </div>
 
-        <!-- 3. 发票打印面板 -->
-        <div class="card tab-pane" id="pane-invoice">
-          <div class="upload-zone" id="zoneInvoice">
-            <div style="font-size: 32px; margin-bottom: 6px;">🧾</div>
-            <div style="font-weight: 600; font-size: 14px; color:#1e293b;">点击选择 或 <b>直接将电子发票拖到这里</b></div>
-            <div style="font-size: 12px; color:#64748b; margin-top: 4px;">支持 PDF / OFD / 发票图片 (支持 Ctrl+V 粘贴)</div>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
-            <span style="font-size:12px; color:#64748b;" id="invoiceCountText">待打印发票 (0)</span>
-            <button onclick="clearAllFiles()" style="background:#fee2e2; border:1px solid #fecaca; color:#ef4444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">🗑️ 清空列表</button>
-          </div>
-          <div class="file-list" id="invoiceFileList"></div>
-        </div>
-
-        <!-- 4. 身份证打印面板 -->
+        <!-- 3. 身份证打印面板 -->
         <div class="card tab-pane" id="pane-idcard">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-size: 13px; font-weight: 600; color: #1e293b;">🪪 身份证正反面取景裁剪</span>
@@ -332,6 +330,20 @@
           <div style="font-size:11px; color:#0284c7; background:#f0f9ff; padding:6px 10px; border-radius:6px;">
             💡 <b>右侧预览说明</b>：系统已将正反两面自动合成到一张标准的单页 A4 纸张居中排版，打印即是标准 1:1 复印件！
           </div>
+        </div>
+
+        <!-- 4. 发票打印面板 -->
+        <div class="card tab-pane" id="pane-invoice">
+          <div class="upload-zone" id="zoneInvoice">
+            <div style="font-size: 32px; margin-bottom: 6px;">🧾</div>
+            <div style="font-weight: 600; font-size: 14px; color:#1e293b;">点击选择 或 <b>直接将电子发票拖到这里</b></div>
+            <div style="font-size: 12px; color:#64748b; margin-top: 4px;">支持 PDF / OFD / 发票图片 (支持 Ctrl+V 粘贴)</div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <span style="font-size:12px; color:#64748b;" id="invoiceCountText">待打印发票 (0)</span>
+            <button onclick="clearAllFiles()" style="background:#fee2e2; border:1px solid #fecaca; color:#ef4444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">🗑️ 清空列表</button>
+          </div>
+          <div class="file-list" id="invoiceFileList"></div>
         </div>
 
         <!-- 5. 云邮件打印面板 -->
@@ -508,6 +520,7 @@
     let uploadedFiles = [];
     let currentZoom = 1.0;
     let lastScannedUrl = "";
+    let currentAutoName = "";
 
     function setZoom(scale) {
       currentZoom = Math.min(Math.max(scale, 0.4), 3.0);
@@ -928,11 +941,9 @@
             status.innerText = "✔ 扫描完成！" + (d.copy_job ? " (已同步提交复印)" : "");
             lastScannedUrl = d.url;
             
-            // 展示扫描件下载与打印操作
             actionBox.style.display = "flex";
             document.getElementById("btnDownloadScan").href = d.url;
 
-            // 在右侧窗口渲染扫描结果大图
             const pcInner = document.getElementById("pcPreviewInner");
             const mobInner = document.getElementById("mobPreviewInner");
             const imgHtml = `<img src="${d.url}?t=${Date.now()}" style="max-width:95%; max-height:95%; object-fit:contain;">`;
@@ -1062,6 +1073,16 @@
         });
     }
 
+    // ==================== 驱动管理与端口自动命名 ====================
+    function onPortSelected(uri) {
+      if (!uri) return;
+      const rawName = uri.split("/").pop().split("?")[0];
+      currentAutoName = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || "Printer";
+      const tip = document.getElementById("autoPrinterNameTip");
+      tip.style.display = "block";
+      tip.innerText = `✔ 已自动命名为: ${currentAutoName}`;
+    }
+
     function scanDiscovered() {
       const sel = document.getElementById("discoveredSelect");
       sel.innerHTML = "<option value=\"\">扫描中...</option>";
@@ -1070,15 +1091,17 @@
         .then(res => {
           sel.innerHTML = "";
           const list = res.data || [];
+          if (list.length === 0) {
+            sel.innerHTML = "<option value=\"\">未发现物理连接的打印机</option>";
+            return;
+          }
           list.forEach(d => {
             const opt = document.createElement("option");
             opt.value = d.uri;
             opt.innerText = `🔌 ${d.name}`;
             sel.appendChild(opt);
           });
-          if (list[0]) {
-            document.getElementById("newPrinterName").value = list[0].raw_name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 18);
-          }
+          onPortSelected(list[0].uri);
         });
     }
 
@@ -1101,17 +1124,24 @@
 
     function submitAddPrinter() {
       const uri = document.getElementById("discoveredSelect").value;
-      const name = document.getElementById("newPrinterName").value.trim();
       const driver = document.getElementById("driverSelect").value;
-      if (!name || !uri) { alert("请填写打印机名称并选择端口"); return; }
+      const ppdInput = document.getElementById("customPpdFile");
+
+      if (!uri) { 
+        alert("请先扫描并选择打印机物理端口！"); 
+        return; 
+      }
 
       const fd = new FormData();
-      fd.append("name", name);
       fd.append("uri", uri);
+      fd.append("name", currentAutoName);
       fd.append("driver", driver);
-      fd.append("is_default", "1");
+      
+      if (ppdInput.files && ppdInput.files[0]) {
+        fd.append("ppd_file", ppdInput.files[0]);
+      }
 
-      fetch("/api/printer_admin", { method:"POST", body:fd })
+      fetch("/api/printer_admin", { method: "POST", body: fd })
         .then(r => r.json())
         .then(d => {
           alert(d.msg || (d.success ? "添加成功" : "失败"));
@@ -1122,6 +1152,7 @@
         });
     }
 
+    // ==================== 云邮件策略加载与保存 ====================
     function loadMailConfig() {
       fetch("/api/mail_config")
         .then(r => r.json())
