@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import tornado.ioloop
-import tornado.web
 import os
 import sys
+import tornado.ioloop
+import tornado.web
+
+# 保证引用根路径正确
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
 from handlers.device_handler import DeviceHandler
 from handlers.print_handler import PrintHandler
@@ -14,10 +19,10 @@ from handlers.printer_admin_handler import PrinterAdminHandler
 from handlers.mail_handler import MailConfigHandler
 from handlers.scan_handler import ScanHandler, DownloadScanHandler
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+STATIC_DIR = os.path.join(CURRENT_DIR, "static")
 
 def make_app():
-    return tornado.web.Application([
+    handlers = [
         (r"/", tornado.web.RedirectHandler, {"url": "/index.html"}),
         (r"/api/devices", DeviceHandler),
         (r"/api/print", PrintHandler),
@@ -29,10 +34,17 @@ def make_app():
         (r"/api/scan/devices", ScanHandler),
         (r"/download/scan/(.*)", DownloadScanHandler),
         (r"/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR, "default_filename": "index.html"}),
-    ], debug=False)
+    ]
+    return tornado.web.Application(handlers, debug=False)
 
 if __name__ == "__main__":
-    app = make_app()
-    app.listen(8088, address="0.0.0.0")
-    print(">>> [Web] 8088 打印与多功能扫描控制台已启动...")
-    tornado.ioloop.IOLoop.current().start()
+    try:
+        app = make_app()
+        # 允许端口快速重用，避免重启时 Address already in use
+        server = tornado.httpserver.HTTPServer(app)
+        server.listen(8088, address="0.0.0.0")
+        print(">>> [Web] 8088 综合控制台服务启动成功！监听端口 0.0.0.0:8088")
+        tornado.ioloop.IOLoop.current().start()
+    except Exception as e:
+        print(f">>> [Web] 启动异常崩溃: {e}")
+        sys.exit(1)
