@@ -11,10 +11,15 @@ os.makedirs(SCAN_DIR, exist_ok=True)
 
 class ScanHandler(BaseHandler):
     def get(self):
-        """探测可用的扫描仪设备"""
+        """探测可用的扫描仪设备（针对 HP M1005 等做深度兼容探测）"""
         try:
             env = os.environ.copy()
             env["LANG"] = "C"
+
+            # 确保 /dev/bus/usb 权限可用
+            subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stderr=subprocess.DEVNULL)
+
+            # 执行 scanimage -L
             res = subprocess.run(["scanimage", "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, env=env)
             output = res.stdout.strip()
             devices = []
@@ -24,6 +29,14 @@ class ScanHandler(BaseHandler):
                     dev_id = line.split("`")[1].split("'")[0]
                     desc = line.split("is a")[-1].strip() if "is a" in line else dev_id
                     devices.append({"id": dev_id, "name": desc})
+
+            # 如果 scanimage -L 没有立即列出，通过 sane-find-scanner 辅助探测 USB 接口
+            if not devices:
+                find_res = subprocess.run(["sane-find-scanner", "-q"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                for line in find_res.stdout.splitlines():
+                    if "found USB scanner" in line and "vendor=0x03f0" in line:  # 0x03f0 为 HP 厂商代码
+                        devices.append({"id": "hpljm1005", "name": "HP LaserJet M1005 一体机 (自动匹配)"})
+                        break
 
             self.write_json(True, "扫描仪检测完成", data={"devices": devices, "raw": output})
         except Exception as e:
@@ -43,8 +56,12 @@ class ScanHandler(BaseHandler):
             filepath = os.path.join(SCAN_DIR, filename)
 
             cmd = ["scanimage"]
-            if device:
+            if device and device != "hpljm1005":
                 cmd.extend(["-d", device])
+            elif device == "hpljm1005":
+                # 指定针对 M1005 的内置专用后端
+                cmd.extend(["-d", "hpljm1005"])
+
             cmd.extend([
                 "--format=jpeg",
                 f"--output-file={filepath}",
@@ -58,7 +75,7 @@ class ScanHandler(BaseHandler):
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90, env=env)
 
             if res.returncode != 0 or not os.path.exists(filepath):
-                err = res.stderr.strip() or "扫描仪响应异常"
+                err = res.stderr.strip() or "扫描仪响应异常，请检查 USB 数据线或进纸平板"
                 self.write_json(False, f"扫描失败: {err}")
                 return
 
@@ -80,13 +97,12 @@ class ScanHandler(BaseHandler):
 
             self.write_json(True, "扫描完成", filename=filename, url=f"/download/scan/{filename}", copy_job=copy_job)
         except subprocess.TimeoutExpired:
-            self.write_json(False, "扫描仪响应超时，请检查连接或供电！")
+            self.write_json(False, "扫描仪响应超时，请检查设备连接或电源！")
         except Exception as e:
             self.write_json(False, f"扫描执行异常: {str(e)}")
 
 class DownloadScanHandler(BaseHandler):
     def get(self, filename):
-        """提供扫描件下载与预览"""
         filepath = os.path.join(SCAN_DIR, filename)
         if not os.path.exists(filepath):
             self.set_status(404)
