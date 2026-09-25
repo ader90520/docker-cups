@@ -31,14 +31,14 @@ def fast_detect_skew(gray_img):
     except Exception:
         return 0.0
 
-def process_camscanner_stream(input_path, output_path):
+def process_camscanner_color_stream(input_path, output_path):
     """
-    极速流畅连续走纸引擎 (200 DPI，彻底杜绝连续多页停顿卡顿):
-    1. EXIF 纠正与微纠偏
-    2. 裁除外沿 3% 暗边
-    3. 稳定背景除法 (纯白底，字迹深黑，杜绝黑白反相)
-    4. 红色通道下压加黑 (保护浅红虚线框、题号与迷宫走线)
-    5. 200 DPI A4 规范居中 (数据量降低60%，消除打印机缓存等待)
+    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出):
+    1. EXIF 方向修正与水平微纠偏
+    2. 裁剪 3% 暗黑外边沿
+    3. RGB 三通道分别做局部背景除法，纸张底色 100% 漂白为 (255, 255, 255)
+    4. 完美保留红章、红线、彩图、蓝黑墨水笔迹原生色彩
+    5. 居中排版至 200 DPI A4 画布，连续流畅吐纸
     """
     try:
         with Image.open(input_path) as raw_img:
@@ -59,49 +59,48 @@ def process_camscanner_stream(input_path, output_path):
                 img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
 
             rgb = img.convert("RGB")
-            r, g, b = [np.array(c, dtype=np.float32) for c in rgb.split()]
+            channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
+            cleaned_channels = []
 
-            # 红色通道特征下压 (保证红线与彩色元素不发浅发虚)
-            is_red = (r > (g + 15.0)) & (r > (b + 15.0))
-            lum = 0.299 * r + 0.587 * g + 0.114 * b
-            lum = np.where(is_red, lum * 0.65, lum)
+            # 对 R、G、B 分别进行局部背景除法白化
+            for c_arr in channels:
+                c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
+                bg = c_pil.filter(ImageFilter.BoxBlur(radius=25))
+                bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
-            gray_pil = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8))
-            bg = gray_pil.filter(ImageFilter.BoxBlur(radius=25))
-            bg_arr = np.array(bg, dtype=np.float32) + 1.0
+                divided = (c_arr / bg_arr) * 255.0
 
-            # 稳健局部背景相除
-            divided = (lum / bg_arr) * 255.0
+                out = np.zeros_like(divided)
+                # 底色推为纯白 255
+                out[divided >= 195] = 255.0
 
-            out = np.zeros_like(divided)
-            # 背景区彻底推为 255 纯白
-            out[divided >= 195] = 255.0
+                # 字迹与彩色区域对比度拉深
+                mask_ink = divided < 195
+                ink_val = np.clip((divided[mask_ink] - 40.0) * (205.0 / (195.0 - 40.0)), 0, 255)
+                ink_val = (ink_val / 205.0) ** 1.25 * 190.0
+                out[mask_ink] = ink_val
+                cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
 
-            # 笔迹区正向非线性加深
-            mask_ink = divided < 195
-            ink_val = np.clip((divided[mask_ink] - 40.0) * (200.0 / (195.0 - 40.0)), 0, 255)
-            ink_val = (ink_val / 200.0) ** 1.35 * 180.0
-            out[mask_ink] = ink_val
+            # 合成真彩色图像
+            clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
+            sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
 
-            clean_img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
-            sharp_img = clean_img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=130, threshold=2))
-
-            # 200 DPI 标准 A4 画布 (1654 x 2338) 居中排版
+            # 200 DPI 标准 A4 画布 (1654 x 2338) 纯白底 RGB
             a4_w, a4_h = 1654, 2338
-            canvas = Image.new("L", (a4_w, a4_h), 255)
+            canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
             margin = 35
             target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
-            ratio = min(target_w / sharp_img.width, target_h / sharp_img.height)
-            new_w, new_h = int(sharp_img.width * ratio), int(sharp_img.height * ratio)
+            ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
+            new_w, new_h = int(sharp_rgb.width * ratio), int(sharp_rgb.height * ratio)
 
-            resized = sharp_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+            resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
             canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
 
             canvas.save(output_path, format="JPEG", quality=90)
             return True
     except Exception as e:
-        print(f"[CamScannerStream] 处理异常: {e}")
+        print(f"[CamScannerColor] 处理异常: {e}")
         return False
 
 class PrintHandler(BaseHandler):
@@ -127,7 +126,7 @@ class PrintHandler(BaseHandler):
                 target_path = src_path
                 if whiten == "1" and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
                     enhanced_path = os.path.join(UPLOAD_DIR, f"cam_{token}.jpg")
-                    if process_camscanner_stream(src_path, enhanced_path):
+                    if process_camscanner_color_stream(src_path, enhanced_path):
                         target_path = enhanced_path
 
                 res = self.execute_lp(printer, copies, target_path)
