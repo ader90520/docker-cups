@@ -4,86 +4,87 @@
 import os
 import time
 import subprocess
-import json
-import tornado.web
-from PIL import Image
+from handlers.base_handler import BaseHandler
 
 SCAN_DIR = "/scans"
+os.makedirs(SCAN_DIR, exist_ok=True)
 
-class DevicesHandler(tornado.web.RequestHandler):
+class ScanHandler(BaseHandler):
     def get(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        printers, scanners = [], []
-        
+        """探测可用的扫描仪设备"""
         try:
-            res = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            for line in res.stdout.splitlines():
-                if line.startswith("printer"):
-                    printers.append(line.split()[1])
-        except Exception:
-            pass
-
-        try:
-            res = subprocess.run(["scanimage", "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
-            for line in res.stdout.splitlines():
+            res = subprocess.run(["scanimage", "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            output = res.stdout.strip()
+            devices = []
+            
+            # 格式类似: device `hpljm1005:libusb:001:004' is a Hewlett-Packard LaserJet M1005 flatbed scanner
+            for line in output.splitlines():
                 if "device `" in line:
                     dev_id = line.split("`")[1].split("'")[0]
-                    desc = line.split("' is a ")[-1] if "' is a " in line else dev_id
-                    scanners.append({"id": dev_id, "name": desc})
-        except Exception:
-            pass
+                    desc = line.split("is a")[-1].strip() if "is a" in line else dev_id
+                    devices.append({"id": dev_id, "name": desc})
 
-        self.write(json.dumps({"printers": printers, "scanners": scanners}))
+            self.write_json(True, "扫描仪检测成功", data={"devices": devices, "raw": output})
+        except Exception as e:
+            self.write_json(False, f"探测扫描仪异常: {str(e)}")
 
-class DoScanHandler(tornado.web.RequestHandler):
     def post(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        """执行硬件扫描任务并生成图片"""
         try:
-            data = json.loads(self.request.body.decode('utf-8'))
-            device = data.get("device", "").strip()
-            mode = data.get("mode", "Color")
-            resolution = data.get("resolution", "150")
-            fmt = data.get("format", "pdf").lower()
-            action = data.get("action", "scan")
-            target_printer = data.get("printer", "")
+            device = self.get_argument("device", "").strip()
+            resolution = self.get_argument("resolution", "200").strip()
+            mode = self.get_argument("mode", "Color").strip()  # Color, Gray, Lineart
+            copy_print = self.get_argument("copy_print", "0").strip() # 1 = 扫描后自动复印
+            printer = self.get_argument("printer", "").strip()
 
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-            raw_tiff = f"/tmp/scan_{timestamp}.tiff"
-            out_filename = f"scan_{timestamp}.{fmt}"
-            final_path = os.path.join(SCAN_DIR, out_filename)
+            timestamp = int(time.time())
+            filename = f"scan_{timestamp}.jpg"
+            filepath = os.path.join(SCAN_DIR, filename)
 
-            cmd = ["scanimage", "-d", device, f"--mode={mode}", f"--resolution={resolution}", "--format=tiff"]
-            with open(raw_tiff, "wb") as f:
-                p = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=60)
-            
-            if p.returncode != 0:
-                self.set_status(500)
-                self.write(json.dumps({"success": False, "msg": f"扫描失败: {p.stderr.decode('utf-8', errors='ignore')}"}))
-                if os.path.exists(raw_tiff): os.remove(raw_tiff)
+            # 构建 scanimage 命令
+            cmd = ["scanimage"]
+            if device:
+                cmd.extend(["-d", device])
+            cmd.extend([
+                "--format=jpeg",
+                f"--output-file={filepath}",
+                "--resolution", resolution,
+                "--mode", mode
+            ])
+
+            print(f"[ScanHandler] 执行扫描指令: {' '.join(cmd)}")
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90)
+
+            if res.returncode != 0 or not os.path.exists(filepath):
+                err = res.stderr.strip() or "扫描仪未就绪或未检测到介质"
+                self.write_json(False, f"扫描失败: {err}")
                 return
 
-            im = Image.open(raw_tiff)
-            if fmt == "pdf":
-                if im.mode in ('RGBA', 'LA'): im = im.convert('RGB')
-                im.save(final_path, 'PDF', resolution=float(resolution))
-            elif fmt in ["jpg", "jpeg"]:
-                im.convert('RGB').save(final_path, 'JPEG', quality=90)
-            elif fmt == "png":
-                im.save(final_path, 'PNG')
-            else:
-                os.rename(raw_tiff, final_path)
+            print(f"[ScanHandler] ✔ 扫描完成，文件已保存至: {filepath}")
 
-            if os.path.exists(raw_tiff): os.remove(raw_tiff)
+            # 如果用户开启了一键复印，直接送往 CUPS 打印机
+            copy_job = ""
+            if copy_print == "1":
+                lp_res = self.execute_lp(printer, "1", filepath)
+                if lp_res.returncode == 0:
+                    copy_job = lp_res.stdout.strip()
+                    print(f"[ScanHandler] ✔ 自动复印作业已派发: {copy_job}")
 
-            if action == "copy" and target_printer:
-                subprocess.run(["lp", "-d", target_printer, final_path], check=True)
-
-            self.write(json.dumps({
-                "success": True, 
-                "msg": "复印指令已发送" if action == "copy" else "扫描完成", 
-                "filename": out_filename,
-                "url": f"/scans/{out_filename}"
-            }))
+            self.write_json(True, "扫描完成", filename=filename, url=f"/download/scan/{filename}", copy_job=copy_job)
+        except subprocess.TimeoutExpired:
+            self.write_json(False, "扫描仪响应超时，请检查 USB 连接或机器供电！")
         except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
+            self.write_json(False, f"扫描执行异常: {str(e)}")
+
+class DownloadScanHandler(BaseHandler):
+    def get(self, filename):
+        """提供扫描件直接下载与网页内嵌预览"""
+        filepath = os.path.join(SCAN_DIR, filename)
+        if not os.path.exists(filepath):
+            self.set_status(404)
+            self.write("文件不存在")
+            return
+        
+        self.set_header("Content-Type", "image/jpeg")
+        with open(filepath, "rb") as f:
+            self.write(f.read())
