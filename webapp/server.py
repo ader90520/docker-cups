@@ -5,8 +5,8 @@ import os
 import sys
 import tornado.ioloop
 import tornado.web
+import tornado.httpserver
 
-# 保证引用根路径正确
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
@@ -40,11 +40,10 @@ def make_app():
 if __name__ == "__main__":
     try:
         app = make_app()
-        # 允许端口快速重用，避免重启时 Address already in use
         server = tornado.httpserver.HTTPServer(app)
         server.listen(8088, address="0.0.0.0")
-        print(">>> [Web] 8088 综合控制台服务启动成功！监听端口 0.0.0.0:8088")
+        print(">>> [Web] 8088 综合控制台服务启动成功！监听 0.0.0.0:8088")
         tornado.ioloop.IOLoop.current().start()
     except Exception as e:
-        print(f">>> [Web] 启动异常崩溃: {e}")
+        print(f">>> [Web] 启动异常: {e}")
         sys.exit(1)
