@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 深度精准安装：基础库、CUPS、字体、扫描驱动（不装 OpenCV，保持极致轻量）
+# 1. 深度精准安装：基础库、CUPS、字体、扫描驱动（不装 OpenCV，保障低配设备运行稳定）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
