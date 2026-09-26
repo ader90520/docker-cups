@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 深度精准安装：基础库、CUPS、字体及 gettext 编译工具
+# 1. 基础库、CUPS、字体、扫描驱动以及 Python 视觉处理库（包含 python3-opencv）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -32,13 +32,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tornado \
     python3-requests \
     python3-numpy \
+    python3-opencv \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
 
-# 2. 拷贝代码与静态资源（存入持久目录 /opt/i18，不要放到 /tmp）
+# 2. 拷贝代码与静态资源
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
@@ -53,17 +55,15 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 5. 【关键修复】构建期直接注入中文语言包与模板（避免运行时被清空或丢失）
+# 5. 构建期直接注入中文语言包与模板
 RUN mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
-    # 编译 po 生成 CUPS 动态字库 mo 文件
     && if [ -f /opt/i18/cups_zh.po ]; then \
            msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po && \
            cp /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo || true; \
        fi \
-    # 拷贝汉化模板（如果存在对应目录或文件）
     && if [ -d /opt/i18/zh_CN ]; then \
            cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ && \
            cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh/; \
@@ -71,7 +71,6 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
            cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh_CN/ && \
            cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh/; \
        fi \
-    # 替换中文主页
     && if [ -f /opt/i18/index.html ]; then \
            cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html; \
        fi \
