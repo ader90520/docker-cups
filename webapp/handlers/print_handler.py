@@ -4,23 +4,27 @@
 import os
 import time
 import uuid
-import cv2
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
 def safe_imread(file_path):
-    """解决 cv2.imread 无法读取包含中文路径或特殊字符的文件问题"""
+    """解决 cv2 无法直接读取中文及特殊字符路径的问题"""
+    if not HAS_CV2:
+        return None
     try:
         return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     except Exception:
         return None
 
-def auto_crop_document(bgr_img):
-    """
-    阶段 1：智能识别书本四个顶点，切除书本以外的桌布杂乱背景（四点透视变换）
-    采用轻量化 600px 快速采样，避免占用过多内存
-    """
+def auto_crop_document_cv(bgr_img):
+    """OpenCV 阶段 1：智能识别纸张四个顶点，切除外围桌面杂物（四点透视变换）"""
     try:
         h, w = bgr_img.shape[:2]
         scale = 600.0 / max(h, w)
@@ -71,11 +75,11 @@ def auto_crop_document(bgr_img):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
     except Exception as e:
-        print(f"[AutoCrop] 切边异常: {e}")
+        print(f"[AutoCropCV] 异常: {e}")
         return bgr_img
 
-def dewarp_curved_text(bgr_img):
-    """阶段 2：检测书本中缝拱起，将弯曲的字行反向拉直平展"""
+def dewarp_curved_text_cv(bgr_img):
+    """OpenCV 阶段 2：检测书本中缝拱起，将弯曲的字行反向拉直平展"""
     try:
         h, w = bgr_img.shape[:2]
         gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
@@ -111,8 +115,49 @@ def dewarp_curved_text(bgr_img):
         
         return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
-        print(f"[Dewarp] 拉直异常: {e}")
+        print(f"[DewarpCV] 异常: {e}")
         return bgr_img
+
+def auto_crop_document_pil(pil_img):
+    """纯 PIL + NumPy 智能边缘裁切兜底方案（完全不依赖 cv2）"""
+    try:
+        w, h = pil_img.size
+        scale = 300.0 / max(w, h)
+        small = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
+        gray = small.convert("L")
+        
+        arr = np.array(gray, dtype=np.float32)
+        gy, gx = np.gradient(arr)
+        edge = np.sqrt(gx**2 + gy**2)
+        
+        proj_x = np.mean(edge, axis=0)
+        proj_y = np.mean(edge, axis=1)
+        
+        th_x = np.percentile(proj_x, 60)
+        th_y = np.percentile(proj_y, 60)
+        
+        x_indices = np.where(proj_x > th_x)[0]
+        y_indices = np.where(proj_y > th_y)[0]
+        
+        if len(x_indices) > 0 and len(y_indices) > 0:
+            left = int(x_indices[0] / scale)
+            right = int(x_indices[-1] / scale)
+            top = int(y_indices[0] / scale)
+            bottom = int(y_indices[-1] / scale)
+            
+            pad_x = int(w * 0.01)
+            pad_y = int(h * 0.01)
+            box = (
+                max(0, left - pad_x),
+                max(0, top - pad_y),
+                min(w, right + pad_x),
+                min(h, bottom + pad_y)
+            )
+            if (box[2] - box[0]) > w * 0.5 and (box[3] - box[1]) > h * 0.5:
+                return pil_img.crop(box)
+    except Exception as e:
+        print(f"[AutoCropPIL] 异常: {e}")
+    return pil_img
 
 def fast_detect_skew(gray_img):
     try:
@@ -140,14 +185,18 @@ def fast_detect_skew(gray_img):
 def process_camscanner_color_stream(input_path, output_path):
     """全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)"""
     try:
-        cv_img = safe_imread(input_path)
-        if cv_img is not None:
-            cv_img = auto_crop_document(cv_img)
-            cv_img = dewarp_curved_text(cv_img)
-            raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-            raw_img = Image.fromarray(raw_rgb)
-        else:
-            raw_img = Image.open(input_path)
+        raw_img = None
+        if HAS_CV2:
+            cv_img = safe_imread(input_path)
+            if cv_img is not None:
+                cv_img = auto_crop_document_cv(cv_img)
+                cv_img = dewarp_curved_text_cv(cv_img)
+                raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+                raw_img = Image.fromarray(raw_rgb)
+        
+        if raw_img is None:
+            with Image.open(input_path) as disk_img:
+                raw_img = auto_crop_document_pil(disk_img.copy())
 
         img = ImageOps.exif_transpose(raw_img)
         if img.width > img.height:
@@ -251,7 +300,6 @@ class PrintHandler(BaseHandler):
                     return
 
             clean_old_tmp_files(UPLOAD_DIR)
-
             self.write_json(True, f"共 {len(files)} 个文件任务已派发", job=", ".join(jobs))
         except Exception as e:
             self.write_json(False, f"打印服务异常: {str(e)}")
