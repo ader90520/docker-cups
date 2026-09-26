@@ -10,7 +10,7 @@ from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
 def safe_imread(file_path):
-    """解决 cv2.imread 无法读取包含中文路径的文件问题"""
+    """解决 cv2.imread 无法读取包含中文路径或特殊字符的文件问题"""
     try:
         return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     except Exception:
@@ -19,7 +19,7 @@ def safe_imread(file_path):
 def auto_crop_document(bgr_img):
     """
     阶段 1：智能识别书本四个顶点，切除书本以外的桌布杂乱背景（四点透视变换）
-    修复 widthB 笔误，采用轻量化 600px 快速采样
+    采用轻量化 600px 快速采样，避免占用过多内存
     """
     try:
         h, w = bgr_img.shape[:2]
@@ -55,7 +55,7 @@ def auto_crop_document(bgr_img):
         
         (tl, tr, br, bl) = rect
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))  # 修复原 tr[0]-tr[0] 笔误
+        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
         maxWidth = max(int(widthA), int(widthB))
 
         heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
@@ -250,7 +250,6 @@ class PrintHandler(BaseHandler):
                     self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
                     return
 
-            # 执行完毕后顺带执行轻量化清理
             clean_old_tmp_files(UPLOAD_DIR)
 
             self.write_json(True, f"共 {len(files)} 个文件任务已派发", job=", ".join(jobs))
