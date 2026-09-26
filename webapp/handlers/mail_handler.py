@@ -19,25 +19,19 @@ from handlers.base_handler import BaseHandler
 MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
-def safe_imread(file_path):
-    try:
-        return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-    except Exception:
-        return None
-
 def auto_crop_document(bgr_img):
     try:
         h, w = bgr_img.shape[:2]
         scale = 600.0 / max(h, w)
         small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        
+
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edged = cv2.Canny(blurred, 50, 150)
-        
+
         contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-        
+
         doc_cnt = None
         for c in contours:
             peri = cv2.arcLength(c, True)
@@ -45,7 +39,7 @@ def auto_crop_document(bgr_img):
             if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.25):
                 doc_cnt = approx
                 break
-                
+
         if doc_cnt is None:
             return bgr_img
 
@@ -57,7 +51,7 @@ def auto_crop_document(bgr_img):
         diff = np.diff(pts, axis=1)
         rect[1] = pts[np.argmin(diff)]
         rect[3] = pts[np.argmax(diff)]
-        
+
         (tl, tr, br, bl) = rect
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
         widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
@@ -83,14 +77,14 @@ def dewarp_curved_text(bgr_img):
     try:
         h, w = bgr_img.shape[:2]
         gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-        
+
         sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
         sobel_y = np.abs(sobel_y)
-        
+
         num_slices = 20
         slice_w = w // num_slices
         col_offsets = []
-        
+
         for i in range(num_slices):
             col_slice = sobel_y[:, i * slice_w : (i + 1) * slice_w]
             proj = np.sum(col_slice, axis=1)
@@ -98,21 +92,21 @@ def dewarp_curved_text(bgr_img):
             total_e = np.sum(proj)
             centroid = np.sum(indices * proj) / (total_e + 1e-5)
             col_offsets.append(centroid)
-            
+
         col_offsets = np.array(col_offsets)
         mean_val = np.median(col_offsets)
         deflection = col_offsets - mean_val
-        
+
         if np.max(np.abs(deflection)) < 5.0 or np.max(np.abs(deflection)) > h * 0.15:
             return bgr_img
-            
+
         x_coords = np.linspace(0, w, num_slices)
         all_x = np.arange(w)
         smooth_dy = np.interp(all_x, x_coords, deflection)
-        
+
         map_x, map_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
         map_y = map_y - smooth_dy.reshape(1, w).astype(np.float32)
-        
+
         return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
         print(f"[Dewarp] 异常: {e}")
@@ -143,7 +137,7 @@ def fast_detect_skew(gray_img):
 
 def process_camscanner_color_stream(input_path, output_path):
     try:
-        cv_img = safe_imread(input_path)
+        cv_img = cv2.imread(input_path)
         if cv_img is not None:
             cv_img = auto_crop_document(cv_img)
             cv_img = dewarp_curved_text(cv_img)
@@ -208,16 +202,6 @@ def process_camscanner_color_stream(input_path, output_path):
         print(f"[MailWorker] 图像增强异常: {e}")
         return False
 
-def clean_old_tmp_files(directory, max_age_seconds=1800):
-    try:
-        now = time.time()
-        for f in os.listdir(directory):
-            p = os.path.join(directory, f)
-            if os.path.isfile(p) and (now - os.path.getmtime(p) > max_age_seconds):
-                os.remove(p)
-    except Exception:
-        pass
-
 class PushPlusNotifier:
     @staticmethod
     def send(token, title, content):
@@ -249,7 +233,7 @@ class MultiMailWorker(threading.Thread):
         self.is_running = True
 
     def run(self):
-        print(f"[MailWorker] ✔ 极速智能暗号云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
+        print(f"[MailWorker] ✔ 智能暗号云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
         while self.is_running:
             try:
                 self.process_mail()
@@ -432,11 +416,11 @@ class MultiMailWorker(threading.Thread):
                 if whitelist:
                     is_in_whitelist = any(w in real_sender for w in whitelist)
                     if not is_in_whitelist:
-                        print(f"[MailWorker] ⚠️ 拦截：发件人 '{real_sender}' 不在白名单授权列表中，跳过打印！")
+                        print(f"[MailWorker] ⚠️ 拦截：发件人 '{real_sender}' 未在白名单中，跳过打印！")
                         mail.store(num, "+FLAGS", "\\Seen")
                         continue
                 else:
-                    print(f"[MailWorker] ℹ️ 当前发件人白名单留空：允许任意邮箱凭借暗号打印")
+                    print(f"[MailWorker] ℹ️ 发件人白名单留空：允许任意邮箱凭借暗号打印")
 
                 if sec_keyword:
                     has_keyword = (sec_keyword in subject) or (sec_keyword in body_text)
@@ -511,4 +495,53 @@ class MultiMailWorker(threading.Thread):
                     cmd.extend(["-o", "media=A4", "-o", "fit-to-page", ready_file])
 
                     print(f"[MailWorker] 🚀 正在派发打印任务至 CUPS...")
-                    res_lp = subprocess.run(cmd, stdout=subprocess
+                    res_lp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+                    if res_lp.returncode == 0:
+                        job_line = res_lp.stdout.strip()
+                        print(f"[MailWorker] ✔ CUPS 任务下发成功: {job_line}")
+                        job_id = job_line.split(" ")[-1] if "request id is" in job_line else ""
+                        printed_count += 1
+                        self.track_job_until_output(job_id, printer, fname, push_token, from_addr)
+                    else:
+                        err_msg = res_lp.stderr.strip()
+                        print(f"[MailWorker] ❌ 打印下发拒绝: {err_msg}")
+                        PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
+
+                if printed_count > 0:
+                    mail.store(num, "+FLAGS", "\\Deleted")
+                    mail.expunge()
+                    print(f"[MailWorker] 🗑️ 邮件处理成功，已从收件箱彻底清理")
+                else:
+                    mail.store(num, "+FLAGS", "\\Seen")
+
+        except Exception as e:
+            print(f"[MailWorker] 邮件解析异常: {e}")
+        finally:
+            try:
+                mail.logout()
+            except Exception:
+                pass
+
+class MailConfigHandler(BaseHandler):
+    def get(self):
+        cfg_file = "/opt/cups_data/mail_config.json"
+        if os.path.exists(cfg_file):
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                self.write_json(True, data=json.load(f))
+        else:
+            self.write_json(True, data={"enable": False})
+
+    def post(self):
+        try:
+            body = json.loads(self.request.body.decode("utf-8"))
+            cfg_file = "/opt/cups_data/mail_config.json"
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                json.dump(body, f, ensure_ascii=False, indent=2)
+            print(f"[MailConfigHandler] 邮箱策略更新成功")
+            self.write_json(True, "云邮件智能暗号策略已保存生效")
+        except Exception as e:
+            self.write_json(False, f"保存失败: {str(e)}")
+
+mail_thread = MultiMailWorker()
+mail_thread.start()
