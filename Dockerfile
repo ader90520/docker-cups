@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础库、CUPS、字体、扫描驱动以及 Python 视觉处理库（包含 python3-opencv）
+# 1. 深度精准安装：基础库、CUPS、字体、扫描驱动以及 Python 视觉处理库（补全 python3-opencv）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
 
-# 2. 拷贝代码与静态资源
+# 2. 拷贝代码与静态资源（存入持久目录 /opt/i18）
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
