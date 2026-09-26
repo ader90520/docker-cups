@@ -42,8 +42,8 @@ if __name__ == "__main__":
         app = make_app()
         server = tornado.httpserver.HTTPServer(app)
         server.listen(8088, address="0.0.0.0")
-        print(">>> [Web] 8088 综合控制台服务启动成功！监听 0.0.0.0:8088")
+        print(">>> [Web] 8088 打印与多功能扫描控制台启动成功！监听 0.0.0.0:8088")
         tornado.ioloop.IOLoop.current().start()
     except Exception as e:
-        print(f">>> [Web] 启动异常: {e}")
+        print(f">>> [Web] 启动异常崩溃: {e}")
         sys.exit(1)
