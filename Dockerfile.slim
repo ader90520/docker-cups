@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 极简依赖安装（不含 OpenCV，仅保留 PIL 与 NumPy，节省约 40MB 体积与数十兆动态库内存）
+# 1. 深度精准安装：基础库、CUPS、字体、扫描驱动（不装 OpenCV，保持极致轻量）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
 
-# 2. 拷贝代码与静态资源
+# 2. 拷贝代码与静态资源（存入持久目录 /opt/i18）
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
