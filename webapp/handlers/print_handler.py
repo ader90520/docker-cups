@@ -2,16 +2,24 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 import uuid
 import cv2
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
+def safe_imread(file_path):
+    """解决 cv2.imread 无法读取包含中文路径的文件问题"""
+    try:
+        return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
 def auto_crop_document(bgr_img):
     """
     阶段 1：智能识别书本四个顶点，切除书本以外的桌布杂乱背景（四点透视变换）
-    采用 600px 下采样快速探测，不占机顶盒 CPU 与内存
+    修复 widthB 笔误，采用轻量化 600px 快速采样
     """
     try:
         h, w = bgr_img.shape[:2]
@@ -47,7 +55,7 @@ def auto_crop_document(bgr_img):
         
         (tl, tr, br, bl) = rect
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-        widthB = np.sqrt(((tr[0] - tr[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))  # 修复原 tr[0]-tr[0] 笔误
         maxWidth = max(int(widthA), int(widthB))
 
         heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
@@ -61,16 +69,13 @@ def auto_crop_document(bgr_img):
             [0, maxHeight - 1]], dtype="float32")
 
         M = cv2.getPerspectiveTransform(rect, dst)
-        warped = cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
-        return warped
+        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
     except Exception as e:
         print(f"[AutoCrop] 切边异常: {e}")
         return bgr_img
 
 def dewarp_curved_text(bgr_img):
-    """
-    阶段 2：检测书本中缝拱起曲率，把原本弯曲变形的文字行反向拉直对齐
-    """
+    """阶段 2：检测书本中缝拱起，将弯曲的字行反向拉直平展"""
     try:
         h, w = bgr_img.shape[:2]
         gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
@@ -94,7 +99,6 @@ def dewarp_curved_text(bgr_img):
         mean_val = np.median(col_offsets)
         deflection = col_offsets - mean_val
         
-        # 弯曲极轻微时不做过度拉扯
         if np.max(np.abs(deflection)) < 5.0 or np.max(np.abs(deflection)) > h * 0.15:
             return bgr_img
             
@@ -105,14 +109,12 @@ def dewarp_curved_text(bgr_img):
         map_x, map_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
         map_y = map_y - smooth_dy.reshape(1, w).astype(np.float32)
         
-        dewarped = cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        return dewarped
+        return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
         print(f"[Dewarp] 拉直异常: {e}")
         return bgr_img
 
 def fast_detect_skew(gray_img):
-    """微采样水平倾斜角度估计"""
     try:
         w, h = gray_img.size
         scale = 160.0 / max(w, h)
@@ -136,23 +138,17 @@ def fast_detect_skew(gray_img):
         return 0.0
 
 def process_camscanner_color_stream(input_path, output_path):
-    """
-    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)
-    原先去黑底算法 100% 保持不动，前置串联切边与弯曲文字推平
-    """
+    """全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)"""
     try:
-        # 1. 前置步骤：读取 BGR 原图，先切除桌布杂边，再将弯曲文字推平成直线
-        cv_img = cv2.imread(input_path)
+        cv_img = safe_imread(input_path)
         if cv_img is not None:
             cv_img = auto_crop_document(cv_img)
             cv_img = dewarp_curved_text(cv_img)
-            # 转为 PIL Image 接回原去黑底管道
             raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
             raw_img = Image.fromarray(raw_rgb)
         else:
             raw_img = Image.open(input_path)
 
-        # 2. 原去黑底漂白逻辑（完全保持不动）
         img = ImageOps.exif_transpose(raw_img)
         if img.width > img.height:
             img = img.rotate(270, expand=True)
@@ -210,6 +206,17 @@ def process_camscanner_color_stream(input_path, output_path):
         print(f"[CamScannerColor] 处理异常: {e}")
         return False
 
+def clean_old_tmp_files(directory, max_age_seconds=1800):
+    """自动清理超过 30 分钟的临时任务文件，防止机顶盒 /tmp 分区打满"""
+    try:
+        now = time.time()
+        for f in os.listdir(directory):
+            p = os.path.join(directory, f)
+            if os.path.isfile(p) and (now - os.path.getmtime(p) > max_age_seconds):
+                os.remove(p)
+    except Exception:
+        pass
+
 class PrintHandler(BaseHandler):
     def post(self):
         try:
@@ -242,6 +249,9 @@ class PrintHandler(BaseHandler):
                 else:
                     self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
                     return
+
+            # 执行完毕后顺带执行轻量化清理
+            clean_old_tmp_files(UPLOAD_DIR)
 
             self.write_json(True, f"共 {len(files)} 个文件任务已派发", job=", ".join(jobs))
         except Exception as e:
