@@ -10,16 +10,29 @@ import uuid
 import urllib.request
 import threading
 import subprocess
-import cv2
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from email.header import decode_header
 from handlers.base_handler import BaseHandler
 
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
 MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
-def auto_crop_document(bgr_img):
+def safe_imread(file_path):
+    if not HAS_CV2:
+        return None
+    try:
+        return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+def auto_crop_document_cv(bgr_img):
     try:
         h, w = bgr_img.shape[:2]
         scale = 600.0 / max(h, w)
@@ -70,10 +83,10 @@ def auto_crop_document(bgr_img):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
     except Exception as e:
-        print(f"[AutoCrop] 异常: {e}")
+        print(f"[AutoCropCV] 异常: {e}")
         return bgr_img
 
-def dewarp_curved_text(bgr_img):
+def dewarp_curved_text_cv(bgr_img):
     try:
         h, w = bgr_img.shape[:2]
         gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
@@ -109,8 +122,48 @@ def dewarp_curved_text(bgr_img):
 
         return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
-        print(f"[Dewarp] 异常: {e}")
+        print(f"[DewarpCV] 异常: {e}")
         return bgr_img
+
+def auto_crop_document_pil(pil_img):
+    try:
+        w, h = pil_img.size
+        scale = 300.0 / max(w, h)
+        small = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
+        gray = small.convert("L")
+        
+        arr = np.array(gray, dtype=np.float32)
+        gy, gx = np.gradient(arr)
+        edge = np.sqrt(gx**2 + gy**2)
+        
+        proj_x = np.mean(edge, axis=0)
+        proj_y = np.mean(edge, axis=1)
+        
+        th_x = np.percentile(proj_x, 60)
+        th_y = np.percentile(proj_y, 60)
+        
+        x_indices = np.where(proj_x > th_x)[0]
+        y_indices = np.where(proj_y > th_y)[0]
+        
+        if len(x_indices) > 0 and len(y_indices) > 0:
+            left = int(x_indices[0] / scale)
+            right = int(x_indices[-1] / scale)
+            top = int(y_indices[0] / scale)
+            bottom = int(y_indices[-1] / scale)
+            
+            pad_x = int(w * 0.01)
+            pad_y = int(h * 0.01)
+            box = (
+                max(0, left - pad_x),
+                max(0, top - pad_y),
+                min(w, right + pad_x),
+                min(h, bottom + pad_y)
+            )
+            if (box[2] - box[0]) > w * 0.5 and (box[3] - box[1]) > h * 0.5:
+                return pil_img.crop(box)
+    except Exception as e:
+        print(f"[AutoCropPIL] 异常: {e}")
+    return pil_img
 
 def fast_detect_skew(gray_img):
     try:
@@ -137,14 +190,18 @@ def fast_detect_skew(gray_img):
 
 def process_camscanner_color_stream(input_path, output_path):
     try:
-        cv_img = cv2.imread(input_path)
-        if cv_img is not None:
-            cv_img = auto_crop_document(cv_img)
-            cv_img = dewarp_curved_text(cv_img)
-            raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-            raw_img = Image.fromarray(raw_rgb)
-        else:
-            raw_img = Image.open(input_path)
+        raw_img = None
+        if HAS_CV2:
+            cv_img = safe_imread(input_path)
+            if cv_img is not None:
+                cv_img = auto_crop_document_cv(cv_img)
+                cv_img = dewarp_curved_text_cv(cv_img)
+                raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+                raw_img = Image.fromarray(raw_rgb)
+
+        if raw_img is None:
+            with Image.open(input_path) as disk_img:
+                raw_img = auto_crop_document_pil(disk_img.copy())
 
         img = ImageOps.exif_transpose(raw_img)
         if img.width > img.height:
