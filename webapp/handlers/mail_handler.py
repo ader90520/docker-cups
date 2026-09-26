@@ -10,6 +10,7 @@ import uuid
 import urllib.request
 import threading
 import subprocess
+import cv2
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from email.header import decode_header
@@ -18,8 +19,102 @@ from handlers.base_handler import BaseHandler
 MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
+def auto_crop_document(bgr_img):
+    """阶段 1：智能识别书本四个顶点，切除书本以外的桌布杂乱背景"""
+    try:
+        h, w = bgr_img.shape[:2]
+        scale = 600.0 / max(h, w)
+        small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blurred, 50, 150)
+        
+        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+        
+        doc_cnt = None
+        for c in contours:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.25):
+                doc_cnt = approx
+                break
+                
+        if doc_cnt is None:
+            return bgr_img
+
+        pts = doc_cnt.reshape(4, 2) / scale
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+        
+        (tl, tr, br, bl) = rect
+        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+        widthB = np.sqrt(((tr[0] - tr[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+        maxWidth = max(int(widthA), int(widthB))
+
+        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+        maxHeight = max(int(heightA), int(heightB))
+
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]], dtype="float32")
+
+        M = cv2.getPerspectiveTransform(rect, dst)
+        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
+    except Exception as e:
+        print(f"[AutoCrop] 异常: {e}")
+        return bgr_img
+
+def dewarp_curved_text(bgr_img):
+    """阶段 2：检测书本中缝拱起，将弯曲的字行反向拉直平展"""
+    try:
+        h, w = bgr_img.shape[:2]
+        gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
+        
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        sobel_y = np.abs(sobel_y)
+        
+        num_slices = 20
+        slice_w = w // num_slices
+        col_offsets = []
+        
+        for i in range(num_slices):
+            col_slice = sobel_y[:, i * slice_w : (i + 1) * slice_w]
+            proj = np.sum(col_slice, axis=1)
+            indices = np.arange(h)
+            total_e = np.sum(proj)
+            centroid = np.sum(indices * proj) / (total_e + 1e-5)
+            col_offsets.append(centroid)
+            
+        col_offsets = np.array(col_offsets)
+        mean_val = np.median(col_offsets)
+        deflection = col_offsets - mean_val
+        
+        if np.max(np.abs(deflection)) < 5.0 or np.max(np.abs(deflection)) > h * 0.15:
+            return bgr_img
+            
+        x_coords = np.linspace(0, w, num_slices)
+        all_x = np.arange(w)
+        smooth_dy = np.interp(all_x, x_coords, deflection)
+        
+        map_x, map_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        map_y = map_y - smooth_dy.reshape(1, w).astype(np.float32)
+        
+        return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    except Exception as e:
+        print(f"[Dewarp] 异常: {e}")
+        return bgr_img
+
 def fast_detect_skew(gray_img):
-    """微采样水平倾斜角度估计（耗时 < 0.05s）"""
     try:
         w, h = gray_img.size
         scale = 160.0 / max(w, h)
@@ -43,63 +138,75 @@ def fast_detect_skew(gray_img):
         return 0.0
 
 def process_camscanner_color_stream(input_path, output_path):
-    """全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)"""
+    """
+    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)
+    原先去黑底算法保持不动，前置串联切边与弯曲文字推平
+    """
     try:
-        with Image.open(input_path) as raw_img:
-            img = ImageOps.exif_transpose(raw_img)
-            if img.width > img.height:
-                img = img.rotate(270, expand=True)
+        cv_img = cv2.imread(input_path)
+        if cv_img is not None:
+            cv_img = auto_crop_document(cv_img)
+            cv_img = dewarp_curved_text(cv_img)
+            raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+            raw_img = Image.fromarray(raw_rgb)
+        else:
+            raw_img = Image.open(input_path)
 
-            gray_small = img.convert("L")
-            angle = fast_detect_skew(gray_small)
-            if abs(angle) >= 1.0:
-                img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
+        # 保持原去黑底代码完全不动
+        img = ImageOps.exif_transpose(raw_img)
+        if img.width > img.height:
+            img = img.rotate(270, expand=True)
 
-            w, h = img.size
-            cx, cy = int(w * 0.03), int(h * 0.03)
-            img = img.crop((cx, cy, w - cx, h - cy))
+        gray_small = img.convert("L")
+        angle = fast_detect_skew(gray_small)
+        if abs(angle) >= 1.0:
+            img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
-            if max(img.size) > 1600:
-                img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
+        w, h = img.size
+        cx, cy = int(w * 0.03), int(h * 0.03)
+        img = img.crop((cx, cy, w - cx, h - cy))
 
-            rgb = img.convert("RGB")
-            channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
-            cleaned_channels = []
+        if max(img.size) > 1600:
+            img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
 
-            for c_arr in channels:
-                c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-                bg = c_pil.filter(ImageFilter.BoxBlur(radius=25))
-                bg_arr = np.array(bg, dtype=np.float32) + 1.0
+        rgb = img.convert("RGB")
+        channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
+        cleaned_channels = []
 
-                divided = (c_arr / bg_arr) * 255.0
+        for c_arr in channels:
+            c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
+            bg = c_pil.filter(ImageFilter.BoxBlur(radius=25))
+            bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
-                out = np.zeros_like(divided)
-                out[divided >= 195] = 255.0
+            divided = (c_arr / bg_arr) * 255.0
 
-                mask_ink = divided < 195
-                ink_val = np.clip((divided[mask_ink] - 40.0) * (205.0 / (195.0 - 40.0)), 0, 255)
-                ink_val = (ink_val / 205.0) ** 1.25 * 190.0
-                out[mask_ink] = ink_val
-                cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
+            out = np.zeros_like(divided)
+            out[divided >= 195] = 255.0
 
-            clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-            sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
+            mask_ink = divided < 195
+            ink_val = np.clip((divided[mask_ink] - 40.0) * (205.0 / (195.0 - 40.0)), 0, 255)
+            ink_val = (ink_val / 205.0) ** 1.25 * 190.0
+            out[mask_ink] = ink_val
+            cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
 
-            a4_w, a4_h = 1654, 2338
-            canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-            margin = 35
-            target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
+        clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
+        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
 
-            ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
-            new_w, new_h = int(sharp_rgb.width * ratio), int(sharp_rgb.height * ratio)
+        a4_w, a4_h = 1654, 2338
+        canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
+        margin = 35
+        target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
-            resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
-            canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
+        ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
+        new_w, new_h = int(sharp_rgb.width * ratio), int(sharp_rgb.height * ratio)
 
-            canvas.save(output_path, format="JPEG", quality=90)
-            return True
+        resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
+
+        canvas.save(output_path, format="JPEG", quality=90)
+        return True
     except Exception as e:
-        print(f"[MailWorker] 图像真彩色去底异常: {e}")
+        print(f"[MailWorker] 图像增强异常: {e}")
         return False
 
 class PushPlusNotifier:
@@ -238,7 +345,6 @@ class MultiMailWorker(threading.Thread):
         return "".join(result).strip()
 
     def extract_mail_text_body(self, msg):
-        """提取邮件的正文文本（用于检查暗号）"""
         text_content = ""
         try:
             for part in msg.walk():
@@ -277,7 +383,6 @@ class MultiMailWorker(threading.Thread):
             printer = self.get_fallback_printer()
 
         sec_keyword = cfg.get("keyword", "").strip()
-        # 白名单列表（为空表示允许所有人凭借暗号发送打印）
         whitelist = [s.strip().lower() for s in cfg.get("whitelist", "").split(",") if s.strip()]
 
         mail = None
@@ -309,15 +414,12 @@ class MultiMailWorker(threading.Thread):
                 subject = self.decode_field(msg.get("Subject", ""))
                 body_text = self.extract_mail_text_body(msg)
 
-                # 提取干净的发件人真实邮箱地址
                 real_sender = from_addr.lower()
                 if "<" in real_sender and ">" in real_sender:
                     real_sender = real_sender.split("<")[1].split(">")[0].strip()
 
                 print(f"[MailWorker] 收到新邮件: 主题='{subject}', 发件人='{real_sender}'")
 
-                # ================= 策略逻辑 1：发件人白名单检测 =================
-                # 规则：若白名单填了邮箱，则严格限制；若白名单留空，则允许所有人！
                 if whitelist:
                     is_in_whitelist = any(w in real_sender for w in whitelist)
                     if not is_in_whitelist:
@@ -327,8 +429,6 @@ class MultiMailWorker(threading.Thread):
                 else:
                     print(f"[MailWorker] ℹ️ 当前发件人白名单留空：允许任意邮箱凭借暗号打印")
 
-                # ================= 策略逻辑 2：打印暗号检测 =================
-                # 规则：若设置了暗号，标题或正文只要含有暗号即可放行！
                 if sec_keyword:
                     has_keyword = (sec_keyword in subject) or (sec_keyword in body_text)
                     if not has_keyword:
@@ -338,11 +438,9 @@ class MultiMailWorker(threading.Thread):
                     else:
                         print(f"[MailWorker] ✔ 暗号核验通过！")
 
-                # 判断是否整封邮件强制原图打印
                 subject_force_raw = ("原图" in subject or "原图" in body_text or "raw" in subject.lower())
                 printed_count = 0
 
-                # 稳健提取邮件里的图片或文档附件
                 part_index = 0
                 for part in msg.walk():
                     if part.is_multipart():
@@ -352,7 +450,6 @@ class MultiMailWorker(threading.Thread):
                     if fname:
                         fname = self.decode_field(fname)
                     else:
-                        # 兼容手机内嵌图片
                         content_type = part.get_content_type().lower()
                         part_index += 1
                         if "image/jpeg" in content_type or "image/jpg" in content_type:
@@ -381,7 +478,6 @@ class MultiMailWorker(threading.Thread):
                     ready_file = raw_save_path
                     print(f"[MailWorker] 提取到打印附件: {fname}")
 
-                    # 单张图片是否原图
                     file_is_raw = ("原图" in fname or "raw" in fname.lower())
                     need_enhance = (not subject_force_raw) and (not file_is_raw)
 
@@ -389,11 +485,10 @@ class MultiMailWorker(threading.Thread):
                         conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
                         if process_camscanner_color_stream(raw_save_path, conv_path):
                             ready_file = conv_path
-                            print(f"[MailWorker] ✔ 真彩色保留去底耗时: {time.time() - t0:.2f} 秒")
+                            print(f"[MailWorker] ✔ 全能王切边拉直+真彩去黑底耗时: {time.time() - t0:.2f} 秒")
                     else:
                         print(f"[MailWorker] ℹ️ 命中原图标记，按相机原图输出: {fname}")
 
-                    # 自动唤醒并启用目标打印机
                     env = os.environ.copy()
                     env["CUPS_SERVER"] = "/run/cups/cups.sock"
                     env["LANG"] = "C"
@@ -420,7 +515,6 @@ class MultiMailWorker(threading.Thread):
                         print(f"[MailWorker] ❌ 打印下发拒绝: {err_msg}")
                         PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
 
-                # 打印成功：从收件箱彻底清理该邮件
                 if printed_count > 0:
                     mail.store(num, "+FLAGS", "\\Deleted")
                     mail.expunge()
