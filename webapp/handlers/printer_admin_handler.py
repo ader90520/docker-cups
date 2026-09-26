@@ -15,7 +15,6 @@ class PrinterAdminHandler(BaseHandler):
             return f"Printer_{uuid.uuid4().hex[:4]}"
         decoded = urllib.parse.unquote(raw_str)
         cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", decoded).strip("_")
-        # 截断过长名称，CUPS 打印机名称长度建议在 32 字符以内
         return cleaned[:32] if cleaned else f"Printer_{uuid.uuid4().hex[:4]}"
 
     def get(self):
@@ -25,7 +24,6 @@ class PrinterAdminHandler(BaseHandler):
         env["LANG"] = "C"
 
         if action == "discovered_devices":
-            # 扫描物理连接的 USB / 网络打印设备
             res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             devices = []
             for line in res.stdout.splitlines():
@@ -33,7 +31,6 @@ class PrinterAdminHandler(BaseHandler):
                     parts = line.split(" ", 1)
                     if len(parts) == 2:
                         uri = parts[1].strip()
-                        # 解析 URI 生成更友好的可读自动名称
                         raw_seg = uri.split("/")[-1].split("?")[0]
                         if not raw_seg and len(uri.split("/")) > 2:
                             raw_seg = uri.split("/")[-2]
@@ -80,7 +77,6 @@ class PrinterAdminHandler(BaseHandler):
             self.write_json(False, "未选择打印机物理端口设备！")
             return
 
-        # 前端未传或留空时自动计算打印机名称
         if not name:
             raw_seg = uri.split("/")[-1].split("?")[0]
             if not raw_seg and len(uri.split("/")) > 2:
@@ -90,7 +86,6 @@ class PrinterAdminHandler(BaseHandler):
         cmd = ["lpadmin", "-p", name, "-v", uri, "-E"]
 
         tmp_ppd_path = None
-        # 1. 优先使用用户上传的本地自定义 PPD 驱动文件
         if ppd_files and len(ppd_files) > 0:
             uploaded = ppd_files[0]
             token = uuid.uuid4().hex[:8]
@@ -99,22 +94,18 @@ class PrinterAdminHandler(BaseHandler):
                 f.write(uploaded["body"])
             os.chmod(tmp_ppd_path, 0o666)
             cmd.extend(["-P", tmp_ppd_path])
-        # 2. 其次使用系统驱动库指定的驱动 ID
         elif driver and driver != "raw":
             cmd.extend(["-m", driver])
-        # 3. 兜底透传驱动
         else:
             cmd.extend(["-m", "raw"])
 
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
-        # 清理中转的临时上传文件
         if tmp_ppd_path and os.path.exists(tmp_ppd_path):
             try: os.remove(tmp_ppd_path)
             except: pass
 
         if res.returncode == 0:
-            # 设为默认打印机，并激活接收/打印队列
             subprocess.run(["lpadmin", "-d", name], env=env)
             subprocess.run(["cupsenable", name], env=env)
             subprocess.run(["cupsaccept", name], env=env)
