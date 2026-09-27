@@ -129,7 +129,7 @@
 </head>
 <body>
 
-  <!-- 隐藏的文件选择器 -->
+  <!-- 隐藏文件上传器 -->
   <input type="file" id="fileNormal" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none;" onchange="handleMultiFiles(this.files)">
   <input type="file" id="fileInvoice" multiple accept="image/*,.pdf,.ofd" style="display:none;" onchange="handleMultiFiles(this.files)">
   <input type="file" id="idFront" accept="image/*" style="display:none;" onchange="handleCardUpload(this.files[0], 'frontBox', 'frontMeta', 'frontImg')">
@@ -158,7 +158,7 @@
         <option value="">正在检测打印机...</option>
       </select>
 
-      <!-- 驱动配置抽屉 -->
+      <!-- 驱动配置抽屉 (消灭 %20 乱码，打通 631 驱动库) -->
       <div class="drawer" id="adminDrawer">
         <div style="font-weight:600; font-size:13px; margin-bottom:8px; color:#0f172a;">🛠️ 打印机驱动配置</div>
         
@@ -278,7 +278,7 @@
                 <span>🖨️ 扫描后自动复印打印（实现物理复印机体验）</span>
               </label>
               <div style="font-size:11px; color:#64748b; margin-top:4px; margin-left:22px;">
-                勾选后，扫描头完成走纸瞬间会自动将 A4 图像直接送往打印机喷印。
+                勾选后，扫描头完成走纸瞬间会自动将 A4 图像直接送往打印机输出。
               </div>
             </div>
 
@@ -900,7 +900,7 @@
           list.forEach(dev => {
             const opt = document.createElement("option");
             opt.value = dev.id;
-            opt.innerText = `📷 ${dev.name} [${dev.id.split(':')[0]}]`;
+            opt.innerText = `📷 ${dev.name}`;
             sel.appendChild(opt);
           });
         })
@@ -975,6 +975,7 @@
         });
     }
 
+    // ==================== 打印机设备状态同步 ====================
     function fetchDevices() {
       const sel = document.getElementById("printerSelect");
       sel.innerHTML = "<option value=\"\">正在检测...</option>";
@@ -983,7 +984,7 @@
         .then(r => r.json())
         .then(res => {
           sel.innerHTML = "";
-          const list = res.printers || (res.data && res.data.printers) || [];
+          const list = (res.data && res.data.printers) || res.printers || [];
           if (list.length === 0) {
             sel.innerHTML = "<option value=\"\">未发现可用打印机 (点击右上角添加)</option>";
             updateStatusText("未连接打印机", false);
@@ -993,7 +994,7 @@
           let hasError = false;
           list.forEach(p => {
             const opt = document.createElement("option");
-            opt.value = p.id || p.name;
+            opt.value = p.name;
             opt.innerText = `${p.name} [${p.status || "就绪"}]`;
             if (p.is_default) opt.selected = true;
             sel.appendChild(opt);
@@ -1073,26 +1074,44 @@
         });
     }
 
-    // ==================== 驱动管理与端口自动命名 ====================
+    // ==================== 驱动管理：消除 %20 并自动匹配驱动 ====================
     function onPortSelected(uri) {
       if (!uri) return;
-      const rawName = uri.split("/").pop().split("?")[0];
-      currentAutoName = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || "Printer";
+      // 彻底解码 URL 编码（%20 -> 空格）
+      const decoded = decodeURIComponent(uri);
+      const rawName = decoded.split("://").pop().split("?")[0].replace(/[\/\\#]/g, " ").trim();
+      currentAutoName = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || "HP_Printer";
+
       const tip = document.getElementById("autoPrinterNameTip");
       tip.style.display = "block";
-      tip.innerText = `✔ 已自动命名为: ${currentAutoName}`;
+      tip.innerText = `✔ 已解析设备: ${rawName}`;
+
+      // 提取核心型号自动搜索（如 M126a 提取 m126，1020 提取 1020）
+      let key = "";
+      const match = rawName.match(/(m\d{3,4}[a-z]?|\d{4}[a-z]?)/i);
+      if (match) {
+        key = match[0];
+      } else {
+        key = rawName.split(" ")[0];
+      }
+
+      const keyInput = document.getElementById("drvKey");
+      if (keyInput) {
+        keyInput.value = key;
+        searchDrivers(); // 自动触发驱动匹配
+      }
     }
 
     function scanDiscovered() {
       const sel = document.getElementById("discoveredSelect");
-      sel.innerHTML = "<option value=\"\">扫描中...</option>";
+      sel.innerHTML = "<option value=\"\">扫描底层物理端口中...</option>";
       fetch("/api/printer_admin?action=discovered_devices")
         .then(r => r.json())
         .then(res => {
           sel.innerHTML = "";
           const list = res.data || [];
           if (list.length === 0) {
-            sel.innerHTML = "<option value=\"\">未发现物理连接的打印机</option>";
+            sel.innerHTML = "<option value=\"\">未发现物理连接的打印机 (请检查 USB)</option>";
             return;
           }
           list.forEach(d => {
@@ -1108,17 +1127,27 @@
     function searchDrivers() {
       const key = document.getElementById("drvKey").value.trim();
       const sel = document.getElementById("driverSelect");
-      sel.innerHTML = "<option value=\"raw\">检索中...</option>";
+      sel.innerHTML = "<option value=\"raw\">正在检索 CUPS 官方驱动库...</option>";
       fetch("/api/printer_admin?action=drivers&q=" + encodeURIComponent(key))
         .then(r => r.json())
         .then(res => {
-          sel.innerHTML = "<option value=\"raw\">通用透传驱动 (raw)</option>";
-          (res.data || []).forEach(d => {
+          sel.innerHTML = "";
+          const list = res.data || [];
+          if (list.length === 0) {
+            sel.innerHTML = "<option value=\"raw\">未找到专用驱动 (可先选通用 raw 驱动)</option>";
+            return;
+          }
+          list.forEach((d, idx) => {
             const opt = document.createElement("option");
             opt.value = d.id;
             opt.innerText = `📄 ${d.name}`;
+            if (idx === 0) opt.selected = true; // 自动高亮并选中第 1 个最精准的驱动
             sel.appendChild(opt);
           });
+          const rawOpt = document.createElement("option");
+          rawOpt.value = "raw";
+          rawOpt.innerText = "📄 通用透传驱动 (raw)";
+          sel.appendChild(rawOpt);
         });
     }
 
