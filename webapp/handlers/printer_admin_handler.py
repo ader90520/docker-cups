@@ -7,18 +7,23 @@ import subprocess
 import urllib.parse
 from handlers.base_handler import BaseHandler
 
+# 虚拟后端与传输协议黑名单（彻底剔除无意义的系统协议项）
+IGNORED_BACKENDS = {
+    "beh", "ipps", "https", "http", "ipp", "socket", "lpd", 
+    "smb", "scsi", "serial", "parallel", "cups-brf", "implicitclass"
+}
+
 class PrinterAdminHandler(BaseHandler):
     def get(self):
         action = self.get_argument("action", "").strip()
 
-        # 1. 扫描底层物理 USB 与网络端口（杜绝 %20 乱码与不合规命名）
+        # 1. 扫描底层物理端口（只展示真实物理连接的打印机型号）
         if action == "discovered_devices":
             try:
                 env = os.environ.copy()
                 env["CUPS_SERVER"] = "/run/cups/cups.sock"
                 env["LANG"] = "C"
 
-                # 探测 USB 端口及免驱端口
                 res = subprocess.run(
                     ["lpinfo", "-v"], 
                     stdout=subprocess.PIPE, 
@@ -31,26 +36,44 @@ class PrinterAdminHandler(BaseHandler):
 
                 for line in res.stdout.splitlines():
                     line = line.strip()
-                    if line.startswith("direct usb://") or line.startswith("network ") or line.startswith("direct hp:/"):
-                        parts = line.split(" ", 1)
-                        if len(parts) == 2:
-                            uri = parts[1].strip()
-                            # 彻底解码 URL 编码字符（如 %20 -> 空格）
-                            decoded_uri = urllib.parse.unquote(uri)
-                            
-                            # 提取清晰友好的物理型号名称（过滤掉协议头与序列号参数）
-                            friendly_name = decoded_uri.split("://")[-1].split("?")[0].replace("/", " ").strip()
-                            if not friendly_name:
-                                friendly_name = decoded_uri
+                    if not line or " " not in line:
+                        continue
 
-                            devices.append({
-                                "uri": uri,
-                                "name": friendly_name
-                            })
+                    parts = line.split(" ", 1)
+                    uri = parts[1].strip()
+
+                    # 提取协议头（如 usb, beh, socket, hp 等）
+                    scheme = uri.split("://")[0].split(":")[0].lower()
+
+                    # 拦截并过滤所有虚拟协议和空协议项
+                    if scheme in IGNORED_BACKENDS or uri.endswith("://") or uri.endswith(":/"):
+                        continue
+
+                    decoded_uri = urllib.parse.unquote(uri)
+
+                    # 提取型号名称
+                    friendly_name = ""
+                    if "://" in decoded_uri:
+                        path_part = decoded_uri.split("://")[-1].split("?")[0]
+                        clean_part = path_part.replace("/", " ").replace("_", " ").strip()
+                        friendly_name = clean_part
+                    
+                    if not friendly_name:
+                        friendly_name = decoded_uri
+
+                    # 如果解析后名称仍是虚拟协议单词本身，丢弃
+                    if friendly_name.lower() in IGNORED_BACKENDS:
+                        continue
+
+                    # 只有真正带有具体型号信息的物理设备才加入列表
+                    devices.append({
+                        "uri": uri,
+                        "name": friendly_name
+                    })
 
                 self.write_json(True, "扫描物理端口成功", data=devices)
             except subprocess.TimeoutExpired:
-                self.write_json(False, "扫描物理端口超时，请检查 USB 物理连接")
+                self.write_json(False, "扫描物理端口超时")
             except Exception as e:
                 self.write_json(False, f"扫描物理端口异常: {str(e)}")
 
@@ -80,13 +103,12 @@ class PrinterAdminHandler(BaseHandler):
                     drv_id = parts[0].strip()
                     drv_name = parts[1].strip() if len(parts) > 1 else drv_id
 
-                    # 关键词匹配，支持如 m126、1020、hplip、foo2zjs 等
                     if not q or (q in drv_id.lower() or q in drv_name.lower()):
                         drivers.append({
                             "id": drv_id,
                             "name": drv_name
                         })
-                        if len(drivers) >= 80:  # 限制条目，防前端渲染卡顿
+                        if len(drivers) >= 80:
                             break
 
                 self.write_json(True, "检索系统驱动成功", data=drivers)
@@ -110,7 +132,6 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, "打印机物理端口与名称不能为空！")
                 return
 
-            # 安全防护：严格限制打印机系统标识符，杜绝任何命令注入风险
             decoded_name = urllib.parse.unquote(name)
             clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', decoded_name).strip('_')
             if not clean_name:
@@ -120,11 +141,9 @@ class PrinterAdminHandler(BaseHandler):
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
             env["LANG"] = "C"
 
-            # 组装标准安全参数列表（严格不使用 shell=True）
             cmd = ["lpadmin", "-p", clean_name, "-v", uri, "-E"]
 
             if ppd_file:
-                # 优先使用上传的自定义 PPD 文件
                 ppd_tmp = f"/tmp/{clean_name}.ppd"
                 with open(ppd_tmp, "wb") as f:
                     f.write(ppd_file[0]["body"])
@@ -141,7 +160,6 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"CUPS 631 拒绝添加: {res.stderr.strip()}")
                 return
 
-            # 设为共享、启动打印队列并设置为默认
             subprocess.run(["cupsenable", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["cupsaccept", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["lpadmin", "-d", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
