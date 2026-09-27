@@ -4,12 +4,13 @@
 import os
 import time
 import uuid
+import subprocess
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
 def fast_detect_skew(gray_img):
-    """微采样水平倾斜角度估计（耗时 < 0.05s）"""
+    """倾斜快速检测"""
     try:
         w, h = gray_img.size
         scale = 160.0 / max(w, h)
@@ -32,113 +33,134 @@ def fast_detect_skew(gray_img):
     except Exception:
         return 0.0
 
-def fit_to_a4_maximally(pil_img):
+def dewarp_textlines_flatten(pil_img):
     """
-    智能撑满 A4 幅面引擎：
-    1. 动态裁剪原图自带的多余空白边缘，提取完整有效内容包围盒
-    2. 按 A4 纸可打印极限铺满，消除大缩放与四周多余大白边，使字体清晰饱满
+    轻量级多骨架文本行展平（纯 NumPy + PIL，拉平波浪形弯曲）
     """
-    # 步骤 1：探测墨迹有效边界，裁除图片四周多余的大空旷白边
-    gray = pil_img.convert("L")
-    arr = np.array(gray)
-    ink_mask = arr < 248
-
-    if np.any(ink_mask):
-        ymin, ymax = np.where(ink_mask.any(axis=1))[0][[0, -1]]
-        xmin, xmax = np.where(ink_mask.any(axis=0))[0][[0, -1]]
-
+    try:
         w, h = pil_img.size
-        # 往外保留 12 像素呼吸缓冲，严禁切除边缘笔画与题号
-        crop_box = (
-            max(0, xmin - 12),
-            max(0, ymin - 12),
-            min(w, xmax + 12),
-            min(h, ymax + 12)
-        )
-        content_img = pil_img.crop(crop_box)
-    else:
-        content_img = pil_img
+        target_w = 600
+        scale = target_w / float(w)
+        target_h = int(h * scale)
 
-    # 步骤 2：200 DPI 标准 A4 画布尺寸: 1654 x 2338
-    a4_w, a4_h = 1654, 2338
-    canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
+        gray = pil_img.convert("L").resize((target_w, target_h), Image.Resampling.BILINEAR)
+        arr = np.array(gray, dtype=np.float32)
 
-    # 仅预留激光打印机物理走纸不可打印死区 (左右各 28 像素 ≈ 3.5mm，上下各 35 像素)
-    phys_margin_x = 28
-    phys_margin_y = 35
-    target_w = a4_w - phys_margin_x * 2
-    target_h = a4_h - phys_margin_y * 2
+        bg_coarse = gray.filter(ImageFilter.BoxBlur(radius=15))
+        bg_arr = np.array(bg_coarse, dtype=np.float32) + 1.0
+        div = (arr / bg_arr) * 255.0
+        conn_arr = div < 200
 
-    # 最大化铺满等比缩放
-    ratio = min(target_w / content_img.width, target_h / content_img.height)
-    new_w = int(content_img.width * ratio)
-    new_h = int(content_img.height * ratio)
+        window = 31
+        kernel = np.ones(window, dtype=np.float32)
+        dilated = np.zeros_like(conn_arr, dtype=bool)
+        for r in range(0, target_h, 2):
+            if np.any(conn_arr[r, :]):
+                dilated[r, :] = np.convolve(conn_arr[r, :].astype(np.float32), kernel, mode='same') > 0.1
 
-    resized = content_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
-    return canvas
+        num_strips = 24
+        strip_w = target_w // num_strips
+        row_density = np.mean(dilated, axis=1)
+        peak_rows = np.where(row_density > 0.15)[0]
 
-def process_camscanner_color_stream(input_path, output_path):
+        if len(peak_rows) > 40:
+            displacement_matrix = []
+            for sec in np.array_split(peak_rows, 5):
+                if len(sec) < 5:
+                    continue
+                line_y = []
+                for s in range(num_strips):
+                    sub = dilated[sec[0]:sec[-1], s * strip_w : min((s + 1) * strip_w, target_w)]
+                    if np.sum(sub) > (strip_w * 2):
+                        line_y.append(np.mean(np.where(sub)[0]) + sec[0])
+                    else:
+                        line_y.append(np.nan)
+
+                line_y = np.array(line_y)
+                valid = ~np.isnan(line_y)
+                if np.sum(valid) >= 12:
+                    xs = np.arange(num_strips)[valid]
+                    ys = line_y[valid]
+                    p = np.polyfit(xs, ys - np.mean(ys), 2)
+                    displacement_matrix.append(np.polyval(p, np.arange(num_strips)))
+
+            if len(displacement_matrix) >= 2:
+                median_disp = np.median(displacement_matrix, axis=0)
+                if np.ptp(median_disp) >= 1.8:
+                    disp_fine = np.interp(np.arange(w), np.linspace(0, w, num_strips), median_disp) / scale
+                    disp_fine -= np.mean(disp_fine)
+
+                    full_arr = np.array(pil_img)
+                    out_arr = np.full_like(full_arr, 255)
+                    for x in range(w):
+                        shift = int(round(disp_fine[x]))
+                        if shift > 0:
+                            out_arr[:-shift, x] = full_arr[shift:, x]
+                        elif shift < 0:
+                            out_arr[-shift:, x] = full_arr[:shift, x]
+                        else:
+                            out_arr[:, x] = full_arr[:, x]
+                    return Image.fromarray(out_arr)
+    except Exception as e:
+        print(f"[Dewarp] 忽略降级: {e}", flush=True)
+    return pil_img
+
+def process_image_for_print(input_path, output_path):
     """
-    扫描全能王同款高保真去底引擎：
-    1. 彻底禁用误切正文的四点透视，保留 100% 原始图像边界
-    2. 平滑背景除法漂白，护住拼音四线格虚线与手绘线稿
-    3. 最大化撑满 A4 画布，杜绝字变小与多余空旷留白
+    零裁剪、保全边角细节、抗背面透墨与文本行展平引擎
     """
     try:
         with Image.open(input_path) as disk_img:
             img = ImageOps.exif_transpose(disk_img.convert("RGB"))
 
-        # 校验 EXIF 朝向，优先竖向立正
+        # 竖向统一对齐
         if img.width > img.height:
             img = img.rotate(270, expand=True)
 
-        # 轻微倾斜校正
+        # 1. 文本行物理波浪弯曲拉平
+        img = dewarp_textlines_flatten(img)
+
+        # 2. 修正大倾斜
         gray_small = img.convert("L")
         angle = fast_detect_skew(gray_small)
-        if abs(angle) >= 1.0:
+        if abs(angle) >= 1.2:
             img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
-        # 分辨率标准化
+        # 限制计算尺寸，防止低内存设备 OOM
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
 
-        # 背景除法柔和漂白（保护浅色线条与字迹）
-        channels = [np.array(c, dtype=np.float32) for c in img.split()]
-        cleaned_channels = []
+        # 3. 根治透字：采用纯灰度处理（剥离彩色漫反射杂阶）
+        gray = img.convert("L")
+        gray_arr = np.array(gray, dtype=np.float32)
 
-        for c_arr in channels:
-            c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-            # 40px 大平滑核滤除大面积灰底与光照阴影
-            bg = c_pil.filter(ImageFilter.BoxBlur(radius=40))
-            bg_arr = np.array(bg, dtype=np.float32) + 1.0
+        # 4. 42 大核平滑背景
+        bg = gray.filter(ImageFilter.BoxBlur(radius=42))
+        bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
-            divided = (c_arr / bg_arr) * 255.0
+        divided = (gray_arr / bg_arr) * 255.0
+        out = np.full_like(divided, 255.0)
 
-            out = np.zeros_like(divided)
-            # 阈值放宽至 232，浅灰色线条、四线格虚线与线稿小插画完整保留
-            out[divided >= 232] = 255.0
+        # 5. 精确截断阈值 212：212 以上的浅灰背透字强行压白，212 以下的正面有效笔画加黑强化
+        mask_front = divided < 212.0
+        ink_vals = divided[mask_front]
+        clean_ink = np.clip((ink_vals - 30.0) * (215.0 / (212.0 - 30.0)), 0, 255)
+        clean_ink = (clean_ink / 215.0) ** 1.15 * 190.0
+        out[mask_front] = clean_ink
 
-            mask_ink = divided < 232
-            ink_val = np.clip((divided[mask_ink] - 20.0) * (240.0 / (232.0 - 20.0)), 0, 255)
-            ink_val = (ink_val / 240.0) ** 1.12 * 195.0
-            out[mask_ink] = ink_val
-            cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
+        clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
-        clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
+        # 6. 微锐化还原线稿与四线格细节
+        sharp_gray = clean_gray.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
+        sharp_rgb = Image.merge("RGB", [sharp_gray, sharp_gray, sharp_gray])
 
-        # 最大化排版至 A4 画布
-        canvas = fit_to_a4_maximally(sharp_rgb)
-
-        canvas.save(output_path, format="JPEG", quality=95)
+        sharp_rgb.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
         return True
     except Exception as e:
-        print(f"[ProcessColorStream] 异常: {e}")
+        print(f"[ProcessImage] 处理异常: {e}", flush=True)
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
-    """自动清理临时文件"""
     try:
         now = time.time()
         for f in os.listdir(directory):
@@ -151,9 +173,9 @@ def clean_old_tmp_files(directory, max_age_seconds=1800):
 class PrintHandler(BaseHandler):
     def post(self):
         try:
-            printer = self.get_argument("printer", "")
-            copies = self.get_argument("copies", "1")
-            whiten = self.get_argument("whiten", "0")
+            printer = self.get_argument("printer", "").strip()
+            copies = self.get_argument("copies", "1").strip()
+            whiten = self.get_argument("whiten", "0").strip()
             files = self.request.files.get("file", [])
 
             if not files:
@@ -161,6 +183,10 @@ class PrintHandler(BaseHandler):
                 return
 
             jobs = []
+            env = os.environ.copy()
+            env["CUPS_SERVER"] = "/run/cups/cups.sock"
+            env["LANG"] = "C"
+
             for f in files:
                 ext = os.path.splitext(f["filename"])[-1].lower()
                 token = uuid.uuid4().hex[:8]
@@ -168,14 +194,34 @@ class PrintHandler(BaseHandler):
                 with open(src_path, "wb") as out:
                     out.write(f["body"])
 
-                target_path = src_path
-                if whiten == "1" and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
-                    enhanced_path = os.path.join(UPLOAD_DIR, f"cam_{token}.jpg")
-                    if process_camscanner_color_stream(src_path, enhanced_path):
-                        target_path = enhanced_path
+                target_file = src_path
 
-                # 下发 CUPS 打印
-                res = self.execute_lp(printer, copies, target_path)
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+                    enhanced_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
+                    if whiten == "1":
+                        if process_image_for_print(src_path, enhanced_path):
+                            target_file = enhanced_path
+                    else:
+                        with Image.open(src_path) as raw_img:
+                            im = ImageOps.exif_transpose(raw_img.convert("RGB"))
+                            im.save(enhanced_path, format="JPEG", quality=95, dpi=(300, 300))
+                            target_file = enhanced_path
+
+                # 移除 fit-to-page，使用 natural-scaling=90 居中等比缩小，避开打印机物理边缘盲区
+                cmd = [
+                    "lp",
+                    "-d", printer,
+                    "-n", str(copies),
+                    "-o", "media=A4",
+                    "-o", "PageSize=A4",
+                    "-o", "natural-scaling=90",
+                    "-o", "position=center",
+                    target_file
+                ]
+
+                print(f"[Print] 执行 CUPS 打印指令: {' '.join(cmd)}", flush=True)
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
                 if res.returncode == 0:
                     jobs.append(res.stdout.strip())
                 else:
