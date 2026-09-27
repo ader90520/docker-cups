@@ -24,24 +24,28 @@ def safe_imread(file_path):
         return None
 
 def auto_crop_document_cv(bgr_img):
-    """OpenCV 阶段 1：智能识别纸张四个顶点，切除外围桌面杂物（四点透视变换）"""
+    """
+    OpenCV 阶段 1：智能四点透视校正（带安全回弹裕量）
+    严防切除边缘题目序号、页码及边缘插图
+    """
     try:
         h, w = bgr_img.shape[:2]
-        scale = 600.0 / max(h, w)
+        scale = 800.0 / max(h, w)
         small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 50, 150)
+        edged = cv2.Canny(blurred, 30, 120)
         
-        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
         
         doc_cnt = None
         for c in contours:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.25):
+            # 严格门槛：面积占 65% 以上才认定是整张试卷纸，避免正文误切
+            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.65):
                 doc_cnt = approx
                 break
                 
@@ -66,14 +70,18 @@ def auto_crop_document_cv(bgr_img):
         heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
         maxHeight = max(int(heightA), int(heightB))
 
+        # 向外安全回弹 2.5% 裕量，保护外缘题目序号
+        pad_w = int(maxWidth * 0.025)
+        pad_h = int(maxHeight * 0.025)
+
         dst = np.array([
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1]], dtype="float32")
+            [pad_w, pad_h],
+            [maxWidth - 1 - pad_w, pad_h],
+            [maxWidth - 1 - pad_w, maxHeight - 1 - pad_h],
+            [pad_w, maxHeight - 1 - pad_h]], dtype="float32")
 
         M = cv2.getPerspectiveTransform(rect, dst)
-        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
+        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight), borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
         print(f"[AutoCropCV] 异常: {e}")
         return bgr_img
@@ -87,7 +95,7 @@ def dewarp_curved_text_cv(bgr_img):
         sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
         sobel_y = np.abs(sobel_y)
         
-        num_slices = 20
+        num_slices = 24
         slice_w = w // num_slices
         col_offsets = []
         
@@ -103,7 +111,7 @@ def dewarp_curved_text_cv(bgr_img):
         mean_val = np.median(col_offsets)
         deflection = col_offsets - mean_val
         
-        if np.max(np.abs(deflection)) < 5.0 or np.max(np.abs(deflection)) > h * 0.15:
+        if np.max(np.abs(deflection)) < 4.0 or np.max(np.abs(deflection)) > h * 0.12:
             return bgr_img
             
         x_coords = np.linspace(0, w, num_slices)
@@ -119,7 +127,7 @@ def dewarp_curved_text_cv(bgr_img):
         return bgr_img
 
 def auto_crop_document_pil(pil_img):
-    """纯 PIL + NumPy 智能边缘裁切兜底方案（完全不依赖 cv2）"""
+    """纯 PIL + NumPy 边缘裁切兜底方案（完全不依赖 cv2）"""
     try:
         w, h = pil_img.size
         scale = 300.0 / max(w, h)
@@ -133,8 +141,8 @@ def auto_crop_document_pil(pil_img):
         proj_x = np.mean(edge, axis=0)
         proj_y = np.mean(edge, axis=1)
         
-        th_x = np.percentile(proj_x, 60)
-        th_y = np.percentile(proj_y, 60)
+        th_x = np.percentile(proj_x, 65)
+        th_y = np.percentile(proj_y, 65)
         
         x_indices = np.where(proj_x > th_x)[0]
         y_indices = np.where(proj_y > th_y)[0]
@@ -145,15 +153,15 @@ def auto_crop_document_pil(pil_img):
             top = int(y_indices[0] / scale)
             bottom = int(y_indices[-1] / scale)
             
-            pad_x = int(w * 0.01)
-            pad_y = int(h * 0.01)
+            pad_x = int(w * 0.03)
+            pad_y = int(h * 0.03)
             box = (
                 max(0, left - pad_x),
                 max(0, top - pad_y),
                 min(w, right + pad_x),
                 min(h, bottom + pad_y)
             )
-            if (box[2] - box[0]) > w * 0.5 and (box[3] - box[1]) > h * 0.5:
+            if (box[2] - box[0]) > w * 0.70 and (box[3] - box[1]) > h * 0.70:
                 return pil_img.crop(box)
     except Exception as e:
         print(f"[AutoCropPIL] 异常: {e}")
@@ -183,7 +191,10 @@ def fast_detect_skew(gray_img):
         return 0.0
 
 def process_camscanner_color_stream(input_path, output_path):
-    """全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)"""
+    """
+    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)
+    修复浅色文字被吞、左右边缘被切问题
+    """
     try:
         raw_img = None
         if HAS_CV2:
@@ -207,12 +218,13 @@ def process_camscanner_color_stream(input_path, output_path):
         if abs(angle) >= 1.0:
             img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
+        # 仅裁切 0.3% 微边缘，绝对不碰左侧题号
         w, h = img.size
-        cx, cy = int(w * 0.03), int(h * 0.03)
+        cx, cy = int(w * 0.003), int(h * 0.003)
         img = img.crop((cx, cy, w - cx, h - cy))
 
-        if max(img.size) > 1600:
-            img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
+        if max(img.size) > 2200:
+            img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
 
         rgb = img.convert("RGB")
         channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
@@ -220,27 +232,28 @@ def process_camscanner_color_stream(input_path, output_path):
 
         for c_arr in channels:
             c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-            bg = c_pil.filter(ImageFilter.BoxBlur(radius=25))
+            bg = c_pil.filter(ImageFilter.BoxBlur(radius=32))
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
             divided = (c_arr / bg_arr) * 255.0
 
             out = np.zeros_like(divided)
-            out[divided >= 195] = 255.0
+            # 阈值精准提升至 220，浅灰色的四线格、虚线和线稿插画全部保留
+            out[divided >= 220] = 255.0
 
-            mask_ink = divided < 195
-            ink_val = np.clip((divided[mask_ink] - 40.0) * (205.0 / (195.0 - 40.0)), 0, 255)
-            ink_val = (ink_val / 205.0) ** 1.25 * 190.0
+            mask_ink = divided < 220
+            ink_val = np.clip((divided[mask_ink] - 30.0) * (230.0 / (220.0 - 30.0)), 0, 255)
+            ink_val = (ink_val / 230.0) ** 1.18 * 192.0
             out[mask_ink] = ink_val
             cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
 
         clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
+        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
 
         # 200 DPI 标准 A4 画布居中排版 (1654 x 2338)
         a4_w, a4_h = 1654, 2338
         canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-        margin = 35
+        margin = 22
         target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
         ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
@@ -249,7 +262,7 @@ def process_camscanner_color_stream(input_path, output_path):
         resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
         canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
 
-        canvas.save(output_path, format="JPEG", quality=90)
+        canvas.save(output_path, format="JPEG", quality=93)
         return True
     except Exception as e:
         print(f"[CamScannerColor] 处理异常: {e}")
