@@ -8,89 +8,8 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
-try:
-    import cv2
-    HAS_CV2 = True
-except ImportError:
-    HAS_CV2 = False
-
-def safe_imread(file_path):
-    """防中文路径乱码安全读取"""
-    if not HAS_CV2:
-        return None
-    try:
-        return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-    except Exception:
-        return None
-
-def auto_crop_document_safe(bgr_img):
-    """
-    智能四点透视校正（高安全门槛 + 宽裕安全呼吸区）
-    坚决防止误把正文边缘当纸张外框削掉序号与插画
-    """
-    if not HAS_CV2 or bgr_img is None:
-        return bgr_img
-    try:
-        h, w = bgr_img.shape[:2]
-        scale = 800.0 / max(h, w)
-        small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        
-        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-        edged = cv2.Canny(blurred, 25, 100)
-        
-        contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-        
-        doc_cnt = None
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            # 严格门槛：面积必须占整张照片 75% 以上，才认定为拍摄到整张试卷
-            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.75):
-                doc_cnt = approx
-                break
-                
-        # 未能 100% 确认外框时直接返回原图，宁留桌面背景绝不裁坏文字
-        if doc_cnt is None:
-            return bgr_img
-
-        pts = doc_cnt.reshape(4, 2) / scale
-        rect = np.zeros((4, 2), dtype="float32")
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]
-        rect[2] = pts[np.argmax(s)]
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)]
-        rect[3] = pts[np.argmax(diff)]
-        
-        (tl, tr, br, bl) = rect
-        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-        maxWidth = max(int(widthA), int(widthB))
-
-        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-        maxHeight = max(int(heightA), int(heightB))
-
-        # 向外安全回弹 4.5% 呼吸空间，彻底护住左侧题号一二三四五及右侧插图
-        pad_w = int(maxWidth * 0.045)
-        pad_h = int(maxHeight * 0.045)
-
-        dst = np.array([
-            [pad_w, pad_h],
-            [maxWidth - 1 - pad_w, pad_h],
-            [maxWidth - 1 - pad_w, maxHeight - 1 - pad_h],
-            [pad_w, maxHeight - 1 - pad_h]], dtype="float32")
-
-        M = cv2.getPerspectiveTransform(rect, dst)
-        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight), borderMode=cv2.BORDER_REPLICATE)
-    except Exception as e:
-        print(f"[AutoCropSafe] 异常跳过: {e}")
-        return bgr_img
-
 def fast_detect_skew(gray_img):
-    """快速倾斜角探测"""
+    """微采样水平倾斜角度估计（耗时 < 0.05s）"""
     try:
         w, h = gray_img.size
         scale = 160.0 / max(w, h)
@@ -113,84 +32,109 @@ def fast_detect_skew(gray_img):
     except Exception:
         return 0.0
 
+def fit_to_a4_maximally(pil_img):
+    """
+    智能撑满 A4 幅面引擎：
+    1. 动态裁剪原图自带的多余空白边缘，提取完整有效内容包围盒
+    2. 按 A4 纸可打印极限铺满，消除大缩放与四周多余大白边，使字体清晰饱满
+    """
+    # 步骤 1：探测墨迹有效边界，裁除图片四周多余的大空旷白边
+    gray = pil_img.convert("L")
+    arr = np.array(gray)
+    ink_mask = arr < 248
+
+    if np.any(ink_mask):
+        ymin, ymax = np.where(ink_mask.any(axis=1))[0][[0, -1]]
+        xmin, xmax = np.where(ink_mask.any(axis=0))[0][[0, -1]]
+
+        w, h = pil_img.size
+        # 往外保留 12 像素呼吸缓冲，严禁切除边缘笔画与题号
+        crop_box = (
+            max(0, xmin - 12),
+            max(0, ymin - 12),
+            min(w, xmax + 12),
+            min(h, ymax + 12)
+        )
+        content_img = pil_img.crop(crop_box)
+    else:
+        content_img = pil_img
+
+    # 步骤 2：200 DPI 标准 A4 画布尺寸: 1654 x 2338
+    a4_w, a4_h = 1654, 2338
+    canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
+
+    # 仅预留激光打印机物理走纸不可打印死区 (左右各 28 像素 ≈ 3.5mm，上下各 35 像素)
+    phys_margin_x = 28
+    phys_margin_y = 35
+    target_w = a4_w - phys_margin_x * 2
+    target_h = a4_h - phys_margin_y * 2
+
+    # 最大化铺满等比缩放
+    ratio = min(target_w / content_img.width, target_h / content_img.height)
+    new_w = int(content_img.width * ratio)
+    new_h = int(content_img.height * ratio)
+
+    resized = content_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+    canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
+    return canvas
+
 def process_camscanner_color_stream(input_path, output_path):
     """
     扫描全能王同款高保真去底引擎：
-    1. 彻底解决大题编号与右侧插画被吞问题
-    2. 护住拼音四线格虚线与手绘简笔画线稿
+    1. 彻底禁用误切正文的四点透视，保留 100% 原始图像边界
+    2. 平滑背景除法漂白，护住拼音四线格虚线与手绘线稿
+    3. 最大化撑满 A4 画布，杜绝字变小与多余空旷留白
     """
     try:
-        raw_img = None
-        if HAS_CV2:
-            cv_img = safe_imread(input_path)
-            if cv_img is not None:
-                cv_img = auto_crop_document_safe(cv_img)
-                raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-                raw_img = Image.fromarray(raw_rgb)
-        
-        if raw_img is None:
-            with Image.open(input_path) as disk_img:
-                raw_img = disk_img.copy()
+        with Image.open(input_path) as disk_img:
+            img = ImageOps.exif_transpose(disk_img.convert("RGB"))
 
-        # 校验 EXIF 朝向，优先立正构图
-        img = ImageOps.exif_transpose(raw_img)
+        # 校验 EXIF 朝向，优先竖向立正
         if img.width > img.height:
             img = img.rotate(270, expand=True)
 
+        # 轻微倾斜校正
         gray_small = img.convert("L")
         angle = fast_detect_skew(gray_small)
         if abs(angle) >= 1.0:
             img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
-        # 【关键修正 1】：严禁盲目切内缩边距！彻底剔除强制削边代码
+        # 分辨率标准化
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
 
-        # 【关键修正 2】：平滑背景除法（温和对比度曲线保护浅色线稿）
-        rgb = img.convert("RGB")
-        channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
+        # 背景除法柔和漂白（保护浅色线条与字迹）
+        channels = [np.array(c, dtype=np.float32) for c in img.split()]
         cleaned_channels = []
 
         for c_arr in channels:
             c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-            # 采用 35px 大核，确保纸张整体光照被滤出，而不吞并细文字
-            bg = c_pil.filter(ImageFilter.BoxBlur(radius=35))
+            # 40px 大平滑核滤除大面积灰底与光照阴影
+            bg = c_pil.filter(ImageFilter.BoxBlur(radius=40))
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
             divided = (c_arr / bg_arr) * 255.0
 
             out = np.zeros_like(divided)
-            # 阈值调宽至 228，拼音四线格虚线、音调、手绘线稿 100% 完整保留
-            out[divided >= 228] = 255.0
+            # 阈值放宽至 232，浅灰色线条、四线格虚线与线稿小插画完整保留
+            out[divided >= 232] = 255.0
 
-            mask_ink = divided < 228
-            ink_val = np.clip((divided[mask_ink] - 25.0) * (235.0 / (228.0 - 25.0)), 0, 255)
-            # 墨水增强曲线：深字黑亮，浅线条自然
-            ink_val = (ink_val / 235.0) ** 1.15 * 195.0
+            mask_ink = divided < 232
+            ink_val = np.clip((divided[mask_ink] - 20.0) * (240.0 / (232.0 - 20.0)), 0, 255)
+            ink_val = (ink_val / 240.0) ** 1.12 * 195.0
             out[mask_ink] = ink_val
             cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
 
         clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=125, threshold=2))
+        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
 
-        # 标准 200 DPI A4 画布排版 (1654 x 2338)
-        a4_w, a4_h = 1654, 2338
-        canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-        
-        # 页面留白边距仅保留 16 像素，最大化打印视野
-        margin = 16
-        target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
+        # 最大化排版至 A4 画布
+        canvas = fit_to_a4_maximally(sharp_rgb)
 
-        ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
-        new_w, new_h = int(sharp_rgb.width * ratio), int(sharp_rgb.height * ratio)
-
-        resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
-
-        canvas.save(output_path, format="JPEG", quality=94)
+        canvas.save(output_path, format="JPEG", quality=95)
         return True
     except Exception as e:
-        print(f"[CamScannerColor] 处理异常: {e}")
+        print(f"[ProcessColorStream] 异常: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
@@ -230,6 +174,7 @@ class PrintHandler(BaseHandler):
                     if process_camscanner_color_stream(src_path, enhanced_path):
                         target_path = enhanced_path
 
+                # 下发 CUPS 打印
                 res = self.execute_lp(printer, copies, target_path)
                 if res.returncode == 0:
                     jobs.append(res.stdout.strip())
