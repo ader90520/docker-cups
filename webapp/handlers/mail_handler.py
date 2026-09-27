@@ -2,603 +2,210 @@
 # -*- coding: utf-8 -*-
 
 import os
-import time
+import re
+import sys
 import json
+import time
+import uuid
 import email
 import imaplib
-import uuid
-import urllib.request
 import threading
 import subprocess
+import urllib.request
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
-from email.header import decode_header
 from handlers.base_handler import BaseHandler
+from handlers.print_handler import process_image_for_print
 
-try:
-    import cv2
-    HAS_CV2 = True
-except ImportError:
-    HAS_CV2 = False
-
+CONFIG_FILE = "/opt/mail_config.json"
 MAIL_TASK_DIR = "/tmp/mail_print_tasks"
 os.makedirs(MAIL_TASK_DIR, exist_ok=True)
 
-def safe_imread(file_path):
-    if not HAS_CV2:
-        return None
+def load_config():
+    default_cfg = {
+        "enable": True,
+        "server": "imap.qq.com",
+        "port": 993,
+        "user": "",
+        "password": "",
+        "keyword": "",
+        "whitelist": "",
+        "pushplus_token": "",
+        "default_printer": "HP_LaserJet_Pro_MFP_M126a"
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                default_cfg.update(data)
+                return default_cfg
+        except Exception:
+            pass
+    return default_cfg
+
+def save_config(cfg):
     try:
-        return cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-    except Exception:
-        return None
-
-def auto_crop_document_cv(bgr_img):
-    try:
-        h, w = bgr_img.shape[:2]
-        scale = 600.0 / max(h, w)
-        small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 50, 150)
-
-        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-
-        doc_cnt = None
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.25):
-                doc_cnt = approx
-                break
-
-        if doc_cnt is None:
-            return bgr_img
-
-        pts = doc_cnt.reshape(4, 2) / scale
-        rect = np.zeros((4, 2), dtype="float32")
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]
-        rect[2] = pts[np.argmax(s)]
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)]
-        rect[3] = pts[np.argmax(diff)]
-
-        (tl, tr, br, bl) = rect
-        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-        maxWidth = max(int(widthA), int(widthB))
-
-        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-        maxHeight = max(int(heightA), int(heightB))
-
-        dst = np.array([
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1]], dtype="float32")
-
-        M = cv2.getPerspectiveTransform(rect, dst)
-        return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight))
-    except Exception as e:
-        print(f"[AutoCropCV] 异常: {e}")
-        return bgr_img
-
-def dewarp_curved_text_cv(bgr_img):
-    try:
-        h, w = bgr_img.shape[:2]
-        gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-
-        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        sobel_y = np.abs(sobel_y)
-
-        num_slices = 20
-        slice_w = w // num_slices
-        col_offsets = []
-
-        for i in range(num_slices):
-            col_slice = sobel_y[:, i * slice_w : (i + 1) * slice_w]
-            proj = np.sum(col_slice, axis=1)
-            indices = np.arange(h)
-            total_e = np.sum(proj)
-            centroid = np.sum(indices * proj) / (total_e + 1e-5)
-            col_offsets.append(centroid)
-
-        col_offsets = np.array(col_offsets)
-        mean_val = np.median(col_offsets)
-        deflection = col_offsets - mean_val
-
-        if np.max(np.abs(deflection)) < 5.0 or np.max(np.abs(deflection)) > h * 0.15:
-            return bgr_img
-
-        x_coords = np.linspace(0, w, num_slices)
-        all_x = np.arange(w)
-        smooth_dy = np.interp(all_x, x_coords, deflection)
-
-        map_x, map_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-        map_y = map_y - smooth_dy.reshape(1, w).astype(np.float32)
-
-        return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    except Exception as e:
-        print(f"[DewarpCV] 异常: {e}")
-        return bgr_img
-
-def auto_crop_document_pil(pil_img):
-    try:
-        w, h = pil_img.size
-        scale = 300.0 / max(w, h)
-        small = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
-        gray = small.convert("L")
-        
-        arr = np.array(gray, dtype=np.float32)
-        gy, gx = np.gradient(arr)
-        edge = np.sqrt(gx**2 + gy**2)
-        
-        proj_x = np.mean(edge, axis=0)
-        proj_y = np.mean(edge, axis=1)
-        
-        th_x = np.percentile(proj_x, 60)
-        th_y = np.percentile(proj_y, 60)
-        
-        x_indices = np.where(proj_x > th_x)[0]
-        y_indices = np.where(proj_y > th_y)[0]
-        
-        if len(x_indices) > 0 and len(y_indices) > 0:
-            left = int(x_indices[0] / scale)
-            right = int(x_indices[-1] / scale)
-            top = int(y_indices[0] / scale)
-            bottom = int(y_indices[-1] / scale)
-            
-            pad_x = int(w * 0.01)
-            pad_y = int(h * 0.01)
-            box = (
-                max(0, left - pad_x),
-                max(0, top - pad_y),
-                min(w, right + pad_x),
-                min(h, bottom + pad_y)
-            )
-            if (box[2] - box[0]) > w * 0.5 and (box[3] - box[1]) > h * 0.5:
-                return pil_img.crop(box)
-    except Exception as e:
-        print(f"[AutoCropPIL] 异常: {e}")
-    return pil_img
-
-def fast_detect_skew(gray_img):
-    try:
-        w, h = gray_img.size
-        scale = 160.0 / max(w, h)
-        small = gray_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
-        arr = np.array(small, dtype=np.float32)
-
-        grad = np.abs(arr[2:, :] - arr[:-2, :])
-        grad[grad < 35] = 0.0
-
-        best_angle = 0.0
-        max_var = 0.0
-        for angle in [-2.0, 0.0, 2.0]:
-            rot = Image.fromarray(grad).rotate(angle, resample=Image.Resampling.NEAREST)
-            proj = np.sum(np.array(rot), axis=1)
-            var = np.var(proj)
-            if var > max_var:
-                max_var = var
-                best_angle = angle
-        return best_angle
-    except Exception:
-        return 0.0
-
-def process_camscanner_color_stream(input_path, output_path):
-    try:
-        raw_img = None
-        if HAS_CV2:
-            cv_img = safe_imread(input_path)
-            if cv_img is not None:
-                cv_img = auto_crop_document_cv(cv_img)
-                cv_img = dewarp_curved_text_cv(cv_img)
-                raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-                raw_img = Image.fromarray(raw_rgb)
-
-        if raw_img is None:
-            with Image.open(input_path) as disk_img:
-                raw_img = auto_crop_document_pil(disk_img.copy())
-
-        img = ImageOps.exif_transpose(raw_img)
-        if img.width > img.height:
-            img = img.rotate(270, expand=True)
-
-        gray_small = img.convert("L")
-        angle = fast_detect_skew(gray_small)
-        if abs(angle) >= 1.0:
-            img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
-
-        w, h = img.size
-        cx, cy = int(w * 0.03), int(h * 0.03)
-        img = img.crop((cx, cy, w - cx, h - cy))
-
-        if max(img.size) > 1600:
-            img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
-
-        rgb = img.convert("RGB")
-        channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
-        cleaned_channels = []
-
-        for c_arr in channels:
-            c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-            bg = c_pil.filter(ImageFilter.BoxBlur(radius=25))
-            bg_arr = np.array(bg, dtype=np.float32) + 1.0
-
-            divided = (c_arr / bg_arr) * 255.0
-
-            out = np.zeros_like(divided)
-            out[divided >= 195] = 255.0
-
-            mask_ink = divided < 195
-            ink_val = np.clip((divided[mask_ink] - 40.0) * (205.0 / (195.0 - 40.0)), 0, 255)
-            ink_val = (ink_val / 205.0) ** 1.25 * 190.0
-            out[mask_ink] = ink_val
-            cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
-
-        clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
-
-        a4_w, a4_h = 1654, 2338
-        canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-        margin = 35
-        target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
-
-        ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
-        new_w, new_h = int(sharp_rgb.width * ratio), int(sharp_rgb.height * ratio)
-
-        resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
-
-        canvas.save(output_path, format="JPEG", quality=90)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
         return True
-    except Exception as e:
-        print(f"[MailWorker] 图像增强异常: {e}")
+    except Exception:
         return False
 
-class PushPlusNotifier:
-    @staticmethod
-    def send(token, title, content):
-        if not token:
-            return
-        try:
-            url = "https://www.pushplus.plus/send"
-            payload = json.dumps({
-                "token": token.strip(),
-                "title": title,
-                "content": content,
-                "template": "html"
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                url, 
-                data=payload, 
-                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-            )
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                print(f"[PushPlus] 推送成功: {resp.read().decode('utf-8')}")
-        except Exception as e:
-            print(f"[PushPlus] 推送异常: {e}")
+def pushplus_notify(token, title, content):
+    if not token:
+        return
+    try:
+        url = "http://www.pushplus.plus/send"
+        data = json.dumps({"token": token, "title": title, "content": content}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"[PushPlus] 推送异常: {e}", flush=True)
 
-class MultiMailWorker(threading.Thread):
-    def __init__(self, check_interval=5):
-        super().__init__()
-        self.interval = check_interval
-        self.daemon = True
-        self.is_running = True
-
-    def run(self):
-        print(f"[MailWorker] ✔ 智能暗号云邮件监听守护线程已上线 (轮询周期: {self.interval}s)")
-        while self.is_running:
-            try:
-                self.process_mail()
-            except Exception as e:
-                print(f"[MailWorker] 轮询异常: {e}")
-            time.sleep(self.interval)
-
-    def check_printer_hardware_alerts(self, printer):
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
-
-        alerts = []
-        try:
-            cmd = ["lpstat", "-p", printer, "-l"] if printer else ["lpstat", "-p", "-l"]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=2, env=env)
-            out = res.stdout.lower()
-
-            if "media-empty" in out or "out-of-paper" in out or "empty" in out:
-                alerts.append("⚠️ 打印机缺纸")
-            if "media-jam" in out or "jam" in out:
-                alerts.append("🚨 打印机卡纸")
-            if "toner-low" in out or "marker-supply-low" in out or "toner-empty" in out:
-                alerts.append("⚠️ 墨粉将尽")
-            if "offline" in out or "not connected" in out:
-                alerts.append("🔌 打印机脱机")
-        except Exception:
-            pass
-        return alerts
-
-    def track_job_until_output(self, job_id, printer, fname, push_token, from_addr, timeout=180):
-        if not job_id:
-            time.sleep(2)
-            PushPlusNotifier.send(push_token, "🖨️ 云邮件打印已下发", f"<b>文件：</b>{fname}<br>任务已送往打印机。")
-            return
-
-        start_time = time.time()
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
-        has_alerted_error = False
-
-        while time.time() - start_time < timeout:
-            alerts = self.check_printer_hardware_alerts(printer)
-            if alerts and not has_alerted_error:
-                PushPlusNotifier.send(
-                    push_token,
-                    "🚨 打印中断：打印机硬件异常！",
-                    f"<b>故障原因：</b>{' | '.join(alerts)}<br><b>文件：</b>{fname}<br><b>打印机：</b>{printer or '默认'}"
-                )
-                has_alerted_error = True
-
-            res_comp = subprocess.run(["lpstat", "-W", "completed"], stdout=subprocess.PIPE, text=True, env=env)
-            is_in_completed = job_id in res_comp.stdout
-
-            res_active = subprocess.run(["lpstat", "-o"], stdout=subprocess.PIPE, text=True, env=env)
-            is_still_active = job_id in res_active.stdout
-
-            if (is_in_completed or not is_still_active) and not alerts:
-                time.sleep(1)
-                PushPlusNotifier.send(
-                    push_token,
-                    "🎉 云邮件打印出纸成功！",
-                    f"<b>状态：</b>出纸完成<br><b>文件：</b>{fname}<br><b>发件人：</b>{from_addr}<br><b>设备：</b>{printer or '默认'}<br><b>时间：</b>{time.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                print(f"[MailWorker] ✔ 任务 {job_id} 出纸完毕，已推送微信通知！")
-                return
-
-            time.sleep(2)
-
-        PushPlusNotifier.send(push_token, "⏱️ 云打印超时", f"<b>文件：</b>{fname}<br>超 3 分钟未出纸，请检查打印机。")
-
-    def get_fallback_printer(self):
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
-        try:
-            res = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
-            for line in res.stdout.splitlines():
-                if "destination:" in line:
-                    return line.split("destination:")[-1].strip()
-            res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, text=True, timeout=2, env=env)
-            for line in res_a.stdout.splitlines():
-                if line.strip():
-                    return line.split()[0]
-        except Exception:
-            pass
+def decode_str(s):
+    if not s:
         return ""
-
-    def decode_field(self, header_val):
-        if not header_val:
-            return ""
+    try:
+        decoded_list = email.header.decode_header(s)
         result = []
+        for val, charset in decoded_list:
+            if isinstance(val, bytes):
+                result.append(val.decode(charset or "utf-8", errors="ignore"))
+            else:
+                result.append(str(val))
+        return "".join(result)
+    except Exception:
+        return str(s)
+
+def mail_worker_loop():
+    print("[MailWorker] 邮件自动打印轮询后台守护线程启动...", flush=True)
+    while True:
         try:
-            for part, enc in decode_header(header_val):
-                if isinstance(part, bytes):
-                    result.append(part.decode(enc or "utf-8", errors="ignore"))
-                else:
-                    result.append(str(part))
-        except Exception:
-            return str(header_val)
-        return "".join(result).strip()
+            cfg = load_config()
+            if not cfg.get("enable") or not cfg.get("server") or not cfg.get("user") or not cfg.get("password"):
+                time.sleep(6)
+                continue
 
-    def extract_mail_text_body(self, msg):
-        text_content = ""
-        try:
-            for part in msg.walk():
-                ctype = part.get_content_type()
-                if ctype in ["text/plain", "text/html"]:
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        charset = part.get_content_charset() or "utf-8"
-                        text_content += payload.decode(charset, errors="ignore") + " "
-        except Exception:
-            pass
-        return text_content
-
-    def process_mail(self):
-        cfg_file = "/opt/cups_data/mail_config.json"
-        if not os.path.exists(cfg_file):
-            return
-
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-
-        if not cfg.get("enable"):
-            return
-
-        server = cfg.get("server", "").strip()
-        port = int(cfg.get("port", 993))
-        user = cfg.get("user", "").strip()
-        pwd = cfg.get("password", "").strip()
-        printer = cfg.get("default_printer", "").strip()
-        push_token = cfg.get("pushplus_token", "").strip()
-
-        if not server or not user or not pwd:
-            return
-
-        if not printer:
-            printer = self.get_fallback_printer()
-
-        sec_keyword = cfg.get("keyword", "").strip()
-        whitelist = [s.strip().lower() for s in cfg.get("whitelist", "").split(",") if s.strip()]
-
-        mail = None
-        try:
-            mail = imaplib.IMAP4_SSL(server, port, timeout=8)
-            mail.login(user, pwd)
+            mail = imaplib.IMAP4_SSL(cfg["server"], int(cfg.get("port", 993)), timeout=15)
+            mail.login(cfg["user"], cfg["password"])
             mail.select("INBOX")
-        except Exception:
-            if mail:
-                try: mail.logout()
-                except: pass
-            return
 
-        try:
-            status, data = mail.search(None, "UNSEEN")
-            if status != "OK" or not data[0]:
+            status, msg_nums = mail.search(None, "UNSEEN")
+            if status != "OK" or not msg_nums[0]:
                 mail.logout()
-                return
+                time.sleep(5)
+                continue
 
-            msg_ids = data[0].split()
-
-            for num in msg_ids:
-                res, msg_data = mail.fetch(num, "(RFC822)")
-                if res != "OK":
+            for num in msg_nums[0].split():
+                status, data = mail.fetch(num, "(RFC822)")
+                if status != "OK":
                     continue
 
-                msg = email.message_from_bytes(msg_data[0][1])
-                from_addr = self.decode_field(msg.get("From", ""))
-                subject = self.decode_field(msg.get("Subject", ""))
-                body_text = self.extract_mail_text_body(msg)
+                raw_email = data[0][1]
+                msg = email.message_from_bytes(raw_email)
 
-                real_sender = from_addr.lower()
-                if "<" in real_sender and ">" in real_sender:
-                    real_sender = real_sender.split("<")[1].split(">")[0].strip()
+                subject = decode_str(msg.get("Subject", "")).strip()
+                from_str = decode_str(msg.get("From", "")).strip()
+                from_email = re.findall(r"[\w\.-]+@[\w\.-]+", from_str)
+                sender = from_email[0] if from_email else from_str
 
-                print(f"[MailWorker] 收到新邮件: 主题='{subject}', 发件人='{real_sender}'")
+                print(f"[MailWorker] 发现未读邮件 -> 发件人: {sender} | 标题: {subject}", flush=True)
 
-                if whitelist:
-                    is_in_whitelist = any(w in real_sender for w in whitelist)
-                    if not is_in_whitelist:
-                        print(f"[MailWorker] ⚠️ 拦截：发件人 '{real_sender}' 未在白名单中，跳过打印！")
-                        mail.store(num, "+FLAGS", "\\Seen")
-                        continue
-                else:
-                    print(f"[MailWorker] ℹ️ 发件人白名单留空：允许任意邮箱凭借暗号打印")
+                # 白名单校验
+                whitelist = [w.strip().lower() for w in cfg.get("whitelist", "").split(",") if w.strip()]
+                if whitelist and sender.lower() not in whitelist:
+                    print(f"[MailWorker] 发件人 [{sender}] 不在白名单，跳过", flush=True)
+                    mail.store(num, "+FLAGS", "\\Seen")
+                    continue
 
-                if sec_keyword:
-                    has_keyword = (sec_keyword in subject) or (sec_keyword in body_text)
+                # 暗号过滤
+                kw = cfg.get("keyword", "").strip()
+                has_keyword = True
+                if kw:
+                    has_keyword = (kw.lower() in subject.lower())
                     if not has_keyword:
-                        print(f"[MailWorker] ⚠️ 拦截：主题与正文中均未包含暗号 '{sec_keyword}'，跳过打印！")
-                        mail.store(num, "+FLAGS", "\\Seen")
-                        continue
-                    else:
-                        print(f"[MailWorker] ✔ 暗号核验通过！")
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/plain":
+                                try:
+                                    txt = part.get_payload(decode=True).decode(errors="ignore")
+                                    if kw.lower() in txt.lower():
+                                        has_keyword = True
+                                        break
+                                except Exception:
+                                    pass
 
-                subject_force_raw = ("原图" in subject or "原图" in body_text or "raw" in subject.lower())
+                if not has_keyword:
+                    print(f"[MailWorker] 邮件不包含暗号 [{kw}]，跳过", flush=True)
+                    mail.store(num, "+FLAGS", "\\Seen")
+                    continue
+
+                printer = cfg.get("default_printer") or "HP_LaserJet_Pro_MFP_M126a"
+                is_raw_mode = ("原图" in subject)
                 printed_count = 0
 
-                part_index = 0
+                env = os.environ.copy()
+                env["CUPS_SERVER"] = "/run/cups/cups.sock"
+                env["LANG"] = "C"
+
                 for part in msg.walk():
-                    if part.is_multipart():
+                    if part.get_content_maintype() == "multipart":
                         continue
+                    filename = part.get_filename()
+                    if filename:
+                        filename = decode_str(filename)
+                        ext = os.path.splitext(filename)[-1].lower()
+                        if ext in [".jpg", ".jpeg", ".png", ".pdf", ".ofd", ".doc", ".docx"]:
+                            task_token = uuid.uuid4().hex[:8]
+                            save_path = os.path.join(MAIL_TASK_DIR, f"mail_{task_token}{ext}")
+                            with open(save_path, "wb") as f:
+                                f.write(part.get_payload(decode=True))
 
-                    fname = part.get_filename()
-                    if fname:
-                        fname = self.decode_field(fname)
-                    else:
-                        content_type = part.get_content_type().lower()
-                        part_index += 1
-                        if "image/jpeg" in content_type or "image/jpg" in content_type:
-                            fname = f"mobile_photo_{part_index}.jpg"
-                        elif "image/png" in content_type:
-                            fname = f"mobile_photo_{part_index}.png"
-                        elif "application/pdf" in content_type:
-                            fname = f"mobile_doc_{part_index}.pdf"
-                        else:
-                            continue
+                            target_print = save_path
+                            if not is_raw_mode and ext in [".jpg", ".jpeg", ".png"]:
+                                cam_path = os.path.join(MAIL_TASK_DIR, f"cam_{task_token}.jpg")
+                                if process_image_for_print(save_path, cam_path):
+                                    target_print = cam_path
 
-                    ext = os.path.splitext(fname)[-1].lower()
-                    if ext not in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".tif", ".tiff"]:
-                        continue
+                            cmd = [
+                                "lp", "-d", printer,
+                                "-o", "media=A4",
+                                "-o", "PageSize=A4",
+                                "-o", "natural-scaling=90",
+                                "-o", "position=center",
+                                target_print
+                            ]
+                            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                            if res.returncode == 0:
+                                printed_count += 1
+                                print(f"[MailWorker] ✔ 附件 [{filename}] 打印成功: {res.stdout.strip()}", flush=True)
+                            else:
+                                print(f"[MailWorker] ✖ 附件打印被拒绝: {res.stderr.strip()}", flush=True)
 
-                    payload = part.get_payload(decode=True)
-                    if not payload:
-                        continue
-
-                    t0 = time.time()
-                    token = uuid.uuid4().hex[:8]
-                    raw_save_path = os.path.join(MAIL_TASK_DIR, f"{token}_{fname}")
-                    with open(raw_save_path, "wb") as f_out:
-                        f_out.write(payload)
-
-                    ready_file = raw_save_path
-                    print(f"[MailWorker] 提取到打印附件: {fname}")
-
-                    file_is_raw = ("原图" in fname or "raw" in fname.lower())
-                    need_enhance = (not subject_force_raw) and (not file_is_raw)
-
-                    if ext in [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"] and need_enhance:
-                        conv_path = os.path.join(MAIL_TASK_DIR, f"cam_{token}.jpg")
-                        if process_camscanner_color_stream(raw_save_path, conv_path):
-                            ready_file = conv_path
-                            print(f"[MailWorker] ✔ 全能王切边拉直+真彩去黑底耗时: {time.time() - t0:.2f} 秒")
-                    else:
-                        print(f"[MailWorker] ℹ️ 命中原图标记，按相机原图输出: {fname}")
-
-                    env = os.environ.copy()
-                    env["CUPS_SERVER"] = "/run/cups/cups.sock"
-                    env["LANG"] = "C"
-                    if printer:
-                        subprocess.run(["cupsenable", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        subprocess.run(["cupsaccept", printer], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-                    cmd = ["lp"]
-                    if printer:
-                        cmd.extend(["-d", printer])
-                    cmd.extend(["-o", "media=A4", "-o", "fit-to-page", ready_file])
-
-                    print(f"[MailWorker] 🚀 正在派发打印任务至 CUPS...")
-                    res_lp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-
-                    if res_lp.returncode == 0:
-                        job_line = res_lp.stdout.strip()
-                        print(f"[MailWorker] ✔ CUPS 任务下发成功: {job_line}")
-                        job_id = job_line.split(" ")[-1] if "request id is" in job_line else ""
-                        printed_count += 1
-                        self.track_job_until_output(job_id, printer, fname, push_token, from_addr)
-                    else:
-                        err_msg = res_lp.stderr.strip()
-                        print(f"[MailWorker] ❌ 打印下发拒绝: {err_msg}")
-                        PushPlusNotifier.send(push_token, "❌ 打印被拒绝", f"文件：{fname}<br>错误：{err_msg}")
+                mail.store(num, "+FLAGS", "\\Seen")
 
                 if printed_count > 0:
-                    mail.store(num, "+FLAGS", "\\Deleted")
-                    mail.expunge()
-                    print(f"[MailWorker] 🗑️ 邮件处理成功，已从收件箱彻底清理")
-                else:
-                    mail.store(num, "+FLAGS", "\\Seen")
+                    pushplus_notify(cfg.get("pushplus_token"), "🖨️ 云邮件自动打印完成", f"发件人: {sender}\n标题: {subject}\n打印附件数: {printed_count}")
 
+            mail.logout()
         except Exception as e:
-            print(f"[MailWorker] 邮件解析异常: {e}")
-        finally:
-            try:
-                mail.logout()
-            except Exception:
-                pass
+            print(f"[MailWorker] 轮询异常恢复: {e}", flush=True)
+        time.sleep(5)
+
+# 启动轮询守护线程
+worker_thread = threading.Thread(target=mail_worker_loop, daemon=True)
+worker_thread.start()
 
 class MailConfigHandler(BaseHandler):
     def get(self):
-        cfg_file = "/opt/cups_data/mail_config.json"
-        if os.path.exists(cfg_file):
-            with open(cfg_file, "r", encoding="utf-8") as f:
-                self.write_json(True, data=json.load(f))
-        else:
-            self.write_json(True, data={"enable": False})
+        cfg = load_config()
+        self.write_json(True, "获取配置成功", data=cfg)
 
     def post(self):
         try:
-            body = json.loads(self.request.body.decode("utf-8"))
-            cfg_file = "/opt/cups_data/mail_config.json"
-            with open(cfg_file, "w", encoding="utf-8") as f:
-                json.dump(body, f, ensure_ascii=False, indent=2)
-            print(f"[MailConfigHandler] 邮箱策略更新成功")
-            self.write_json(True, "云邮件智能暗号策略已保存生效")
+            data = json.loads(self.request.body.decode("utf-8"))
+            if save_config(data):
+                self.write_json(True, "云邮件策略配置保存成功！")
+            else:
+                self.write_json(False, "写入配置文件失败")
         except Exception as e:
-            self.write_json(False, f"保存失败: {str(e)}")
-
-mail_thread = MultiMailWorker()
-mail_thread.start()
+            self.write_json(False, f"保存异常: {str(e)}")
