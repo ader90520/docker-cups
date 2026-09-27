@@ -158,11 +158,11 @@
         <option value="">正在检测打印机...</option>
       </select>
 
-      <!-- 驱动配置抽屉 (消灭 %20 乱码，打通 631 驱动库) -->
+      <!-- 驱动配置抽屉 (物理端口纯净呈现，直连 631 驱动库) -->
       <div class="drawer" id="adminDrawer">
         <div style="font-weight:600; font-size:13px; margin-bottom:8px; color:#0f172a;">🛠️ 打印机驱动配置</div>
         
-        <!-- 步骤 1：扫描并选择物理端口 -->
+        <!-- 步骤 1：扫描物理端口 -->
         <div style="margin-bottom:8px;">
           <span class="form-label">1. 扫描物理端口</span>
           <div style="display:flex; gap:6px;">
@@ -174,7 +174,7 @@
           <div id="autoPrinterNameTip" style="font-size:11px; color:#0284c7; margin-top:3px; display:none;"></div>
         </div>
 
-        <!-- 步骤 2：驱动库检索与选择 -->
+        <!-- 步骤 2：从系统驱动库选择 -->
         <div style="margin-bottom:8px;">
           <span class="form-label">2. 从系统驱动库选择</span>
           <div style="display:flex; gap:6px; margin-bottom:6px;">
@@ -285,7 +285,6 @@
             <button class="btn-submit" id="btnStartScan" style="background:#0284c7;" onclick="submitScan()">⚡ 开始走纸扫描</button>
             <div id="scanStatus" style="text-align:center; font-size:12px; color:#64748b; margin-top:4px;">扫描仪就绪</div>
 
-            <!-- 扫描成功后操作区 -->
             <div id="scanActionBox" style="display:none; gap:10px; margin-top:6px;">
               <a id="btnDownloadScan" href="#" target="_blank" style="flex:1; text-align:center; background:#10b981; color:#fff; text-decoration:none; padding:10px; border-radius:6px; font-size:13px; font-weight:600;">💾 下载扫描件</a>
               <button onclick="printCurrentScan()" style="flex:1; background:#0284c7; color:#fff; border:none; padding:10px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer;">🖨️ 打印此件</button>
@@ -1077,7 +1076,6 @@
     // ==================== 驱动管理：消除 %20 并自动匹配驱动 ====================
     function onPortSelected(uri) {
       if (!uri) return;
-      // 彻底解码 URL 编码（%20 -> 空格）
       const decoded = decodeURIComponent(uri);
       const rawName = decoded.split("://").pop().split("?")[0].replace(/[\/\\#]/g, " ").trim();
       currentAutoName = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || "HP_Printer";
@@ -1086,7 +1084,6 @@
       tip.style.display = "block";
       tip.innerText = `✔ 已解析设备: ${rawName}`;
 
-      // 提取核心型号自动搜索（如 M126a 提取 m126，1020 提取 1020）
       let key = "";
       const match = rawName.match(/(m\d{3,4}[a-z]?|\d{4}[a-z]?)/i);
       if (match) {
@@ -1098,7 +1095,7 @@
       const keyInput = document.getElementById("drvKey");
       if (keyInput) {
         keyInput.value = key;
-        searchDrivers(); // 自动触发驱动匹配
+        searchDrivers();
       }
     }
 
@@ -1141,7 +1138,7 @@
             const opt = document.createElement("option");
             opt.value = d.id;
             opt.innerText = `📄 ${d.name}`;
-            if (idx === 0) opt.selected = true; // 自动高亮并选中第 1 个最精准的驱动
+            if (idx === 0) opt.selected = true;
             sel.appendChild(opt);
           });
           const rawOpt = document.createElement("option");
