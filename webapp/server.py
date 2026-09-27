@@ -15,7 +15,7 @@ from handlers.printer_admin_handler import PrinterAdminHandler
 from handlers.mail_handler import MailConfigHandler
 
 class IndexRedirectHandler(tornado.web.RequestHandler):
-    """同时支持 HEAD 和 GET 请求，根治 curl -I 与监控探活报 405 Method Not Allowed"""
+    """同时支持 HEAD 和 GET 请求，根治 curl -I 与网络探活报 405 Method Not Allowed"""
     def head(self):
         self.redirect("/index.html")
 
@@ -59,7 +59,6 @@ class DevicesHandler(BaseHandler):
                         "has_error": has_error
                     })
 
-            # 若未指定默认打印机但有打印机存在，默认指定第 1 个
             if printers and not any(p["is_default"] for p in printers):
                 printers[0]["is_default"] = True
 
