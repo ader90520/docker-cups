@@ -15,7 +15,7 @@ except ImportError:
     HAS_CV2 = False
 
 def safe_imread(file_path):
-    """解决 cv2 无法直接读取中文及特殊字符路径的问题"""
+    """防中文路径乱码安全读取"""
     if not HAS_CV2:
         return None
     try:
@@ -23,19 +23,21 @@ def safe_imread(file_path):
     except Exception:
         return None
 
-def auto_crop_document_cv(bgr_img):
+def auto_crop_document_safe(bgr_img):
     """
-    OpenCV 阶段 1：智能四点透视校正（带安全回弹裕量）
-    严防切除边缘题目序号、页码及边缘插图
+    智能四点透视校正（高安全门槛 + 宽裕安全呼吸区）
+    坚决防止误把正文边缘当纸张外框削掉序号与插画
     """
+    if not HAS_CV2 or bgr_img is None:
+        return bgr_img
     try:
         h, w = bgr_img.shape[:2]
         scale = 800.0 / max(h, w)
         small = cv2.resize(bgr_img, (int(w * scale), int(h * scale)))
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 30, 120)
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        edged = cv2.Canny(blurred, 25, 100)
         
         contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
@@ -44,11 +46,12 @@ def auto_crop_document_cv(bgr_img):
         for c in contours:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            # 严格门槛：面积占 65% 以上才认定是整张试卷纸，避免正文误切
-            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.65):
+            # 严格门槛：面积必须占整张照片 75% 以上，才认定为拍摄到整张试卷
+            if len(approx) == 4 and cv2.contourArea(c) > (small.shape[0] * small.shape[1] * 0.75):
                 doc_cnt = approx
                 break
                 
+        # 未能 100% 确认外框时直接返回原图，宁留桌面背景绝不裁坏文字
         if doc_cnt is None:
             return bgr_img
 
@@ -70,9 +73,9 @@ def auto_crop_document_cv(bgr_img):
         heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
         maxHeight = max(int(heightA), int(heightB))
 
-        # 向外安全回弹 2.5% 裕量，保护外缘题目序号
-        pad_w = int(maxWidth * 0.025)
-        pad_h = int(maxHeight * 0.025)
+        # 向外安全回弹 4.5% 呼吸空间，彻底护住左侧题号一二三四五及右侧插图
+        pad_w = int(maxWidth * 0.045)
+        pad_h = int(maxHeight * 0.045)
 
         dst = np.array([
             [pad_w, pad_h],
@@ -83,91 +86,11 @@ def auto_crop_document_cv(bgr_img):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(bgr_img, M, (maxWidth, maxHeight), borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
-        print(f"[AutoCropCV] 异常: {e}")
+        print(f"[AutoCropSafe] 异常跳过: {e}")
         return bgr_img
-
-def dewarp_curved_text_cv(bgr_img):
-    """OpenCV 阶段 2：检测书本中缝拱起，将弯曲的字行反向拉直平展"""
-    try:
-        h, w = bgr_img.shape[:2]
-        gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-        
-        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        sobel_y = np.abs(sobel_y)
-        
-        num_slices = 24
-        slice_w = w // num_slices
-        col_offsets = []
-        
-        for i in range(num_slices):
-            col_slice = sobel_y[:, i * slice_w : (i + 1) * slice_w]
-            proj = np.sum(col_slice, axis=1)
-            indices = np.arange(h)
-            total_e = np.sum(proj)
-            centroid = np.sum(indices * proj) / (total_e + 1e-5)
-            col_offsets.append(centroid)
-            
-        col_offsets = np.array(col_offsets)
-        mean_val = np.median(col_offsets)
-        deflection = col_offsets - mean_val
-        
-        if np.max(np.abs(deflection)) < 4.0 or np.max(np.abs(deflection)) > h * 0.12:
-            return bgr_img
-            
-        x_coords = np.linspace(0, w, num_slices)
-        all_x = np.arange(w)
-        smooth_dy = np.interp(all_x, x_coords, deflection)
-        
-        map_x, map_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-        map_y = map_y - smooth_dy.reshape(1, w).astype(np.float32)
-        
-        return cv2.remap(bgr_img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    except Exception as e:
-        print(f"[DewarpCV] 异常: {e}")
-        return bgr_img
-
-def auto_crop_document_pil(pil_img):
-    """纯 PIL + NumPy 边缘裁切兜底方案（完全不依赖 cv2）"""
-    try:
-        w, h = pil_img.size
-        scale = 300.0 / max(w, h)
-        small = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
-        gray = small.convert("L")
-        
-        arr = np.array(gray, dtype=np.float32)
-        gy, gx = np.gradient(arr)
-        edge = np.sqrt(gx**2 + gy**2)
-        
-        proj_x = np.mean(edge, axis=0)
-        proj_y = np.mean(edge, axis=1)
-        
-        th_x = np.percentile(proj_x, 65)
-        th_y = np.percentile(proj_y, 65)
-        
-        x_indices = np.where(proj_x > th_x)[0]
-        y_indices = np.where(proj_y > th_y)[0]
-        
-        if len(x_indices) > 0 and len(y_indices) > 0:
-            left = int(x_indices[0] / scale)
-            right = int(x_indices[-1] / scale)
-            top = int(y_indices[0] / scale)
-            bottom = int(y_indices[-1] / scale)
-            
-            pad_x = int(w * 0.03)
-            pad_y = int(h * 0.03)
-            box = (
-                max(0, left - pad_x),
-                max(0, top - pad_y),
-                min(w, right + pad_x),
-                min(h, bottom + pad_y)
-            )
-            if (box[2] - box[0]) > w * 0.70 and (box[3] - box[1]) > h * 0.70:
-                return pil_img.crop(box)
-    except Exception as e:
-        print(f"[AutoCropPIL] 异常: {e}")
-    return pil_img
 
 def fast_detect_skew(gray_img):
+    """快速倾斜角探测"""
     try:
         w, h = gray_img.size
         scale = 160.0 / max(w, h)
@@ -192,23 +115,24 @@ def fast_detect_skew(gray_img):
 
 def process_camscanner_color_stream(input_path, output_path):
     """
-    全能王真彩色保留去底引擎 (200 DPI RGB 流式输出)
-    修复浅色文字被吞、左右边缘被切问题
+    扫描全能王同款高保真去底引擎：
+    1. 彻底解决大题编号与右侧插画被吞问题
+    2. 护住拼音四线格虚线与手绘简笔画线稿
     """
     try:
         raw_img = None
         if HAS_CV2:
             cv_img = safe_imread(input_path)
             if cv_img is not None:
-                cv_img = auto_crop_document_cv(cv_img)
-                cv_img = dewarp_curved_text_cv(cv_img)
+                cv_img = auto_crop_document_safe(cv_img)
                 raw_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
                 raw_img = Image.fromarray(raw_rgb)
         
         if raw_img is None:
             with Image.open(input_path) as disk_img:
-                raw_img = auto_crop_document_pil(disk_img.copy())
+                raw_img = disk_img.copy()
 
+        # 校验 EXIF 朝向，优先立正构图
         img = ImageOps.exif_transpose(raw_img)
         if img.width > img.height:
             img = img.rotate(270, expand=True)
@@ -218,42 +142,43 @@ def process_camscanner_color_stream(input_path, output_path):
         if abs(angle) >= 1.0:
             img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
 
-        # 仅裁切 0.3% 微边缘，绝对不碰左侧题号
-        w, h = img.size
-        cx, cy = int(w * 0.003), int(h * 0.003)
-        img = img.crop((cx, cy, w - cx, h - cy))
-
+        # 【关键修正 1】：严禁盲目切内缩边距！彻底剔除强制削边代码
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
 
+        # 【关键修正 2】：平滑背景除法（温和对比度曲线保护浅色线稿）
         rgb = img.convert("RGB")
         channels = [np.array(c, dtype=np.float32) for c in rgb.split()]
         cleaned_channels = []
 
         for c_arr in channels:
             c_pil = Image.fromarray(np.clip(c_arr, 0, 255).astype(np.uint8))
-            bg = c_pil.filter(ImageFilter.BoxBlur(radius=32))
+            # 采用 35px 大核，确保纸张整体光照被滤出，而不吞并细文字
+            bg = c_pil.filter(ImageFilter.BoxBlur(radius=35))
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
             divided = (c_arr / bg_arr) * 255.0
 
             out = np.zeros_like(divided)
-            # 阈值精准提升至 220，浅灰色的四线格、虚线和线稿插画全部保留
-            out[divided >= 220] = 255.0
+            # 阈值调宽至 228，拼音四线格虚线、音调、手绘线稿 100% 完整保留
+            out[divided >= 228] = 255.0
 
-            mask_ink = divided < 220
-            ink_val = np.clip((divided[mask_ink] - 30.0) * (230.0 / (220.0 - 30.0)), 0, 255)
-            ink_val = (ink_val / 230.0) ** 1.18 * 192.0
+            mask_ink = divided < 228
+            ink_val = np.clip((divided[mask_ink] - 25.0) * (235.0 / (228.0 - 25.0)), 0, 255)
+            # 墨水增强曲线：深字黑亮，浅线条自然
+            ink_val = (ink_val / 235.0) ** 1.15 * 195.0
             out[mask_ink] = ink_val
             cleaned_channels.append(np.clip(out, 0, 255).astype(np.uint8))
 
         clean_rgb = Image.merge("RGB", [Image.fromarray(c) for c in cleaned_channels])
-        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
+        sharp_rgb = clean_rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=125, threshold=2))
 
-        # 200 DPI 标准 A4 画布居中排版 (1654 x 2338)
+        # 标准 200 DPI A4 画布排版 (1654 x 2338)
         a4_w, a4_h = 1654, 2338
         canvas = Image.new("RGB", (a4_w, a4_h), (255, 255, 255))
-        margin = 22
+        
+        # 页面留白边距仅保留 16 像素，最大化打印视野
+        margin = 16
         target_w, target_h = a4_w - margin * 2, a4_h - margin * 2
 
         ratio = min(target_w / sharp_rgb.width, target_h / sharp_rgb.height)
@@ -262,14 +187,14 @@ def process_camscanner_color_stream(input_path, output_path):
         resized = sharp_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
         canvas.paste(resized, ((a4_w - new_w) // 2, (a4_h - new_h) // 2))
 
-        canvas.save(output_path, format="JPEG", quality=93)
+        canvas.save(output_path, format="JPEG", quality=94)
         return True
     except Exception as e:
         print(f"[CamScannerColor] 处理异常: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
-    """自动清理超过 30 分钟的临时任务文件，防止机顶盒 /tmp 分区打满"""
+    """自动清理临时文件"""
     try:
         now = time.time()
         for f in os.listdir(directory):
