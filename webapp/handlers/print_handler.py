@@ -26,29 +26,28 @@ def log_debug(msg):
 
 def safe_clean_edge_shadows(arr):
     """
-    温和边缘去阴影：绝不整行刷白，只消灭贴近边界的孤立暗块，保护正文字迹
+    温和边缘去阴影：绝不整行刷白，只排查贴近纸张边界的局部暗块，保护正文字迹
     """
     try:
         h, w = arr.shape[:2]
-        # 仅限定在最边缘 4% 区域内排查
         top_h = int(h * 0.04)
         bot_h = int(h * 0.96)
         left_w = int(w * 0.03)
         right_w = int(w * 0.97)
 
-        # 顶部仅擦除与上边界相连的暗块
+        # 顶部贴边阴影
         for y in range(top_h):
             mask = arr[y, :] < 100
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
-        # 底部仅擦除与底边界相连的暗块
+        # 底部贴边阴影
         for y in range(bot_h, h):
             mask = arr[y, :] < 100
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
-        # 左右两侧贴边阴影消除
+        # 左右侧边缘阴影
         for x in range(left_w):
             mask = arr[:, x] < 100
             if np.sum(mask) > 0:
@@ -59,7 +58,7 @@ def safe_clean_edge_shadows(arr):
             if np.sum(mask) > 0:
                 arr[mask, x] = 255.0
 
-        # 安全保留 0.8% 极微物理留白，不吃字
+        # 安全物理留白 0.8%
         pad_y = max(1, int(h * 0.008))
         pad_x = max(1, int(w * 0.008))
         arr[0:pad_y, :] = 255.0
@@ -205,9 +204,11 @@ def auto_perspective_crop_cv(cv_img):
     return cv_img
 
 def process_image_for_print(input_path, output_path):
-    """防漏字高保真图像增强处理"""
+    """
+    高保真防漏字图像增强流水线 (大设备 OpenCV 自动加速，小设备 PIL 稳固运行)
+    """
     try:
-        log_debug(f"图像流水线启动: {input_path} (OpenCV={HAVE_OPENCV})")
+        log_debug(f"图像增强流水线启动: {input_path} (OpenCV={HAVE_OPENCV})")
 
         if HAVE_OPENCV:
             cv_img = cv2.imread(input_path)
@@ -223,7 +224,7 @@ def process_image_for_print(input_path, output_path):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 彩色弱线条加深保护
+            # 弱彩色线条加深保护
             red_line_mask = (r_f - np.maximum(g_f, b_f)) > 8.0
             max_c = np.maximum(np.maximum(r_f, g_f), b_f)
             min_c = np.minimum(np.minimum(r_f, g_f), b_f)
@@ -233,20 +234,19 @@ def process_image_for_print(input_path, output_path):
             gray[color_diff_mask] = np.clip(gray[color_diff_mask] - (max_c[color_diff_mask] - min_c[color_diff_mask]) * 1.5, 0, 255)
             gray[red_line_mask] = np.clip(gray[red_line_mask] - 40.0, 0, 255)
 
-            # 光照除法归一化
+            # 光照估计
             bg = cv2.blur(gray, (55, 55)) + 1.0
             divided = (gray / bg) * 255.0
 
-            # 调宽阈值：放宽到 225.0，大幅减少漏字
+            # 防漏字阈值 (放宽到 225.0)
             out = np.full_like(divided, 255.0)
             ink_mask = divided < 225.0
             ink_vals = divided[ink_mask]
             clean_ink = np.clip((ink_vals - 8.0) * (225.0 / (225.0 - 8.0)), 0, 255)
-            # 伽马调平至 1.05，增强笔画浓黑度
             clean_ink = (clean_ink / 225.0) ** 1.05 * 195.0
             out[ink_mask] = clean_ink
 
-            # 温和消黑条，不伤字
+            # 温和去黑条
             out = safe_clean_edge_shadows(out)
 
             res_uint8 = np.clip(out, 0, 255).astype(np.uint8)
@@ -287,14 +287,14 @@ def process_image_for_print(input_path, output_path):
             divided = (gray_arr / bg_arr) * 255.0
             out = np.full_like(divided, 255.0)
 
-            # 阈值放宽到 225.0，彻底消除字迹断层
+            # 防漏字阈值 (放宽到 225.0)
             mask_front = divided < 225.0
             ink_vals = divided[mask_front]
             clean_ink = np.clip((ink_vals - 8.0) * (225.0 / (225.0 - 8.0)), 0, 255)
             clean_ink = (clean_ink / 225.0) ** 1.05 * 195.0
             out[mask_front] = clean_ink
 
-            # 温和消黑条，不伤字
+            # 温和去黑条
             out = safe_clean_edge_shadows(out)
 
             clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
@@ -314,7 +314,10 @@ def clean_old_tmp_files(directory, max_age_seconds=1800):
         for f in os.listdir(directory):
             p = os.path.join(directory, f)
             if os.path.isfile(p) and (now - os.path.getmtime(p) > max_age_seconds):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -361,14 +364,13 @@ class PrintHandler(BaseHandler):
                     "-o", "position=center"
                 ]
 
-                # 支持双面打印选项
                 if duplex == "long":
                     cmd.extend(["-o", "sides=two-sided-long-edge"])
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
                 cmd.append(target_file)
-                log_debug(f"派发打印指令: {' '.join(cmd)}")
+                log_debug(f"下发打印任务: {' '.join(cmd)}")
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
                 if res.returncode == 0:
