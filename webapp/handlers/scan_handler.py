@@ -5,7 +5,6 @@ import os
 import time
 import uuid
 import subprocess
-import threading
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
@@ -13,9 +12,6 @@ SCAN_DIR = "/opt/webapp/static/scans"
 os.makedirs(SCAN_DIR, exist_ok=True)
 
 def release_usb_lock():
-    """
-    释放底层 USB 端口占用，防止 SANE 与 CUPS 冲突抛出 Error during device I/O
-    """
     try:
         subprocess.run(["rmmod", "usblp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
@@ -49,7 +45,6 @@ def detect_scan_devices():
     except Exception as e:
         print(f"[ScanHandler] 动态枚举异常: {e}", flush=True)
 
-    # 兜底通道：当探测超时，自动探测 USB 节点匹配直通通道
     if not devices:
         try:
             lsusb = subprocess.run(["lsusb"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
@@ -75,7 +70,6 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
     env["LANG"] = "C"
     env["SANE_CONFIG_DIR"] = "/etc/sane.d"
 
-    # 限定 A4 物理边界与格式输出
     cmd = [
         "scanimage",
         "-d", device_id,
@@ -88,14 +82,14 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
         "--format=jpeg"
     ]
 
-    print(f"[ScanHandler] 执行硬件扫描任务: {' '.join(cmd)}", flush=True)
+    print(f"[ScanHandler] 执行扫描: {' '.join(cmd)}", flush=True)
     with open(raw_path, "wb") as f_out:
         res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=90)
 
-    # 针对 Device I/O 冲突增加二次重试
+    # 遇到死锁进行二次延时重试
     if res.returncode != 0:
         err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
-        print(f"[ScanHandler] 首次扫描失败: {err_msg}", flush=True)
+        print(f"[ScanHandler] 首次扫描返回: {err_msg}", flush=True)
         if "device I/O" in err_msg or "busy" in err_msg.lower():
             time.sleep(1.2)
             release_usb_lock()
@@ -107,10 +101,9 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
         if os.path.exists(raw_path):
             os.remove(raw_path)
         if "device I/O" in err_msg:
-            raise RuntimeError("扫描仪 USB 硬件处于繁忙或死锁状态，请将一体机断电重启后重试！")
-        raise RuntimeError(err_msg or "扫描仪硬件通信超时")
+            raise RuntimeError("扫描仪硬件正忙或处于死锁状态，请将一体机重启后重试！")
+        raise RuntimeError(err_msg or "扫描通信超时")
 
-    # 接入仿扫描全能王图像流水线增强
     try:
         if not process_image_for_print(raw_path, final_path):
             os.rename(raw_path, final_path)
@@ -138,7 +131,7 @@ class ScanHandler(BaseHandler):
             if not device:
                 devs = detect_scan_devices()
                 if not devs:
-                    self.write_json(False, "未检测到可用扫描设备，请确认一体机已通电并连接 USB")
+                    self.write_json(False, "未检测到可用扫描仪硬件，请确认一体机已通电并连接 USB")
                     return
                 device = devs[0]["id"]
 
