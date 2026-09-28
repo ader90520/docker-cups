@@ -25,9 +25,6 @@ def log_debug(msg):
     print(f"[PrintLog] {msg}", flush=True)
 
 def safe_clean_edge_shadows(arr):
-    """
-    温和边缘去阴影：绝不整行刷白，只排查贴近纸张边界的局部暗块，保护正文字迹
-    """
     try:
         h, w = arr.shape[:2]
         top_h = int(h * 0.04)
@@ -35,19 +32,16 @@ def safe_clean_edge_shadows(arr):
         left_w = int(w * 0.03)
         right_w = int(w * 0.97)
 
-        # 顶部贴边阴影
         for y in range(top_h):
             mask = arr[y, :] < 100
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
-        # 底部贴边阴影
         for y in range(bot_h, h):
             mask = arr[y, :] < 100
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
-        # 左右侧边缘阴影
         for x in range(left_w):
             mask = arr[:, x] < 100
             if np.sum(mask) > 0:
@@ -58,7 +52,6 @@ def safe_clean_edge_shadows(arr):
             if np.sum(mask) > 0:
                 arr[mask, x] = 255.0
 
-        # 安全物理留白 0.8%
         pad_y = max(1, int(h * 0.008))
         pad_x = max(1, int(w * 0.008))
         arr[0:pad_y, :] = 255.0
@@ -203,10 +196,24 @@ def auto_perspective_crop_cv(cv_img):
         log_debug(f"OpenCV 透视跳过: {e}")
     return cv_img
 
+def apply_hardware_margin_padding(pil_img, scale_factor=0.92):
+    """
+    在图像内层直接执行物理缩放与居中白边填充 (92% 缩放)
+    彻底避免依赖 CUPS 参数导致右边靠边或切字的问题
+    """
+    target_w, target_h = 2480, 3508
+    scaled_w = int(target_w * scale_factor)
+    scaled_h = int(target_h * scale_factor)
+
+    resized_content = pil_img.resize((scaled_w, scaled_h), Image.Resampling.BICUBIC)
+    canvas = Image.new("RGB", (target_w, target_h), (255, 255, 255))
+
+    pos_x = (target_w - scaled_w) // 2
+    pos_y = (target_h - scaled_h) // 2
+    canvas.paste(resized_content, (pos_x, pos_y))
+    return canvas
+
 def process_image_for_print(input_path, output_path):
-    """
-    高保真防漏字图像增强流水线 (大设备 OpenCV 自动加速，小设备 PIL 稳固运行)
-    """
     try:
         log_debug(f"图像增强流水线启动: {input_path} (OpenCV={HAVE_OPENCV})")
 
@@ -224,7 +231,6 @@ def process_image_for_print(input_path, output_path):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 弱彩色线条加深保护
             red_line_mask = (r_f - np.maximum(g_f, b_f)) > 8.0
             max_c = np.maximum(np.maximum(r_f, g_f), b_f)
             min_c = np.minimum(np.minimum(r_f, g_f), b_f)
@@ -234,11 +240,9 @@ def process_image_for_print(input_path, output_path):
             gray[color_diff_mask] = np.clip(gray[color_diff_mask] - (max_c[color_diff_mask] - min_c[color_diff_mask]) * 1.5, 0, 255)
             gray[red_line_mask] = np.clip(gray[red_line_mask] - 40.0, 0, 255)
 
-            # 光照估计
             bg = cv2.blur(gray, (55, 55)) + 1.0
             divided = (gray / bg) * 255.0
 
-            # 防漏字阈值 (放宽到 225.0)
             out = np.full_like(divided, 255.0)
             ink_mask = divided < 225.0
             ink_vals = divided[ink_mask]
@@ -246,15 +250,16 @@ def process_image_for_print(input_path, output_path):
             clean_ink = (clean_ink / 225.0) ** 1.05 * 195.0
             out[ink_mask] = clean_ink
 
-            # 温和去黑条
             out = safe_clean_edge_shadows(out)
 
             res_uint8 = np.clip(out, 0, 255).astype(np.uint8)
             gaussian = cv2.GaussianBlur(res_uint8, (0, 0), 1.0)
             sharp = cv2.addWeighted(res_uint8, 1.35, gaussian, -0.35, 0)
 
-            pil_res = Image.fromarray(sharp)
-            pil_res.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
+            pil_res = Image.fromarray(sharp).convert("RGB")
+            # 物理 92% 缩放居中留白，右侧绝对不再贴边
+            final_canvas = apply_hardware_margin_padding(pil_res, 0.92)
+            final_canvas.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
 
         else:
             with Image.open(input_path) as disk_img:
@@ -287,20 +292,21 @@ def process_image_for_print(input_path, output_path):
             divided = (gray_arr / bg_arr) * 255.0
             out = np.full_like(divided, 255.0)
 
-            # 防漏字阈值 (放宽到 225.0)
             mask_front = divided < 225.0
             ink_vals = divided[mask_front]
             clean_ink = np.clip((ink_vals - 8.0) * (225.0 / (225.0 - 8.0)), 0, 255)
             clean_ink = (clean_ink / 225.0) ** 1.05 * 195.0
             out[mask_front] = clean_ink
 
-            # 温和去黑条
             out = safe_clean_edge_shadows(out)
 
             clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
             sharp = clean_gray.filter(ImageFilter.UnsharpMask(radius=1.0, percent=135, threshold=2))
             sharp_rgb = Image.merge("RGB", [sharp, sharp, sharp])
-            sharp_rgb.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
+
+            # 物理 92% 缩放居中留白
+            final_canvas = apply_hardware_margin_padding(sharp_rgb, 0.92)
+            final_canvas.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
 
         log_debug(f"高保真图像增强处理完成: {output_path}")
         return True
@@ -327,6 +333,7 @@ class PrintHandler(BaseHandler):
             printer = self.get_argument("printer", "").strip()
             copies = self.get_argument("copies", "1").strip()
             duplex = self.get_argument("duplex", "none").strip()
+            color_mode = self.get_argument("color_mode", "monochrome").strip()
             media = self.get_argument("media", "A4").strip()
             enhance = self.get_argument("enhance", "true").strip().lower() == "true"
             files = self.request.files.get("file", [])
@@ -360,10 +367,16 @@ class PrintHandler(BaseHandler):
                     "-o", f"media={media}",
                     "-o", f"PageSize={media}",
                     "-o", "fit-to-page",
-                    "-o", "natural-scaling=95",
                     "-o", "position=center"
                 ]
 
+                # 彩色与黑白切换支持
+                if color_mode == "color":
+                    cmd.extend(["-o", "ColorModel=RGB", "-o", "print-color-mode=color"])
+                else:
+                    cmd.extend(["-o", "ColorModel=K", "-o", "ColorModel=Gray", "-o", "print-color-mode=monochrome"])
+
+                # 双面打印选项
                 if duplex == "long":
                     cmd.extend(["-o", "sides=two-sided-long-edge"])
                 elif duplex == "short":
