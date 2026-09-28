@@ -24,8 +24,8 @@ def load_mail_config():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MailConfig] 读取异常: {e}", flush=True)
     return {
         "enable": False,
         "server": "imap.qq.com",
@@ -40,8 +40,12 @@ def load_mail_config():
 
 def save_mail_config(cfg):
     try:
+        # 确保目录存在且有权限
+        cfg_dir = os.path.dirname(CONFIG_FILE)
+        os.makedirs(cfg_dir, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.chmod(CONFIG_FILE, 0o666)
         mail_wake_event.set()
         return True
     except Exception as e:
@@ -103,7 +107,6 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
     ext = os.path.splitext(file_path)[-1].lower()
 
     if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
-        # 使用唯一命名杜绝覆盖冲突
         enhanced_path = file_path + f"_{time.time_ns()}_enhanced.jpg"
         try:
             if process_image_for_print(file_path, enhanced_path):
@@ -157,7 +160,6 @@ def mail_polling_worker():
                             continue
                         msg = email.message_from_bytes(msg_data[0][1])
 
-                        # 严格 RFC 邮件地址解析，杜绝昵称伪造注入
                         raw_from = decode_str(msg.get("From", ""))
                         _, clean_from_addr = parseaddr(raw_from)
                         clean_from_addr = clean_from_addr.lower().strip()
@@ -165,7 +167,6 @@ def mail_polling_worker():
                         whitelist = cfg.get("whitelist", "").strip()
                         if whitelist:
                             allowed_list = [w.strip().lower() for w in whitelist.split(",") if w.strip()]
-                            # 严格全匹配或域名后缀匹配
                             if allowed_list and not any(clean_from_addr == w or clean_from_addr.endswith("@" + w) for w in allowed_list):
                                 print(f"[MailWorker] 发件人 {clean_from_addr} 不在白名单允许范围内，跳过处理")
                                 continue
@@ -186,7 +187,7 @@ def mail_polling_worker():
                                 filename = decode_str(filename)
                                 ext = os.path.splitext(filename)[-1].lower()
                                 if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".webp"]:
-                                    save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{uuid.uuid4().hex[:6]}_{filename}")
+                                    save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{filename}")
                                     with open(save_path, "wb") as f:
                                         f.write(part.get_payload(decode=True))
                                     print_attachment_file(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
@@ -259,6 +260,6 @@ class MailConfigHandler(BaseHandler):
             if save_mail_config(new_cfg):
                 self.write_json(True, "云邮件及 PushPlus 微信通知设置已保存生效！")
             else:
-                self.write_json(False, "配置文件写入失败")
+                self.write_json(False, "配置文件写入失败，请检查 /opt/webapp 目录权限")
         except Exception as e:
             self.write_json(False, f"保存配置异常: {str(e)}")
