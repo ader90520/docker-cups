@@ -27,7 +27,7 @@ def load_mail_config():
                 if content:
                     return json.loads(content)
         except Exception as e:
-            print(f"[MailConfig] 读取异常: {e}", flush=True)
+            print(f"[MailConfig] 读取配置异常: {e}", flush=True)
     return {
         "enable": False,
         "server": "imap.qq.com",
@@ -43,21 +43,24 @@ def load_mail_config():
 def save_mail_config(cfg):
     try:
         cfg_dir = os.path.dirname(CONFIG_FILE)
-        os.makedirs(cfg_dir, exist_ok=True)
-        # 针对 Docker 宿主机文件单点挂载，严禁使用 os.replace，直接原位覆写
+        if cfg_dir and not os.path.exists(cfg_dir):
+            os.makedirs(cfg_dir, exist_ok=True)
+            
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+            
         try:
             os.chmod(CONFIG_FILE, 0o666)
         except Exception:
             pass
+            
         mail_wake_event.set()
         return True, ""
     except Exception as e:
         err = str(e)
-        print(f"[MailConfig] 写入配置失败: {err}", flush=True)
+        print(f"[MailConfig] 写入配置异常: {err}", flush=True)
         return False, err
 
 def push_wechat_notice(token, title, content):
@@ -74,7 +77,7 @@ def push_wechat_notice(token, title, content):
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=8)
     except Exception as e:
-        print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
+        print(f"[PushPlus] 推送异常: {e}", flush=True)
 
 def get_target_printer(preferred_printer=""):
     if preferred_printer:
@@ -150,7 +153,7 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
         return False
 
 def mail_polling_worker():
-    print("[MailWorker] 云邮件打印守护线程启动...", flush=True)
+    print("[MailWorker] 云邮件守护线程运行中...", flush=True)
     while True:
         try:
             cfg = load_mail_config()
@@ -221,36 +224,47 @@ class MailConfigHandler(BaseHandler):
 
     def post(self):
         try:
-            data = {}
+            # 兼容无论前端发 JSON 还是发原生 Form 表单
+            body_data = {}
             if self.request.body:
                 try:
-                    data = json.loads(self.request.body.decode("utf-8"))
+                    body_data = json.loads(self.request.body.decode("utf-8"))
                 except Exception:
                     pass
 
-            def get_val(key, default=""):
-                if key in data:
-                    return data[key]
+            def fetch(key, default=""):
+                if key in body_data:
+                    return body_data[key]
                 return self.get_argument(key, default)
 
-            raw_enable = get_val("enable", False)
+            raw_enable = fetch("enable", "false")
             if isinstance(raw_enable, bool):
                 enable = raw_enable
             else:
                 enable = str(raw_enable).lower() in ["true", "1", "on"]
 
-            server = str(get_val("server", "imap.qq.com")).strip()
-            port = int(get_val("port", 993))
-            user = str(get_val("user", "")).strip()
-            password = str(get_val("password", "")).strip()
-            keyword = str(get_val("keyword", "")).strip()
-            whitelist = str(get_val("whitelist", "")).strip()
-            pushplus_token = str(get_val("pushplus_token", "")).strip()
-            default_printer = str(get_val("default_printer", "")).strip()
+            server = str(fetch("server", "imap.qq.com")).strip()
+            
+            try:
+                port = int(fetch("port", 993))
+            except Exception:
+                port = 993
+
+            user = str(fetch("user", "")).strip()
+            password = str(fetch("password", "")).strip()
+            keyword = str(fetch("keyword", "")).strip()
+            whitelist = str(fetch("whitelist", "")).strip()
+            pushplus_token = str(fetch("pushplus_token", "")).strip()
+            default_printer = str(fetch("default_printer", "")).strip()
 
             old_cfg = load_mail_config()
+            # 如果没改密码或带了 ******，保留原有密码
             if password == "******" or not password:
                 password = old_cfg.get("password", "")
+
+            # 如果没选打印机，继承原有设置
+            if not default_printer:
+                default_printer = old_cfg.get("default_printer", "")
 
             new_cfg = {
                 "enable": enable,
@@ -266,8 +280,8 @@ class MailConfigHandler(BaseHandler):
 
             ok, err = save_mail_config(new_cfg)
             if ok:
-                self.write_json(True, "云邮件及 PushPlus 微信通知设置已保存生效！")
+                self.write_json(True, "云邮箱及 PushPlus 微信通知设置已成功保存并立即生效！")
             else:
                 self.write_json(False, f"保存失败: {err}")
         except Exception as e:
-            self.write_json(False, f"保存配置异常: {str(e)}")
+            self.write_json(False, f"保存失败，后端异常: {str(e)}")
