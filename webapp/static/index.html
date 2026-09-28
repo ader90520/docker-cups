@@ -12,13 +12,13 @@
         .header h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
         .header .status-tag { font-size: 12px; background: #27ae60; color: #fff; padding: 4px 10px; border-radius: 20px; font-weight: 500; }
         .tabs { display: flex; background: #eaeded; border-bottom: 1px solid #d5dbdb; flex-wrap: wrap; }
-        .tab-btn { flex: 1; min-width: 120px; padding: 14px 10px; text-align: center; font-size: 14px; font-weight: 600; cursor: pointer; border: none; background: transparent; transition: all 0.2s; color: #5d6d7e; }
+        .tab-btn { flex: 1; min-width: 110px; padding: 14px 10px; text-align: center; font-size: 14px; font-weight: 600; cursor: pointer; border: none; background: transparent; transition: all 0.2s; color: #5d6d7e; }
         .tab-btn.active { background: #fff; color: #2980b9; border-bottom: 3px solid #2980b9; }
         .tab-content { display: none; padding: 25px; }
         .tab-content.active { display: block; }
         .form-group { margin-bottom: 16px; }
         .form-group label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px; color: #34495e; }
-        .form-control { width: 100%; padding: 10px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 14px; transition: border-color 0.2s; }
+        .form-control { width: 100%; padding: 10px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 14px; }
         .form-control:focus { border-color: #3498db; outline: none; }
         .row { display: flex; gap: 15px; flex-wrap: wrap; }
         .col { flex: 1; min-width: 200px; }
@@ -34,8 +34,8 @@
         .status-success { background: #e8f8f5; color: #27ae60; border: 1px solid #a3e4d7; }
         .status-error { background: #fdedec; color: #e74c3c; border: 1px solid #f5b7b1; }
         .card-box { background: #fdfefe; border: 1px solid #ebf5fb; padding: 15px; border-radius: 8px; margin-bottom: 18px; }
-        .preview-box { margin-top: 20px; text-align: center; }
-        .preview-box img { max-width: 100%; border: 1px solid #d5dbdb; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .preview-box { margin-top: 15px; text-align: center; border: 1px dashed #bdc3c7; border-radius: 6px; padding: 15px; background: #fafafa; }
+        .preview-box img { max-width: 100%; max-height: 350px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         .table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
         .table th, .table td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
         .table th { background: #f8f9f9; color: #555; }
@@ -46,17 +46,18 @@
 <div class="container">
     <div class="header">
         <h1>🖨️ CUPS 智能云打印与扫描工作台</h1>
-        <span class="status-tag" id="system-tag">● 服务正常运行</span>
+        <span class="status-tag">● 服务正常运行</span>
     </div>
 
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('print')">📄 智能打印</button>
+        <button class="tab-btn" onclick="switchTab('idcard')">🪪 身份证打印</button>
         <button class="tab-btn" onclick="switchTab('scan')">📷 在线扫描</button>
         <button class="tab-btn" onclick="switchTab('devices')">🎛️ 设备与队列</button>
         <button class="tab-btn" onclick="switchTab('mail')">⚙ 云邮箱设置</button>
     </div>
 
-    <!-- 1. 打印面板 -->
+    <!-- 1. 通用智能打印面板（含实时预览窗口） -->
     <div id="tab-print" class="tab-content active">
         <form id="print-form">
             <div class="row">
@@ -97,16 +98,63 @@
             </div>
 
             <div class="form-group">
-                <label>上传文件 (支持批量拖拽，图片/试卷/PDF/Word)</label>
-                <input type="file" id="print-files" name="file" class="form-control" multiple accept=".jpg,.jpeg,.png,.pdf,.bmp,.webp,.docx">
+                <label>上传文件 (支持批量拖拽，图片/试卷/PDF)</label>
+                <input type="file" id="print-files" name="file" class="form-control" multiple accept=".jpg,.jpeg,.png,.pdf,.bmp,.webp" onchange="previewPrintFiles(this)">
             </div>
 
-            <button type="submit" class="btn">🚀 开始智能居中打印 (留出 95% 安全装订边距)</button>
+            <!-- 文件实时预览窗口 -->
+            <div id="print-preview-box" class="preview-box" style="display:none;">
+                <p style="font-size:13px; font-weight:600; color:#555; margin-bottom:8px;">📄 待打印首页实时预览：</p>
+                <img id="print-preview-img" src="" alt="预览图">
+            </div>
+
+            <button type="submit" class="btn" style="margin-top:15px;">🚀 开始智能居中打印 (留出 95% 安全装订边距)</button>
         </form>
         <div id="print-status" class="status-box"></div>
     </div>
 
-    <!-- 2. 在线扫描面板 -->
+    <!-- 2. 身份证 1:1 拼版打印面板 -->
+    <div id="tab-idcard" class="tab-content">
+        <form id="idcard-form">
+            <div class="row">
+                <div class="col form-group">
+                    <label>目标打印机</label>
+                    <select id="idcard-printer-select" class="form-control" name="printer"></select>
+                </div>
+                <div class="col form-group">
+                    <label>打印份数</label>
+                    <input type="number" name="copies" class="form-control" value="1" min="1" max="99">
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col form-group">
+                    <label>身份证正面（人像面）</label>
+                    <input type="file" name="front" class="form-control" accept="image/*" required onchange="previewCard(this, 'card-front-preview')">
+                    <div class="preview-box" style="margin-top:10px;">
+                        <img id="card-front-preview" style="max-height:140px; display:none;" src="" alt="正面预览">
+                    </div>
+                </div>
+                <div class="col form-group">
+                    <label>身份证反面（国徽面）</label>
+                    <input type="file" name="back" class="form-control" accept="image/*" required onchange="previewCard(this, 'card-back-preview')">
+                    <div class="preview-box" style="margin-top:10px;">
+                        <img id="card-back-preview" style="max-height:140px; display:none;" src="" alt="反面预览">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card-box" style="font-size:13px; color:#555; line-height:1.8;">
+                <strong>💡 身份证拼版说明：</strong><br>
+                系统将自动对正反两张图片进行漂白去底灰、旋转摆正，并按照标准物理尺寸（85.6mm × 54mm）上下对称居中排版到一张 A4 纸上输出，满足办事与归档要求。
+            </div>
+
+            <button type="submit" class="btn btn-success">🪪 自动拼版并 1:1 打印</button>
+        </form>
+        <div id="idcard-status" class="status-box"></div>
+    </div>
+
+    <!-- 3. 在线扫描面板 -->
     <div id="tab-scan" class="tab-content">
         <div class="form-group">
             <label>扫描仪通道 (自动识别 HP 原生与网络免驱设备)</label>
@@ -139,7 +187,7 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理与打印队列面板 -->
+    <!-- 4. 设备管理与打印队列面板 -->
     <div id="tab-devices" class="tab-content">
         <div class="card-box">
             <h3 style="font-size:15px; margin-bottom:10px;">🖨️ 打印机设备状态</h3>
@@ -157,7 +205,7 @@
         </div>
     </div>
 
-    <!-- 4. 云邮箱与微信通知设置面板 -->
+    <!-- 5. 云邮箱与微信通知设置面板 -->
     <div id="tab-mail" class="tab-content">
         <form id="mail-form">
             <div class="form-group">
@@ -235,6 +283,37 @@ function showStatus(elemId, success, msg) {
     box.innerText = msg;
 }
 
+// 首页文件选择实时预览
+function previewPrintFiles(input) {
+    const box = document.getElementById('print-preview-box');
+    const img = document.getElementById('print-preview-img');
+    if (input.files && input.files[0]) {
+        const file = input.files[0];
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                img.src = e.target.result;
+                box.style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+            return;
+        }
+    }
+    box.style.display = 'none';
+}
+
+function previewCard(input, elemId) {
+    const img = document.getElementById(elemId);
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            img.src = e.target.result;
+            img.style.display = 'inline-block';
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
 // 加载打印设备与管理列表
 function loadPrinters(renderTable) {
     fetch('/api/devices')
@@ -242,7 +321,9 @@ function loadPrinters(renderTable) {
         .then(d => {
             if (d.success && d.data && d.data.printers) {
                 const sel = document.getElementById('printer-select');
+                const selCard = document.getElementById('idcard-printer-select');
                 sel.innerHTML = '';
+                selCard.innerHTML = '';
                 const tbody = document.getElementById('device-tbody');
                 if (renderTable) tbody.innerHTML = '';
 
@@ -252,6 +333,7 @@ function loadPrinters(renderTable) {
                     opt.innerText = p.name + (p.is_default ? ' (默认)' : '');
                     if (p.is_default) opt.selected = true;
                     sel.appendChild(opt);
+                    selCard.appendChild(opt.cloneNode(true));
 
                     if (renderTable) {
                         const tr = document.createElement('tr');
@@ -283,7 +365,7 @@ function cleanSpoolJobs() {
         });
 }
 
-// 打印提交
+// 通用打印提交
 document.getElementById('print-form').onsubmit = function(e) {
     e.preventDefault();
     const btn = this.querySelector('button');
@@ -301,6 +383,27 @@ document.getElementById('print-form').onsubmit = function(e) {
             btn.disabled = false;
             btn.innerText = '🚀 开始智能居中打印 (留出 95% 安全装订边距)';
             showStatus('print-status', false, '网络或服务异常: ' + err);
+        });
+};
+
+// 身份证拼版打印提交
+document.getElementById('idcard-form').onsubmit = function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button');
+    btn.disabled = true;
+    btn.innerText = '正在拼版并生成 1:1 标准规格...';
+    const fd = new FormData(this);
+    fetch('/api/idcard', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            btn.disabled = false;
+            btn.innerText = '🪪 自动拼版并 1:1 打印';
+            showStatus('idcard-status', res.success, res.message || (res.success ? '身份证已下发打印' : '打印失败'));
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerText = '🪪 自动拼版并 1:1 打印';
+            showStatus('idcard-status', false, '服务请求异常: ' + err);
         });
 };
 
@@ -389,13 +492,13 @@ document.getElementById('mail-form').onsubmit = function(e) {
     e.preventDefault();
     const payload = {
         enable: document.getElementById('mail_enable').value === 'true',
-        server: document.getElementById('mail_server').value,
-        port: parseInt(document.getElementById('mail_port').value),
-        user: document.getElementById('mail_user').value,
-        password: document.getElementById('mail_password').value,
-        pushplus_token: document.getElementById('mail_pushplus_token').value,
-        keyword: document.getElementById('mail_keyword').value,
-        whitelist: document.getElementById('mail_whitelist').value
+        server: document.getElementById('mail_server').value.trim(),
+        port: parseInt(document.getElementById('mail_port').value) || 993,
+        user: document.getElementById('mail_user').value.trim(),
+        password: document.getElementById('mail_password').value.trim(),
+        pushplus_token: document.getElementById('mail_pushplus_token').value.trim(),
+        keyword: document.getElementById('mail_keyword').value.trim(),
+        whitelist: document.getElementById('mail_whitelist').value.trim()
     };
 
     fetch('/api/mail_config', {
