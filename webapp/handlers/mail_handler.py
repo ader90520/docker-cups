@@ -9,6 +9,7 @@ import subprocess
 import threading
 import email
 from email.header import decode_header
+from email.utils import parseaddr
 import imaplib
 import urllib.request
 import urllib.parse
@@ -102,12 +103,13 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
     ext = os.path.splitext(file_path)[-1].lower()
 
     if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
-        enhanced_path = file_path + "_enhanced.jpg"
+        # 使用唯一命名杜绝覆盖冲突
+        enhanced_path = file_path + f"_{time.time_ns()}_enhanced.jpg"
         try:
             if process_image_for_print(file_path, enhanced_path):
                 target_file = enhanced_path
         except Exception as e:
-            print(f"[MailWorker] 图像增强失败，使用原图打印: {e}", flush=True)
+            print(f"[MailWorker] 图像增强失败，使用原图: {e}", flush=True)
 
     env = os.environ.copy()
     env["CUPS_SERVER"] = "/run/cups/cups.sock"
@@ -128,8 +130,8 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     filename = os.path.basename(file_path)
     if res.returncode == 0:
-        print(f"[MailWorker] 邮件附件成功派发打印: {target_file}", flush=True)
-        push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机并开始出纸！")
+        print(f"[MailWorker] 邮件附件成功送达打印: {target_file}", flush=True)
+        push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机！")
         return True
     else:
         err = res.stderr.strip()
@@ -138,7 +140,7 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
         return False
 
 def mail_polling_worker():
-    print("[MailWorker] 云邮件打印轮询守护线程已启动...", flush=True)
+    print("[MailWorker] 云邮件打印守护线程启动...", flush=True)
     while True:
         try:
             cfg = load_mail_config()
@@ -155,21 +157,25 @@ def mail_polling_worker():
                             continue
                         msg = email.message_from_bytes(msg_data[0][1])
 
-                        from_addr = decode_str(msg.get("From", ""))
+                        # 严格 RFC 邮件地址解析，杜绝昵称伪造注入
+                        raw_from = decode_str(msg.get("From", ""))
+                        _, clean_from_addr = parseaddr(raw_from)
+                        clean_from_addr = clean_from_addr.lower().strip()
+
                         whitelist = cfg.get("whitelist", "").strip()
                         if whitelist:
-                            allowed = [w.strip() for w in whitelist.split(",") if w.strip()]
-                            if allowed and not any(w in from_addr for w in allowed):
-                                print(f"[MailWorker] 发件人 {from_addr} 不在白名单中，跳过")
+                            allowed_list = [w.strip().lower() for w in whitelist.split(",") if w.strip()]
+                            # 严格全匹配或域名后缀匹配
+                            if allowed_list and not any(clean_from_addr == w or clean_from_addr.endswith("@" + w) for w in allowed_list):
+                                print(f"[MailWorker] 发件人 {clean_from_addr} 不在白名单允许范围内，跳过处理")
                                 continue
 
                         subject = decode_str(msg.get("Subject", ""))
                         keyword = cfg.get("keyword", "").strip()
                         if keyword and keyword not in subject:
-                            print(f"[MailWorker] 邮件主题 {subject} 未命中关键字 {keyword}，跳过")
+                            print(f"[MailWorker] 邮件主题 {subject} 未命中暗号 {keyword}，跳过处理")
                             continue
 
-                        # 检查暗号是否要求原图
                         skip_filter = "原图" in subject
 
                         for part in msg.walk():
@@ -180,7 +186,7 @@ def mail_polling_worker():
                                 filename = decode_str(filename)
                                 ext = os.path.splitext(filename)[-1].lower()
                                 if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".webp"]:
-                                    save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{filename}")
+                                    save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{uuid.uuid4().hex[:6]}_{filename}")
                                     with open(save_path, "wb") as f:
                                         f.write(part.get_payload(decode=True))
                                     print_attachment_file(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
