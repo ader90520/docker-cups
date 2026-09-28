@@ -33,6 +33,15 @@ jobs:
         run: |
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
 
+      - name: 检查并准备 Dockerfile 文件路径
+        id: check_dockerfile
+        run: |
+          if [ -f "./Dockerfile.slim" ]; then
+            echo "slim_file=./Dockerfile.slim" >> $GITHUB_OUTPUT
+          else
+            echo "slim_file=./Dockerfile" >> $GITHUB_OUTPUT
+          fi
+
       - name: 登录 Docker Hub
         uses: docker/login-action@v3
         with:
@@ -46,13 +55,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 1. Slim 版构建（开启 GitHub Actions Cache 缓存，第二次构建快 5 倍）
+      # 1. Slim 版构建：覆盖 arm/v7 (海纳思), arm64 (斐讯N1), amd64 (PC/NAS)
       - name: 构建并推送 Slim 版
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.slim
-          # 核心性能平衡：arm64 (斐讯N1) 与 amd64 (x86) 速度极快，arm/v7 经缓存后提速
+          file: ${{ steps.check_dockerfile.outputs.slim_file }}
           platforms: linux/arm/v7,linux/arm64,linux/amd64
           push: true
           provenance: false
@@ -62,7 +70,7 @@ jobs:
             ader90520/cups:slim
             ghcr.io/${{ steps.prep.outputs.owner }}/cups:slim
 
-      # 2. Latest 版构建（只编译主流 64 位 arm64 与 amd64，省去 armv7 冗长仿真）
+      # 2. Latest 版构建：构建主流 64 位平台
       - name: 构建并推送 Latest 完整版
         uses: docker/build-push-action@v5
         with:
