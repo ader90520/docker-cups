@@ -10,6 +10,8 @@ import threading
 import email
 from email.header import decode_header
 import imaplib
+import urllib.request
+import urllib.parse
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
@@ -45,6 +47,22 @@ def save_mail_config(cfg):
         print(f"[MailConfig] 写入配置异常: {e}", flush=True)
         return False
 
+def push_wechat_notice(token, title, content):
+    if not token:
+        return
+    try:
+        url = "http://www.pushplus.plus/send"
+        data = json.dumps({
+            "token": token,
+            "title": title,
+            "content": content,
+            "template": "html"
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=8)
+    except Exception as e:
+        print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
+
 def get_target_printer(preferred_printer=""):
     if preferred_printer:
         return preferred_printer
@@ -74,7 +92,7 @@ def decode_str(s):
     except Exception:
         return str(s)
 
-def print_attachment_file(file_path, printer_name=""):
+def print_attachment_file(file_path, printer_name="", skip_filter=False, token=""):
     printer = get_target_printer(printer_name)
     if not printer:
         print("[MailWorker] 未发现可用打印机，跳过打印", flush=True)
@@ -83,7 +101,7 @@ def print_attachment_file(file_path, printer_name=""):
     target_file = file_path
     ext = os.path.splitext(file_path)[-1].lower()
 
-    if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
+    if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
         enhanced_path = file_path + "_enhanced.jpg"
         try:
             if process_image_for_print(file_path, enhanced_path):
@@ -102,16 +120,21 @@ def print_attachment_file(file_path, printer_name=""):
         "-o", "media=A4",
         "-o", "PageSize=A4",
         "-o", "fit-to-page",
+        "-o", "natural-scaling=95",
         "-o", "position=center",
         target_file
     ]
 
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    filename = os.path.basename(file_path)
     if res.returncode == 0:
         print(f"[MailWorker] 邮件附件成功派发打印: {target_file}", flush=True)
+        push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机并开始出纸！")
         return True
     else:
-        print(f"[MailWorker] CUPS拒绝邮件打印任务: {res.stderr.strip()}", flush=True)
+        err = res.stderr.strip()
+        print(f"[MailWorker] CUPS拒绝邮件打印任务: {err}", flush=True)
+        push_wechat_notice(token, "⚠️ 打印任务异常告警", f"文件 <b>{filename}</b> 打印失败: {err}")
         return False
 
 def mail_polling_worker():
@@ -146,6 +169,9 @@ def mail_polling_worker():
                             print(f"[MailWorker] 邮件主题 {subject} 未命中关键字 {keyword}，跳过")
                             continue
 
+                        # 检查暗号是否要求原图
+                        skip_filter = "原图" in subject
+
                         for part in msg.walk():
                             if part.get_content_maintype() == "multipart":
                                 continue
@@ -157,7 +183,7 @@ def mail_polling_worker():
                                     save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{filename}")
                                     with open(save_path, "wb") as f:
                                         f.write(part.get_payload(decode=True))
-                                    print_attachment_file(save_path, cfg.get("default_printer", ""))
+                                    print_attachment_file(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
                         conn.store(num, "+FLAGS", "\\Seen")
 
                 conn.close()
