@@ -9,155 +9,172 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
-def fast_detect_skew(gray_img):
-    """倾斜快速检测"""
+def log_debug(msg):
     try:
-        w, h = gray_img.size
-        scale = 160.0 / max(w, h)
-        small = gray_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.NEAREST)
-        arr = np.array(small, dtype=np.float32)
-
-        grad = np.abs(arr[2:, :] - arr[:-2, :])
-        grad[grad < 35] = 0.0
-
-        best_angle = 0.0
-        max_var = 0.0
-        for angle in [-2.0, 0.0, 2.0]:
-            rot = Image.fromarray(grad).rotate(angle, resample=Image.Resampling.NEAREST)
-            proj = np.sum(np.array(rot), axis=1)
-            var = np.var(proj)
-            if var > max_var:
-                max_var = var
-                best_angle = angle
-        return best_angle
+        with open("/tmp/dewarp_debug.log", "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
     except Exception:
-        return 0.0
+        pass
+    print(f"[DewarpLog] {msg}", flush=True)
 
 def dewarp_textlines_flatten(pil_img):
     """
-    轻量级多骨架文本行展平（纯 NumPy + PIL，拉平波浪形弯曲）
+    自适应文本行展平（类似扫描全能王逐列位移补偿）
+    拉直页面拱起引起的波浪文字行
     """
     try:
         w, h = pil_img.size
-        target_w = 600
+        # 降采样提取全局几何形变
+        target_w = 400
         scale = target_w / float(w)
         target_h = int(h * scale)
 
         gray = pil_img.convert("L").resize((target_w, target_h), Image.Resampling.BILINEAR)
         arr = np.array(gray, dtype=np.float32)
 
-        bg_coarse = gray.filter(ImageFilter.BoxBlur(radius=15))
-        bg_arr = np.array(bg_coarse, dtype=np.float32) + 1.0
+        # 粗背景去除，定位墨迹笔画
+        bg = gray.filter(ImageFilter.BoxBlur(radius=12))
+        bg_arr = np.array(bg, dtype=np.float32) + 1.0
         div = (arr / bg_arr) * 255.0
-        conn_arr = div < 200
+        ink = div < 190.0
 
-        window = 31
-        kernel = np.ones(window, dtype=np.float32)
-        dilated = np.zeros_like(conn_arr, dtype=bool)
+        # 横向形态学膨胀：把同行的拼音与字连成水平色块
+        kernel_w = 25
+        kernel = np.ones(kernel_w, dtype=np.float32)
+        dilated = np.zeros_like(ink, dtype=bool)
         for r in range(0, target_h, 2):
-            if np.any(conn_arr[r, :]):
-                dilated[r, :] = np.convolve(conn_arr[r, :].astype(np.float32), kernel, mode='same') > 0.1
+            row = ink[r, :]
+            if np.any(row):
+                dilated[r, :] = np.convolve(row.astype(np.float32), kernel, mode='same') > 0.1
 
-        num_strips = 24
+        # 沿 X 轴切成 16 个竖条，抓取每条中文字行的垂向中心
+        num_strips = 16
         strip_w = target_w // num_strips
+        
+        # 统计行黑度，寻找具有代表性的主文字行
         row_density = np.mean(dilated, axis=1)
-        peak_rows = np.where(row_density > 0.15)[0]
+        valid_rows = np.where(row_density > 0.08)[0]
 
-        if len(peak_rows) > 40:
-            displacement_matrix = []
-            for sec in np.array_split(peak_rows, 5):
-                if len(sec) < 5:
+        if len(valid_rows) >= 15:
+            # 划分为 3~4 个纵向分块，追踪各区段的弧度
+            sections = np.array_split(valid_rows, 4)
+            curves = []
+
+            for sec in sections:
+                if len(sec) < 3:
                     continue
-                line_y = []
+                y_list = []
                 for s in range(num_strips):
-                    sub = dilated[sec[0]:sec[-1], s * strip_w : min((s + 1) * strip_w, target_w)]
-                    if np.sum(sub) > (strip_w * 2):
-                        line_y.append(np.mean(np.where(sub)[0]) + sec[0])
+                    col_start = s * strip_w
+                    col_end = min((s + 1) * strip_w, target_w)
+                    sub = dilated[sec[0]:sec[-1], col_start:col_end]
+                    if np.sum(sub) > 5:
+                        y_idxs, _ = np.where(sub)
+                        y_list.append(np.mean(y_idxs) + sec[0])
                     else:
-                        line_y.append(np.nan)
+                        y_list.append(np.nan)
 
-                line_y = np.array(line_y)
-                valid = ~np.isnan(line_y)
-                if np.sum(valid) >= 12:
+                y_arr = np.array(y_list)
+                valid = ~np.isnan(y_arr)
+                if np.sum(valid) >= 8:
                     xs = np.arange(num_strips)[valid]
-                    ys = line_y[valid]
+                    ys = y_arr[valid]
+                    # 拟合该行的下垂抛物线
                     p = np.polyfit(xs, ys - np.mean(ys), 2)
-                    displacement_matrix.append(np.polyval(p, np.arange(num_strips)))
+                    smooth_c = np.polyval(p, np.arange(num_strips))
+                    curves.append(smooth_c)
 
-            if len(displacement_matrix) >= 2:
-                median_disp = np.median(displacement_matrix, axis=0)
-                if np.ptp(median_disp) >= 1.8:
-                    disp_fine = np.interp(np.arange(w), np.linspace(0, w, num_strips), median_disp) / scale
-                    disp_fine -= np.mean(disp_fine)
+            if curves:
+                # 取中位数避免个别图形与拼音四线格干扰
+                median_curve = np.median(curves, axis=0)
+                # 插值映射到原图全宽 w
+                x_coarse = np.linspace(0, w, num_strips)
+                x_fine = np.arange(w)
+                disp_fine = np.interp(x_fine, x_coarse, median_curve) / scale
+                disp_fine -= np.mean(disp_fine)
 
-                    full_arr = np.array(pil_img)
-                    out_arr = np.full_like(full_arr, 255)
-                    for x in range(w):
-                        shift = int(round(disp_fine[x]))
-                        if shift > 0:
-                            out_arr[:-shift, x] = full_arr[shift:, x]
-                        elif shift < 0:
-                            out_arr[-shift:, x] = full_arr[:shift, x]
-                        else:
-                            out_arr[:, x] = full_arr[:, x]
-                    return Image.fromarray(out_arr)
+                # 垂直拉平图像
+                full_arr = np.array(pil_img)
+                out_arr = np.full_like(full_arr, 255)
+
+                for x in range(w):
+                    shift = int(round(disp_fine[x]))
+                    if shift > 0:
+                        out_arr[:-shift, x] = full_arr[shift:, x]
+                    elif shift < 0:
+                        out_arr[-shift:, x] = full_arr[:shift, x]
+                    else:
+                        out_arr[:, x] = full_arr[:, x]
+
+                log_debug(f"文本行曲面拉直成功完成，补偿幅度: {np.ptp(disp_fine):.1f}px")
+                return Image.fromarray(out_arr)
+
     except Exception as e:
-        print(f"[Dewarp] 忽略降级: {e}", flush=True)
+        log_debug(f"文本拉直降级: {e}")
     return pil_img
 
 def process_image_for_print(input_path, output_path):
     """
-    零裁剪、保全边角细节、抗背面透墨与文本行展平引擎
+    全能王级漂白与抗透墨处理引擎
+    1. EXIF方向校正与竖排对齐
+    2. 多行骨架弯曲文字横平拉直
+    3. 灰度大核除法 + 激进透字压白
+    4. 保全正面字迹、人物线条与四线格
     """
     try:
+        log_debug(f"开始处理图像: {input_path}")
         with Image.open(input_path) as disk_img:
             img = ImageOps.exif_transpose(disk_img.convert("RGB"))
 
-        # 竖向统一对齐
+        # 竖向排版对齐
         if img.width > img.height:
             img = img.rotate(270, expand=True)
 
-        # 1. 文本行物理波浪弯曲拉平
+        # 1. 弯曲文字展平
         img = dewarp_textlines_flatten(img)
 
-        # 2. 修正大倾斜
-        gray_small = img.convert("L")
-        angle = fast_detect_skew(gray_small)
-        if abs(angle) >= 1.2:
-            img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False, fillcolor=(255, 255, 255))
-
-        # 限制计算尺寸，防止低内存设备 OOM
+        # 限制分辨率防小设备溢出
         if max(img.size) > 2200:
             img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
 
-        # 3. 根治透字：采用纯灰度处理（剥离彩色漫反射杂阶）
+        # 2. 彻底剥离彩色通道，转纯灰度运算
         gray = img.convert("L")
         gray_arr = np.array(gray, dtype=np.float32)
 
-        # 4. 42 大核平滑背景
-        bg = gray.filter(ImageFilter.BoxBlur(radius=42))
+        # 3. 超大半径 BoxBlur (45px)：彻底吸纳背面透墨为基底光照
+        bg = gray.filter(ImageFilter.BoxBlur(radius=45))
         bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
+        # 背景除法归一化
         divided = (gray_arr / bg_arr) * 255.0
+
+        # 4. 全能王核心阈值分层处理：
+        # divided < 192: 绝对是正面清晰文字或四线格
+        # 192 <= divided < 218: 背面透字（浅灰影子）、纸质轻微发黄
+        # divided >= 218: 纯白纸面
         out = np.full_like(divided, 255.0)
 
-        # 5. 精确截断阈值 212：212 以上的浅灰背透字强行压白，212 以下的正面有效笔画加黑强化
-        mask_front = divided < 212.0
+        # 彻底切除背面透字：阈值收紧到 195
+        mask_front = divided < 195.0
+
         ink_vals = divided[mask_front]
-        clean_ink = np.clip((ink_vals - 30.0) * (215.0 / (212.0 - 30.0)), 0, 255)
-        clean_ink = (clean_ink / 215.0) ** 1.15 * 190.0
+        # 对正面字迹重新拉伸：深黑字更黑，浅细线条保全
+        clean_ink = np.clip((ink_vals - 20.0) * (200.0 / (195.0 - 20.0)), 0, 255)
+        clean_ink = (clean_ink / 200.0) ** 1.25 * 180.0
         out[mask_front] = clean_ink
 
         clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
-        # 6. 微锐化还原线稿与四线格细节
-        sharp_gray = clean_gray.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
-        sharp_rgb = Image.merge("RGB", [sharp_gray, sharp_gray, sharp_gray])
+        # 5. 微锐化还原字迹边缘印刷感
+        sharp = clean_gray.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2))
+        sharp_rgb = Image.merge("RGB", [sharp, sharp, sharp])
 
         sharp_rgb.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
+        log_debug(f"图像增强与去透字完成，保存至: {output_path}")
         return True
+
     except Exception as e:
-        print(f"[ProcessImage] 处理异常: {e}", flush=True)
+        log_debug(f"处理失败异常: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
@@ -179,7 +196,7 @@ class PrintHandler(BaseHandler):
             files = self.request.files.get("file", [])
 
             if not files:
-                self.write_json(False, "未收到文件")
+                self.write_json(False, "未收到上传文件")
                 return
 
             jobs = []
@@ -196,18 +213,19 @@ class PrintHandler(BaseHandler):
 
                 target_file = src_path
 
-                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
+                # 无论前端传参是 whiten=1 还是图片上传，都经过增强引擎
+                if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
                     enhanced_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
-                    if whiten == "1":
-                        if process_image_for_print(src_path, enhanced_path):
-                            target_file = enhanced_path
+                    # 默认强制执行去透字与水平展平
+                    if process_image_for_print(src_path, enhanced_path):
+                        target_file = enhanced_path
                     else:
+                        log_debug("增强失败，采用基础EXIF回正输出")
                         with Image.open(src_path) as raw_img:
                             im = ImageOps.exif_transpose(raw_img.convert("RGB"))
                             im.save(enhanced_path, format="JPEG", quality=95, dpi=(300, 300))
                             target_file = enhanced_path
 
-                # 移除 fit-to-page，使用 natural-scaling=90 居中等比缩小，避开打印机物理边缘盲区
                 cmd = [
                     "lp",
                     "-d", printer,
@@ -219,7 +237,7 @@ class PrintHandler(BaseHandler):
                     target_file
                 ]
 
-                print(f"[Print] 执行 CUPS 打印指令: {' '.join(cmd)}", flush=True)
+                log_debug(f"派发CUPS打印指令: {' '.join(cmd)}")
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
                 if res.returncode == 0:
@@ -231,4 +249,5 @@ class PrintHandler(BaseHandler):
             clean_old_tmp_files(UPLOAD_DIR)
             self.write_json(True, f"共 {len(files)} 个文件任务已派发", job=", ".join(jobs))
         except Exception as e:
+            log_debug(f"全局打印异常: {e}")
             self.write_json(False, f"打印服务异常: {str(e)}")
