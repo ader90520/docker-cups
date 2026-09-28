@@ -42,7 +42,7 @@ class PrinterAdminHandler(BaseHandler):
                     parts = line.split(" ", 1)
                     uri = parts[1].strip()
 
-                    # 提取协议头（如 usb, beh, socket, hp 等）
+                    # 提取协议头（如 usb, hp, hpaio 等）
                     scheme = uri.split("://")[0].split(":")[0].lower()
 
                     # 拦截并过滤所有虚拟协议和空协议项
@@ -51,21 +51,20 @@ class PrinterAdminHandler(BaseHandler):
 
                     decoded_uri = urllib.parse.unquote(uri)
 
-                    # 提取型号名称
                     friendly_name = ""
                     if "://" in decoded_uri:
                         path_part = decoded_uri.split("://")[-1].split("?")[0]
-                        clean_part = path_part.replace("/", " ").replace("_", " ").strip()
-                        friendly_name = clean_part
+                        friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
+                    elif ":/" in decoded_uri:
+                        path_part = decoded_uri.split(":/")[-1].split("?")[0]
+                        friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
                     
                     if not friendly_name:
                         friendly_name = decoded_uri
 
-                    # 如果解析后名称仍是虚拟协议单词本身，丢弃
                     if friendly_name.lower() in IGNORED_BACKENDS:
                         continue
 
-                    # 只有真正带有具体型号信息的物理设备才加入列表
                     devices.append({
                         "uri": uri,
                         "name": friendly_name
@@ -121,7 +120,43 @@ class PrinterAdminHandler(BaseHandler):
             self.write_json(False, "未知操作请求")
 
     def post(self):
-        """执行打印机创建与同步注册至 631 后台"""
+        action = self.get_argument("action", "").strip()
+
+        env = os.environ.copy()
+        env["CUPS_SERVER"] = "/run/cups/cups.sock"
+        env["LANG"] = "C"
+
+        # 分支 A: 打印测试页
+        if action == "test_page":
+            printer = self.get_argument("printer", "").strip()
+            if not printer:
+                self.write_json(False, "未指定打印机名称")
+                return
+            try:
+                test_file = "/usr/share/cups/data/testprint"
+                if os.path.exists(test_file):
+                    cmd = ["lp", "-d", printer, test_file]
+                else:
+                    cmd = ["lp", "-d", printer, "-o", "media=A4", "/etc/issue"]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                if res.returncode == 0:
+                    self.write_json(True, f"测试页已成功发送至 {printer}")
+                else:
+                    self.write_json(False, f"下发测试页失败: {res.stderr.strip()}")
+            except Exception as e:
+                self.write_json(False, f"打印测试页异常: {str(e)}")
+            return
+
+        # 分支 B: 一键清空卡死任务与打印队列
+        elif action == "cancel_all":
+            try:
+                subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                self.write_json(True, "等待中的打印队列已全部清空")
+            except Exception as e:
+                self.write_json(False, f"清空队列异常: {str(e)}")
+            return
+
+        # 分支 C: 创建并注册打印机至 631 后台
         try:
             uri = self.get_argument("uri", "").strip()
             name = self.get_argument("name", "").strip()
@@ -137,11 +172,8 @@ class PrinterAdminHandler(BaseHandler):
             if not clean_name:
                 clean_name = "Printer_Device"
 
-            env = os.environ.copy()
-            env["CUPS_SERVER"] = "/run/cups/cups.sock"
-            env["LANG"] = "C"
-
             cmd = ["lpadmin", "-p", clean_name, "-v", uri, "-E"]
+            ppd_tmp = ""
 
             if ppd_file:
                 ppd_tmp = f"/tmp/{clean_name}.ppd"
@@ -155,6 +187,13 @@ class PrinterAdminHandler(BaseHandler):
 
             print(f"[PrinterAdmin] 正在向 631 执行注册: {' '.join(cmd)}")
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+            # 清理临时 PPD 文件防磁盘泄露
+            if ppd_tmp and os.path.exists(ppd_tmp):
+                try:
+                    os.remove(ppd_tmp)
+                except Exception:
+                    pass
 
             if res.returncode != 0:
                 self.write_json(False, f"CUPS 631 拒绝添加: {res.stderr.strip()}")
