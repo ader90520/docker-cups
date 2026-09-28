@@ -18,7 +18,6 @@ def log_debug(msg):
     print(f"[DewarpLog] {msg}", flush=True)
 
 def measure_line_skew(gray_img):
-    """通过梯度水平方差提取局部文本基线倾角"""
     try:
         w, h = gray_img.size
         tw = 320
@@ -42,7 +41,6 @@ def measure_line_skew(gray_img):
         return 0.0
 
 def adaptive_perspective_flatten(pil_img):
-    """双基准透视拉平，防止局部非线性拉扯导致插图弯曲"""
     try:
         w, h = pil_img.size
         gray = pil_img.convert("L")
@@ -71,7 +69,7 @@ def adaptive_perspective_flatten(pil_img):
     return pil_img
 
 def auto_crop_paper_boundaries(img):
-    """自动探测纸张边界，切除外部背景桌面阴影与深暗装订边，拉伸填充满版"""
+    """自动切除背景桌面与装订边缘暗角，并拉伸填充满版"""
     try:
         w, h = img.size
         small = img.resize((300, int(h * (300.0 / w))), Image.Resampling.BILINEAR)
@@ -80,17 +78,14 @@ def auto_crop_paper_boundaries(img):
         sw, sh = small.size
         left, top, right, bottom = 0, 0, sw, sh
 
-        # 扫描左侧
         for x in range(int(sw * 0.08)):
             if np.mean(gray[:, x]) > 130:
                 left = max(0, x - 2)
                 break
-        # 扫描右侧
         for x in range(sw - 1, int(sw * 0.90), -1):
             if np.mean(gray[:, x]) > 130:
                 right = min(sw, x + 2)
                 break
-        # 扫描底部
         for y in range(sh - 1, int(sh * 0.90), -1):
             if np.mean(gray[y, :]) > 130:
                 bottom = min(sh, y + 2)
@@ -114,14 +109,6 @@ def auto_crop_paper_boundaries(img):
     return img
 
 def process_image_for_print(input_path, output_path):
-    """
-    全能王级处理：
-    1. 自动切除外部桌面阴影
-    2. 双基准刚性透视校正
-    3. 彩色通道饱和度保护与加黑
-    4. 45px 大核 BoxBlur 光照归一化去透墨
-    5. 边缘暗角清理与微锐化
-    """
     try:
         log_debug(f"开始处理图像: {input_path}")
         with Image.open(input_path) as disk_img:
@@ -130,14 +117,14 @@ def process_image_for_print(input_path, output_path):
         if img.width > img.height:
             img = img.rotate(270, expand=True)
 
-        # 1. 切除外部拍摄背景桌面与中缝黑边
+        # 1. 切除黑边并拉伸
         img = auto_crop_paper_boundaries(img)
 
-        # 2. 梯形与翘曲透视拉平
+        # 2. 透视几何拉平
         img = adaptive_perspective_flatten(img)
 
-        if max(img.size) > 2200:
-            img.thumbnail((2200, 2200), Image.Resampling.BILINEAR)
+        # 标准化 A4 分辨率 (2480 x 3508 @ 300 DPI)
+        img = img.resize((2480, 3508), Image.Resampling.BICUBIC)
 
         w, h = img.size
         r, g, b = img.split()
@@ -145,20 +132,18 @@ def process_image_for_print(input_path, output_path):
         g_arr = np.array(g, dtype=np.float32)
         b_arr = np.array(b, dtype=np.float32)
 
-        # 3. 彩色通道保护与强化（保护淡红阶梯线、蓝色底框、彩色图标）
+        # 3. 色彩通道保护与深度压黑（保全浅红折线与蓝底框）
         max_c = np.maximum(np.maximum(r_arr, g_arr), b_arr)
         min_c = np.minimum(np.minimum(r_arr, g_arr), b_arr)
         color_diff = max_c - min_c
 
         gray_arr = 0.299 * r_arr + 0.587 * g_arr + 0.114 * b_arr
-
-        # 针对带色彩的区域强制深度加黑，保证在黑白激光机上清晰可见
         color_boost_mask = color_diff > 18.0
         gray_arr[color_boost_mask] = np.clip(gray_arr[color_boost_mask] - color_diff[color_boost_mask] * 1.5, 0, 255)
 
         contrast_img = Image.fromarray(gray_arr.astype(np.uint8))
 
-        # 4. 45px 大核滤镜计算漫反射背景与背面透墨
+        # 4. 45px 大核 BoxBlur 计算漫反射背景
         bg = contrast_img.filter(ImageFilter.BoxBlur(radius=45))
         bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
@@ -166,16 +151,16 @@ def process_image_for_print(input_path, output_path):
         divided = (gray_arr / bg_arr) * 255.0
         out = np.full_like(divided, 255.0)
 
-        # 6. 双阶切分：加深真实笔画，纯白化无色彩漫反射灰底透墨
+        # 6. 双阶切分
         mask_front = divided < 210.0
         ink_vals = divided[mask_front]
         clean_ink = np.clip((ink_vals - 10.0) * (210.0 / (210.0 - 10.0)), 0, 255)
         clean_ink = (clean_ink / 210.0) ** 1.35 * 180.0
         out[mask_front] = clean_ink
 
-        # 7. 兜底边缘羽化压白
-        pad_x = max(1, int(w * 0.012))
-        pad_y = max(1, int(h * 0.012))
+        # 7. 边缘微弱压白
+        pad_x = max(1, int(w * 0.01))
+        pad_y = max(1, int(h * 0.01))
         out[0:pad_y, :] = 255.0
         out[h-pad_y:h, :] = 255.0
         out[:, 0:pad_x] = 255.0
@@ -183,7 +168,7 @@ def process_image_for_print(input_path, output_path):
 
         clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
-        # 8. 微锐化还原细节
+        # 8. 微锐化
         sharp = clean_gray.filter(ImageFilter.UnsharpMask(radius=1.2, percent=140, threshold=2))
         sharp_rgb = Image.merge("RGB", [sharp, sharp, sharp])
 
@@ -228,7 +213,6 @@ class PrintHandler(BaseHandler):
                     out.write(f["body"])
 
                 target_file = src_path
-
                 if ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
                     enhanced_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
                     if process_image_for_print(src_path, enhanced_path):
@@ -240,7 +224,7 @@ class PrintHandler(BaseHandler):
                     "-n", str(copies),
                     "-o", "media=A4",
                     "-o", "PageSize=A4",
-                    "-o", "natural-scaling=90",
+                    "-o", "fit-to-page",
                     "-o", "position=center",
                     target_file
                 ]
