@@ -10,7 +10,7 @@ from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
 # -------------------------------------------------------------
-# 1. 动态感知环境：大设备开启 OpenCV 加速，小设备无感知降级到 PIL
+# 1. 动态感知环境：大内存设备开启 OpenCV，小内存海纳思纯 PIL/NumPy 运行
 # -------------------------------------------------------------
 HAVE_OPENCV = False
 try:
@@ -28,12 +28,12 @@ def log_debug(msg):
     print(f"[PrintLog] {msg}", flush=True)
 
 # -------------------------------------------------------------
-# 2. 通用去黑边与毛刺清洗算法（大盒子、小盒子统一共用）
+# 2. 通用去黑边与毛刺清洗算法（抹除顶部装订切口与横向大黑杠）
 # -------------------------------------------------------------
 def remove_edge_black_bars(arr, border_ratio=0.08):
     """
-    专门消除文档顶部装订切缝、阴影条及四周边缘黑边
-    接收二维灰度矩阵 (float32, 0~255)
+    输入: 二维灰度浮点矩阵 (float32, 0~255)
+    消除顶部横向粗黑线/阴影与四周物理黑边
     """
     try:
         h, w = arr.shape[:2]
@@ -42,7 +42,7 @@ def remove_edge_black_bars(arr, border_ratio=0.08):
         left_limit = int(w * 0.05)
         right_limit = int(w * 0.95)
 
-        # 1. 消除顶部连续横向黑杠 (如拍摄阴影/书缝切口)
+        # 1. 消除顶部连续横向黑杠 (拍摄阴影/书缝切口)
         for y in range(top_limit):
             row = arr[y, :]
             dark_pixels = np.sum(row < 130)
@@ -76,7 +76,7 @@ def remove_edge_black_bars(arr, border_ratio=0.08):
     return arr
 
 # -------------------------------------------------------------
-# 3. 小内存海纳思盒子专属轻量级拉平算法（纯 PIL + NumPy，极省 RAM）
+# 3. 小内存海纳思盒子专属轻量级拉直（纯 PIL + NumPy，占用 < 50MB RAM）
 # -------------------------------------------------------------
 def measure_line_skew(gray_img):
     try:
@@ -167,7 +167,7 @@ def auto_crop_paper_boundaries_pil(img):
     return img
 
 # -------------------------------------------------------------
-# 4. 大内存盒子专属 OpenCV 增强算法（安全防御包装）
+# 4. 大内存设备专属 OpenCV 边缘矫正（带安全防护）
 # -------------------------------------------------------------
 def order_points_cv(pts):
     rect = np.zeros((4, 2), dtype="float32")
@@ -215,14 +215,14 @@ def auto_perspective_crop_cv(cv_img):
                 dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
                 M = cv2.getPerspectiveTransform(rect, dst)
                 warped = cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_CUBIC)
-                log_debug("OpenCV 模式: 四点透视矫正成功")
+                log_debug("OpenCV 模式: 四点透视拉平成功")
                 return warped
     except Exception as e:
         log_debug(f"OpenCV 透视跳过: {e}")
     return cv_img
 
 # -------------------------------------------------------------
-# 5. 全局核心流水线（自适应环境，无漏洞衔接）
+# 5. 全局核心流水线（自适应设备，色彩饱和度保护，白底黑字）
 # -------------------------------------------------------------
 def process_image_for_print(input_path, output_path):
     try:
@@ -242,7 +242,7 @@ def process_image_for_print(input_path, output_path):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 增强彩色保护（浅红虚线与彩色图框）
+            # 增强彩色保护（浅红虚线与单元格保护）
             red_line_mask = (r_f - np.maximum(g_f, b_f)) > 10.0
             max_c = np.maximum(np.maximum(r_f, g_f), b_f)
             min_c = np.minimum(np.minimum(r_f, g_f), b_f)
@@ -252,11 +252,9 @@ def process_image_for_print(input_path, output_path):
             gray[color_diff_mask] = np.clip(gray[color_diff_mask] - (max_c[color_diff_mask] - min_c[color_diff_mask]) * 1.8, 0, 255)
             gray[red_line_mask] = np.clip(gray[red_line_mask] - 45.0, 0, 255)
 
-            # 大核光照估计
             bg = cv2.blur(gray, (55, 55)) + 1.0
             divided = (gray / bg) * 255.0
 
-            # 笔迹切分
             out = np.full_like(divided, 255.0)
             ink_mask = divided < 210.0
             ink_vals = divided[ink_mask]
@@ -264,14 +262,13 @@ def process_image_for_print(input_path, output_path):
             clean_ink = (clean_ink / 210.0) ** 1.35 * 180.0
             out[ink_mask] = clean_ink
 
-            # 抹除顶部黑杠与四周装订切缝
+            # 消除顶部黑杠与四周毛刺
             out = remove_edge_black_bars(out, border_ratio=0.08)
 
             res_uint8 = np.clip(out, 0, 255).astype(np.uint8)
             gaussian = cv2.GaussianBlur(res_uint8, (0, 0), 1.2)
             sharp = cv2.addWeighted(res_uint8, 1.4, gaussian, -0.4, 0)
 
-            # 统一转换并保存为 300 DPI 格式
             pil_res = Image.fromarray(sharp)
             pil_res.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
 
@@ -290,7 +287,7 @@ def process_image_for_print(input_path, output_path):
             r, g, b = img.split()
             r_arr, g_arr, b_arr = np.array(r, dtype=np.float32), np.array(g, dtype=np.float32), np.array(b, dtype=np.float32)
 
-            # 增强彩色保护（浅红虚线与彩色图框）
+            # 增强彩色保护（浅红虚线与单元格保护）
             red_line_mask = (r_arr - np.maximum(g_arr, b_arr)) > 10.0
             max_c = np.maximum(np.maximum(r_arr, g_arr), b_arr)
             min_c = np.minimum(np.minimum(r_arr, g_arr), b_arr)
@@ -313,7 +310,7 @@ def process_image_for_print(input_path, output_path):
             clean_ink = (clean_ink / 210.0) ** 1.35 * 180.0
             out[mask_front] = clean_ink
 
-            # 抹除顶部黑杠与四周装订切缝
+            # 消除顶部黑杠与四周毛刺
             out = remove_edge_black_bars(out, border_ratio=0.08)
 
             clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
@@ -338,7 +335,7 @@ def clean_old_tmp_files(directory, max_age_seconds=1800):
         pass
 
 # -------------------------------------------------------------
-# 6. 统一安全打印派发（95% 缩放居中留白）
+# 6. 统一安全打印派发（95% 缩放居中留白，杜绝切边与偏角）
 # -------------------------------------------------------------
 class PrintHandler(BaseHandler):
     def post(self):
