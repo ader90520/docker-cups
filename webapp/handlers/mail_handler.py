@@ -23,7 +23,9 @@ def load_mail_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                content = f.read().strip()
+                if content:
+                    return json.loads(content)
         except Exception as e:
             print(f"[MailConfig] 读取异常: {e}", flush=True)
     return {
@@ -42,12 +44,15 @@ def save_mail_config(cfg):
     try:
         cfg_dir = os.path.dirname(CONFIG_FILE)
         os.makedirs(cfg_dir, exist_ok=True)
-        # 兼容宿主机挂载的各种异常文件锁
-        tmp_file = CONFIG_FILE + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
+        # 针对 Docker 宿主机文件单点挂载，严禁使用 os.replace，直接原位覆写
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_file, CONFIG_FILE)
-        os.chmod(CONFIG_FILE, 0o666)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(CONFIG_FILE, 0o666)
+        except Exception:
+            pass
         mail_wake_event.set()
         return True, ""
     except Exception as e:
@@ -263,6 +268,6 @@ class MailConfigHandler(BaseHandler):
             if ok:
                 self.write_json(True, "云邮件及 PushPlus 微信通知设置已保存生效！")
             else:
-                self.write_json(False, f"配置文件写入失败: {err}")
+                self.write_json(False, f"保存失败: {err}")
         except Exception as e:
             self.write_json(False, f"保存配置异常: {str(e)}")
