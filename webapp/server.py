@@ -2,14 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import os
-import re
-import sys
 import subprocess
 import tornado.ioloop
 import tornado.web
 
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import PrintHandler
+from handlers.idcard_handler import IDCardHandler
 from handlers.scan_handler import ScanHandler, ScanProbeHandler, DownloadScanHandler
 from handlers.printer_admin_handler import PrinterAdminHandler
 from handlers.mail_handler import MailConfigHandler
@@ -83,6 +82,7 @@ def make_app():
         (r"/", IndexRedirectHandler),
         (r"/api/devices", DevicesHandler),
         (r"/api/print", PrintHandler),
+        (r"/api/idcard", IDCardHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan/probe", ScanProbeHandler),
