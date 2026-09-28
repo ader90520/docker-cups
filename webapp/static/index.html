@@ -3,335 +3,438 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CUPS 智能云打印与扫描工作台</title>
-    <!-- 引入 PDF.js 用于客户端免后台预览 PDF -->
+    <title>在线打印 - CUPS 智能云工作台</title>
+    <!-- 引入 PDF.js 用于客户端快速无损预览 PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <style>
+        :root {
+            --primary: #007bff;
+            --primary-hover: #0056b3;
+            --success: #28a745;
+            --border-color: #e2e8f0;
+            --bg-gray: #f8fafc;
+            --text-main: #334155;
+            --text-sub: #64748b;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f0f2f5; color: #2c3e50; line-height: 1.6; padding: 15px; }
-        .container { max-width: 1000px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; }
-        .header { background: #1a252f; color: #fff; padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; }
-        .header h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-        .tabs { display: flex; background: #eaeded; border-bottom: 1px solid #d5dbdb; flex-wrap: wrap; }
-        .tab-btn { flex: 1; min-width: 100px; padding: 14px 10px; text-align: center; font-size: 14px; font-weight: 600; cursor: pointer; border: none; background: transparent; transition: all 0.2s; color: #5d6d7e; }
-        .tab-btn.active { background: #fff; color: #2980b9; border-bottom: 3px solid #2980b9; }
-        .tab-content { display: none; padding: 25px; }
-        .tab-content.active { display: block; }
-        .form-group { margin-bottom: 16px; }
-        .form-group label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px; color: #34495e; }
-        .form-control { width: 100%; padding: 10px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 14px; }
-        .form-control:focus { border-color: #3498db; outline: none; }
-        .row { display: flex; gap: 15px; flex-wrap: wrap; }
-        .col { flex: 1; min-width: 180px; }
-        .btn { display: inline-block; width: 100%; padding: 12px; font-size: 15px; font-weight: 600; color: #fff; background: #3498db; border: none; border-radius: 6px; cursor: pointer; text-align: center; transition: background 0.2s; }
-        .btn:hover { background: #2980b9; }
-        .btn-success { background: #27ae60; }
-        .btn-success:hover { background: #219150; }
-        .btn-danger { background: #e74c3c; }
-        .btn-danger:hover { background: #c0392b; }
-        .btn-secondary { background: #95a5a6; }
-        .btn-secondary:hover { background: #7f8c8d; }
-        .btn-warning { background: #e67e22; }
-        .btn-warning:hover { background: #d35400; }
-        .status-box { margin-top: 15px; padding: 12px; border-radius: 6px; display: none; font-size: 14px; word-break: break-all; }
-        .status-success { background: #e8f8f5; color: #27ae60; border: 1px solid #a3e4d7; }
-        .status-error { background: #fdedec; color: #e74c3c; border: 1px solid #f5b7b1; }
-        .card-box { background: #fdfefe; border: 1px solid #ebf5fb; padding: 15px; border-radius: 8px; margin-bottom: 18px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f1f5f9; color: var(--text-main); line-height: 1.5; padding: 15px; }
+        .wrapper { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid var(--border-color); }
+        
+        /* 顶部系统导航栏 */
+        .top-navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
+        .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
+        .nav-tabs { display: flex; gap: 6px; }
+        .nav-btn { border: 1px solid var(--border-color); background: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-sub); transition: all 0.2s; }
+        .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
-        /* 多文件上传列表与删除键 */
-        .file-list-box { border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 10px; max-height: 220px; overflow-y: auto; background: #fafafa; }
-        .file-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid #edf2f7; font-size: 13px; }
-        .file-item:last-child { border-bottom: none; }
-        .file-info { display: flex; align-items: center; gap: 10px; overflow: hidden; }
-        .file-name { font-weight: 500; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; max-width: 400px; }
-        .file-actions { display: flex; gap: 8px; }
-        .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; border: none; cursor: pointer; color: #fff; }
+        /* 打印主控顶栏 (WanOS 风格) */
+        .print-header-bar { display: flex; align-items: center; gap: 15px; padding: 15px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
+        .printer-select-wrap { display: flex; align-items: center; gap: 8px; flex: 1; }
+        .select-ctrl { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
+        .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: var(--primary); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 
-        /* 模态框预览 (支持拖拽缩放) */
-        .modal { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.65); align-items: center; justify-content: center; }
-        .modal-content { background: #fff; width: 90%; max-width: 850px; max-height: 90vh; border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
-        .modal-header { padding: 14px 20px; background: #2c3e50; color: #fff; display: flex; justify-content: space-between; align-items: center; }
-        .modal-body { padding: 20px; overflow: auto; text-align: center; flex: 1; background: #525659; }
-        .modal-toolbar { display: flex; justify-content: center; gap: 10px; padding: 10px; background: #34495e; color: #fff; }
+        /* 打印类型子菜单 (标准打印 / 发票打印 / 身份证打印) */
+        .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
+        .type-item { flex: 1; padding: 12px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
+        .type-item.active { color: var(--primary); border-bottom-color: var(--primary); background: #f0f7ff; }
 
-        /* 身份证 A4 纸张排版可视化框 */
-        .a4-sheet-container { display: flex; justify-content: center; margin-top: 20px; }
-        .a4-sheet { width: 320px; height: 452px; background: #fff; border: 2px solid #2c3e50; box-shadow: 0 4px 15px rgba(0,0,0,0.15); position: relative; padding: 20px 15px; display: flex; flex-direction: column; align-items: center; justify-content: space-around; }
-        .idcard-placeholder { width: 220px; height: 139px; border: 2px dashed #95a5a6; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; overflow: hidden; position: relative; background: #fdfefe; }
-        .idcard-placeholder img { width: 100%; height: 100%; object-fit: cover; }
-        .idcard-label { font-size: 12px; color: #7f8c8d; position: absolute; pointer-events: none; }
+        /* 主体双栏网格 (左侧参数 + 右侧实时纸张预览) */
+        .main-layout { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; padding: 20px; background: #f8fafc; }
+        @media (max-width: 900px) { .main-layout { grid-template-columns: 1fr; } }
+
+        .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+        .card-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+        
+        /* 拖拽上传区域 */
+        .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px; text-align: center; background: #fff; cursor: pointer; transition: border-color 0.2s; position: relative; }
+        .upload-drag-area:hover { border-color: var(--primary); }
+        .upload-icon { font-size: 28px; color: #94a3b8; margin-bottom: 6px; }
+        .upload-text { font-size: 13px; color: var(--text-sub); }
+
+        /* 身份证专区：正反面并排框 */
+        .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .idcard-box { border: 2px dashed #cbd5e1; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fff; overflow: hidden; }
+        .idcard-box img { width: 100%; height: 100%; object-fit: cover; }
+        .idcard-box .text-tip { font-size: 12px; color: var(--text-sub); }
+
+        /* 多文件管理列表 */
+        .file-list { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; background: #fff; }
+        .file-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+        .file-row:last-child { border-bottom: none; }
+        .file-row.active { background: #eff6ff; }
+        .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
+
+        /* 参数表单网格 */
+        .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+        .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
+        .form-ctrl { width: 100%; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
+
+        /* 单选按钮组 (色彩模式/打印方向) */
+        .radio-btn-group { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
+        .radio-btn { flex: 1; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
+        .radio-btn.active { background: var(--primary); color: #fff; }
+
+        /* 右侧 A4 真实比例预览视窗 */
+        .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; }
+        .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 14px; align-items: center; }
+        .sheet-a4-viewport { width: 300px; height: 424px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .sheet-a4-viewport.landscape { width: 424px; height: 300px; }
+        .sheet-placeholder-text { font-size: 13px; color: #94a3b8; }
+        .sheet-img-render { max-width: 100%; max-height: 100%; object-fit: contain; }
+        #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
+
+        /* 身份证在 A4 预览框内的真实排版呈现 */
+        .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 20px 0; }
+        .idcard-a4-item { width: 180px; height: 114px; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fdfefe; }
+        .idcard-a4-item img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 底部提交动作条 */
+        .action-bar { margin-top: 15px; }
+        .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn-submit-print:hover { background: var(--primary-hover); }
+
+        /* 状态与告警框 */
+        .status-alert { margin-top: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; display: none; }
+        .status-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        .status-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+
+        /* 其余子页面 (扫描、管理、邮箱) 面板 */
+        .tab-panel-container { display: none; padding: 20px; }
+        .tab-panel-container.active { display: block; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div class="header">
-        <h1>🖨️ CUPS 智能云打印与扫描工作台</h1>
-        <span style="font-size:12px; background:#27ae60; padding:4px 10px; border-radius:20px;">● 硬件直通运行</span>
+<div class="wrapper">
+    <!-- 顶部导航 -->
+    <div class="top-navbar">
+        <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
+        <div class="nav-tabs">
+            <button class="nav-btn active" onclick="switchNavTab('print')">📄 智能打印</button>
+            <button class="nav-btn" onclick="switchNavTab('scan')">📷 在线扫描</button>
+            <button class="nav-btn" onclick="switchNavTab('devices')">🎛️ 设备管理</button>
+            <button class="nav-btn" onclick="switchNavTab('mail')">⚙ 云邮箱设置</button>
+        </div>
     </div>
 
-    <div class="tabs">
-        <button class="tab-btn active" onclick="switchTab('print')">📄 智能打印</button>
-        <button class="tab-btn" onclick="switchTab('idcard')">🪪 身份证排版</button>
-        <button class="tab-btn" onclick="switchTab('scan')">📷 在线扫描</button>
-        <button class="tab-btn" onclick="switchTab('devices')">🎛️ 设备管理</button>
-        <button class="tab-btn" onclick="switchTab('mail')">⚙ 云邮箱设置</button>
-    </div>
-
-    <!-- 1. 通用智能打印面板 -->
-    <div id="tab-print" class="tab-content active">
-        <form id="print-form">
-            <div class="row">
-                <div class="col form-group">
-                    <label>目标打印机</label>
-                    <select id="printer-select" class="form-control" name="printer"></select>
-                </div>
-                <div class="col form-group">
-                    <label>打印色彩模式</label>
-                    <select name="color_mode" class="form-control">
-                        <option value="monochrome" selected>黑白模式 (极速防透墨加黑)</option>
-                        <option value="color">全彩模式 (彩色原样输出)</option>
-                    </select>
-                </div>
-                <div class="col form-group" style="flex:0 0 100px;">
-                    <label>份数</label>
-                    <input type="number" name="copies" class="form-control" value="1" min="1" max="99">
-                </div>
+    <!-- 1. 打印工作台主面板 (WanOS 风格排版) -->
+    <div id="panel-print" class="tab-panel-container active" style="padding:0;">
+        <!-- 顶栏选择打印机 -->
+        <div class="print-header-bar">
+            <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨️ 打印</span>
+            <div class="printer-select-wrap">
+                <select id="printer-select" class="select-ctrl"></select>
+                <button type="button" class="btn-refresh-icon" onclick="loadPrinters()" title="刷新打印机">🔄</button>
             </div>
+        </div>
 
-            <div class="row">
-                <div class="col form-group">
-                    <label>纸张规格</label>
-                    <select name="media" class="form-control">
-                        <option value="A4" selected>A4 标准纸</option>
-                        <option value="A5">A5</option>
-                        <option value="B5">B5</option>
-                    </select>
-                </div>
-                <div class="col form-group">
-                    <label>双面模式</label>
-                    <select name="duplex" class="form-control">
-                        <option value="none" selected>单面打印</option>
-                        <option value="long">双面长边翻转 (书籍装订)</option>
-                        <option value="short">双面短边翻转 (日历装订)</option>
-                    </select>
-                </div>
-                <div class="col form-group">
-                    <label>智能试卷优化</label>
-                    <select name="enhance" class="form-control">
-                        <option value="true" selected>开启 (去灰底白底化、笔迹加黑、90%防切字留白)</option>
-                        <option value="false">关闭 (原样输出)</option>
-                    </select>
-                </div>
-            </div>
+        <!-- 打印子分类切换 (标准 / 发票 / 身份证) -->
+        <div class="sub-type-nav">
+            <div class="type-item active" id="tab-sub-normal" onclick="switchPrintType('normal')">📄 标准打印</div>
+            <div class="type-item" id="tab-sub-invoice" onclick="switchPrintType('invoice')">🧾 发票打印</div>
+            <div class="type-item" id="tab-sub-idcard" onclick="switchPrintType('idcard')">🪪 身份证打印</div>
+        </div>
 
-            <div class="form-group">
-                <label>添加文件 (支持批量多选图片与 PDF，可在下方列表管理与放大预览)</label>
-                <input type="file" id="file-uploader" class="form-control" multiple accept=".jpg,.jpeg,.png,.pdf,.bmp,.webp" onchange="handleFilesSelected(this)">
-            </div>
-
-            <!-- 多文件管理列表与全部清空键 -->
-            <div id="file-list-container" style="display:none; margin-bottom:15px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                    <span style="font-size:13px; font-weight:600;">已就绪文件清单 (<span id="file-count">0</span> 个)：</span>
-                    <button type="button" class="btn-sm btn-danger" onclick="clearAllFiles()">🗑️ 全部清空</button>
-                </div>
-                <div class="file-list-box" id="file-list-items"></div>
-            </div>
-
-            <button type="submit" class="btn" style="margin-top:10px;">🚀 开始打印 (内部硬件级缩放留白，内容绝对居中)</button>
-        </form>
-        <div id="print-status" class="status-box"></div>
-    </div>
-
-    <!-- 2. 身份证 1:1 A4 纸张线框排版打印 -->
-    <div id="tab-idcard" class="tab-content">
-        <form id="idcard-form">
-            <div class="row">
-                <div class="col form-group">
-                    <label>目标打印机</label>
-                    <select id="idcard-printer-select" class="form-control" name="printer"></select>
-                </div>
-                <div class="col form-group" style="flex:0 0 120px;">
-                    <label>打印份数</label>
-                    <input type="number" name="copies" class="form-control" value="1" min="1" max="99">
-                </div>
-            </div>
-
-            <input type="file" id="id-front-input" accept="image/*" style="display:none;" onchange="handleIDImage(this, 'front')">
-            <input type="file" id="id-back-input" accept="image/*" style="display:none;" onchange="handleIDImage(this, 'back')">
-
-            <div class="a4-sheet-container">
-                <div class="a4-sheet">
-                    <span style="position:absolute; top:8px; left:12px; font-size:11px; color:#95a5a6;">A4 标准排版框 (210mm × 297mm)</span>
-                    <!-- 正面点击上传框 -->
-                    <div class="idcard-placeholder" onclick="document.getElementById('id-front-input').click()">
-                        <span class="idcard-label" id="front-label">点击上传：身份证人像面 (正面)</span>
-                        <img id="front-img" style="display:none;" alt="正面">
+        <!-- 主体双栏排版 -->
+        <div class="main-layout">
+            <!-- 左侧：参数与上传区域 -->
+            <div class="col-left">
+                <!-- A. 通用文件上传区域 (标准/发票打印展示) -->
+                <div class="card-box" id="sec-upload-normal">
+                    <div class="card-title">
+                        <span>📁 上传文件</span>
+                        <button type="button" class="btn-del" onclick="clearAllFiles()" style="font-weight:600;">清空列表</button>
                     </div>
-                    <!-- 反面点击上传框 -->
-                    <div class="idcard-placeholder" onclick="document.getElementById('id-back-input').click()">
-                        <span class="idcard-label" id="back-label">点击上传：身份证国徽面 (反面)</span>
-                        <img id="back-img" style="display:none;" alt="反面">
+                    <div class="upload-drag-area" onclick="document.getElementById('file-input').click()">
+                        <div class="upload-icon">📂</div>
+                        <div class="upload-text">点击或拖拽上传文件 (支持多选，PDF / 图片 / 试卷)</div>
+                        <input type="file" id="file-input" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="onFilesSelected(this)">
                     </div>
+                    <div class="file-list" id="file-list-view" style="display:none;"></div>
+                </div>
+
+                <!-- B. 身份证专属上传区域 (身份证模式下展示) -->
+                <div class="card-box" id="sec-upload-idcard" style="display:none;">
+                    <div class="card-title">🪪 上传身份证</div>
+                    <div class="idcard-grid">
+                        <div class="idcard-box" onclick="document.getElementById('id-f-file').click()">
+                            <span class="text-tip" id="lbl-id-f">点击上传：人像面 (正面)</span>
+                            <img id="img-id-f-preview" style="display:none;" alt="正面">
+                        </div>
+                        <div class="idcard-box" onclick="document.getElementById('id-b-file').click()">
+                            <span class="text-tip" id="lbl-id-b">点击上传：国徽面 (反面)</span>
+                            <img id="img-id-b-preview" style="display:none;" alt="反面">
+                        </div>
+                    </div>
+                    <input type="file" id="id-f-file" accept="image/*" style="display:none;" onchange="onIDCardFile(this, 'f')">
+                    <input type="file" id="id-b-file" accept="image/*" style="display:none;" onchange="onIDCardFile(this, 'b')">
+                </div>
+
+                <!-- 打印参数配置卡片 -->
+                <div class="card-box">
+                    <div class="card-title">⚙ 打印参数</div>
+                    
+                    <div style="margin-bottom: 12px;">
+                        <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:5px;">颜色模式</label>
+                        <div class="radio-btn-group">
+                            <button type="button" class="radio-btn active" id="btn-color-mono" onclick="setColorMode('monochrome')">⚫ 黑白模式 (去灰底加黑)</button>
+                            <button type="button" class="radio-btn" id="btn-color-rgb" onclick="setColorMode('color')">🎨 彩色打印</button>
+                        </div>
+                    </div>
+
+                    <div class="param-grid">
+                        <div class="form-item">
+                            <label>纸张大小</label>
+                            <select id="p-media" class="form-ctrl">
+                                <option value="A4" selected>A4 (210×297mm)</option>
+                                <option value="A5">A5</option>
+                                <option value="B5">B5</option>
+                            </select>
+                        </div>
+                        <div class="form-item">
+                            <label>打印份数</label>
+                            <input type="number" id="p-copies" class="form-ctrl" value="1" min="1" max="99">
+                        </div>
+                        <div class="form-item">
+                            <label>双面打印</label>
+                            <select id="p-duplex" class="form-ctrl">
+                                <option value="none" selected>单面打印</option>
+                                <option value="long">双面长边翻转 (书籍装订)</option>
+                                <option value="short">双面短边翻转 (日历装订)</option>
+                            </select>
+                        </div>
+                        <div class="form-item">
+                            <label>智能画质增强</label>
+                            <select id="p-enhance" class="form-ctrl">
+                                <option value="true" selected>开启 (试卷去黑底/防镂空)</option>
+                                <option value="false">关闭 (原图直接打印)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="action-bar">
+                        <button type="button" class="btn-submit-print" id="btn-submit" onclick="submitPrintJob()">🚀 提交打印任务</button>
+                    </div>
+                    <div id="print-alert" class="status-alert"></div>
                 </div>
             </div>
 
-            <div style="text-align:center; margin-top:15px;">
-                <button type="button" class="btn-sm btn-secondary" onclick="resetIDCards()" style="padding:6px 16px;">🔄 重置身份证图片</button>
-            </div>
+            <!-- 右侧：WanOS 实时 A4 视窗预览 + 状态 -->
+            <div class="col-right">
+                <div class="preview-container">
+                    <div class="preview-toolbar">
+                        <span style="font-size:14px; font-weight:700;">👁️ 实时预览</span>
+                        <div class="radio-btn-group" style="width:140px;">
+                            <button type="button" class="radio-btn active" id="btn-orient-port" onclick="setOrientation('portrait')">▯ 纵向</button>
+                            <button type="button" class="radio-btn" id="btn-orient-land" onclick="setOrientation('landscape')">▭ 横向</button>
+                        </div>
+                    </div>
 
-            <button type="submit" class="btn btn-success" style="margin-top:20px;">🪪 自动漂白拼版并 1:1 打印</button>
-        </form>
-        <div id="idcard-status" class="status-box"></div>
+                    <!-- A4 纸张线框模型 -->
+                    <div class="sheet-a4-viewport" id="a4-viewport">
+                        <span class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后显示预览</span>
+                        <img id="viewport-img" class="sheet-img-render" style="display:none;" alt="预览图">
+                        <canvas id="pdf-canvas-render"></canvas>
+
+                        <!-- 身份证在 A4 视窗中 1:1 上下排列呈现 -->
+                        <div class="idcard-a4-holder" id="viewport-idcard-holder" style="display:none;">
+                            <div class="idcard-a4-item"><img id="preview-a4-id-f" style="display:none;" alt="人像面"></div>
+                            <div class="idcard-a4-item"><img id="preview-a4-id-b" style="display:none;" alt="国徽面"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 打印机状态与简报卡片 -->
+                <div class="card-box" style="margin-top:18px;">
+                    <div class="card-title">
+                        <span>⚡ 打印机状态</span>
+                        <span style="font-size:12px; color:var(--success); font-weight:600;">● 就绪联机</span>
+                    </div>
+                    <div style="font-size:13px; color:var(--text-sub); line-height:1.8;">
+                        纸张规格：<b style="color:var(--text-main);">A4 标准纸</b><br>
+                        缩放标准：<b style="color:var(--text-main);">97% 安全充满度 (留白 3~5mm)</b><br>
+                        驱动通道：<b style="color:var(--text-main);" id="status-printer-name">检测中...</b>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- 3. 在线扫描面板 -->
-    <div id="tab-scan" class="tab-content">
-        <div class="form-group">
-            <label>扫描仪硬件通道</label>
-            <select id="scan-device-select" class="form-control"></select>
-        </div>
-        <div class="row">
-            <div class="col form-group">
-                <label>扫描分辨率</label>
-                <select id="scan-res" class="form-control">
-                    <option value="150" selected>150 DPI (快速)</option>
-                    <option value="300">300 DPI (高清)</option>
-                </select>
-            </div>
-            <div class="col form-group">
-                <label>扫描色彩</label>
-                <select id="scan-mode" class="form-control">
-                    <option value="Color" selected>彩色 (Color)</option>
-                    <option value="Gray">灰度 (Gray)</option>
-                </select>
-            </div>
-        </div>
-        <button type="button" id="btn-scan" class="btn btn-success" onclick="startScan()">📷 启动硬件扫描 (A4 边界保护 + 自动去黑条)</button>
-        <div id="scan-status" class="status-box"></div>
-        <div id="scan-preview" style="display:none; text-align:center; margin-top:20px;">
-            <img id="scan-img" style="max-width:100%; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="扫描结果">
-            <div style="margin-top:15px;">
-                <a id="scan-download" href="#" class="btn" style="width:auto; padding:10px 25px; text-decoration:none;">💾 下载高清扫描件</a>
-            </div>
-        </div>
-    </div>
-
-    <!-- 4. 设备管理面板 -->
-    <div id="tab-devices" class="tab-content">
+    <!-- 2. 在线扫描面板 -->
+    <div id="panel-scan" class="tab-panel-container">
         <div class="card-box">
-            <h3 style="font-size:15px; margin-bottom:10px;">🖨️ 打印机设备状态</h3>
+            <div class="card-title">📷 硬件扫描</div>
+            <div class="form-item" style="margin-bottom:12px;">
+                <label>扫描通道</label>
+                <select id="scan-dev-select" class="form-ctrl"></select>
+            </div>
+            <div class="param-grid" style="margin-bottom:15px;">
+                <div class="form-item">
+                    <label>分辨率</label>
+                    <select id="scan-res" class="form-ctrl">
+                        <option value="150" selected>150 DPI (常规快速)</option>
+                        <option value="300">300 DPI (高清文档)</option>
+                    </select>
+                </div>
+                <div class="form-item">
+                    <label>色彩模式</label>
+                    <select id="scan-mode" class="form-ctrl">
+                        <option value="Color" selected>彩色 (Color)</option>
+                        <option value="Gray">灰度 (Gray)</option>
+                    </select>
+                </div>
+            </div>
+            <button type="button" class="btn-submit-print" onclick="startScan()">📷 启动硬件扫描并自动漂白加黑</button>
+            <div id="scan-alert" class="status-alert"></div>
+            <div id="scan-res-box" style="display:none; text-align:center; margin-top:15px;">
+                <img id="scan-img-elem" style="max-width:100%; border:1px solid #cbd5e1; border-radius:6px;" alt="扫描图">
+                <div style="margin-top:10px;">
+                    <a id="scan-dl-btn" href="#" class="btn-submit-print" style="text-decoration:none; display:inline-block; width:auto; padding:8px 20px;">💾 下载扫描原件</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. 设备管理与打印队列面板 -->
+    <div id="panel-devices" class="tab-panel-container">
+        <div class="card-box">
+            <div class="card-title">🖨️ 打印机设备状态与队列</div>
             <table style="width:100%; border-collapse:collapse; font-size:13px;" id="device-table">
-                <thead><tr style="background:#f8f9f9;"><th style="padding:10px; text-align:left;">打印机名称</th><th style="padding:10px;">状态</th><th style="padding:10px;">默认状态</th><th style="padding:10px;">操作</th></tr></thead>
+                <thead><tr style="background:#f8fafc;"><th style="padding:10px; text-align:left;">打印机名称</th><th style="padding:10px;">状态</th><th style="padding:10px;">默认</th><th style="padding:10px;">操作</th></tr></thead>
                 <tbody id="device-tbody"><tr><td colspan="4" style="padding:10px; text-align:center;">正在检测设备...</td></tr></tbody>
             </table>
+            <div style="margin-top:15px; display:flex; gap:10px;">
+                <button type="button" class="nav-btn" onclick="loadPrinters(true)">🔄 刷新设备状态</button>
+                <button type="button" class="nav-btn" style="color:#ef4444;" onclick="cleanSpoolJobs()">🧹 一键清空卡死任务</button>
+            </div>
         </div>
+    </div>
+
+    <!-- 4. 云邮箱设置面板 -->
+    <div id="panel-mail" class="tab-panel-container">
         <div class="card-box">
-            <button class="btn btn-secondary" onclick="loadPrinters(true)" style="width:auto; padding:8px 18px; margin-right:10px;">🔄 刷新设备状态</button>
-            <button class="btn btn-warning" onclick="cleanSpoolJobs()" style="width:auto; padding:8px 18px;">🧹 一键清空卡死任务</button>
-        </div>
-    </div>
-
-    <!-- 5. 云邮箱设置面板 -->
-    <div id="tab-mail" class="tab-content">
-        <form id="mail-form">
-            <div class="form-group">
-                <label>云邮件自动打印服务</label>
-                <select id="mail_enable" class="form-control" name="enable">
-                    <option value="true">开启 (后台每5秒轮询检测)</option>
-                    <option value="false">关闭</option>
-                </select>
-            </div>
-            <div class="row">
-                <div class="col form-group">
-                    <label>IMAP 服务器</label>
-                    <input type="text" id="mail_server" class="form-control" name="server" value="imap.qq.com">
+            <div class="card-title">⚙ 云邮箱自动打印与微信通知配置</div>
+            <form id="mail-cfg-form">
+                <div class="form-item" style="margin-bottom:12px;">
+                    <label>云邮件自动打印服务</label>
+                    <select id="mail_enable" class="form-ctrl">
+                        <option value="true">开启 (后台每 5 秒轮询检测)</option>
+                        <option value="false">关闭</option>
+                    </select>
                 </div>
-                <div class="col form-group" style="flex: 0 0 100px;">
-                    <label>端口</label>
-                    <input type="number" id="mail_port" class="form-control" name="port" value="993">
+                <div class="param-grid" style="margin-bottom:12px;">
+                    <div class="form-item">
+                        <label>IMAP 服务器</label>
+                        <input type="text" id="mail_server" class="form-ctrl" value="imap.qq.com">
+                    </div>
+                    <div class="form-item">
+                        <label>端口</label>
+                        <input type="number" id="mail_port" class="form-ctrl" value="993">
+                    </div>
                 </div>
-            </div>
-            <div class="row">
-                <div class="col form-group">
-                    <label>邮箱账号</label>
-                    <input type="email" id="mail_user" class="form-control" name="user" placeholder="例如: 137062870@qq.com">
+                <div class="param-grid" style="margin-bottom:12px;">
+                    <div class="form-item">
+                        <label>邮箱账号</label>
+                        <input type="email" id="mail_user" class="form-ctrl" placeholder="例如: 137062870@qq.com">
+                    </div>
+                    <div class="form-item">
+                        <label>授权码 / 专用密码</label>
+                        <input type="password" id="mail_password" class="form-ctrl" placeholder="留空或保留默认表示不修改">
+                    </div>
                 </div>
-                <div class="col form-group">
-                    <label>授权码 / 专用密码</label>
-                    <input type="password" id="mail_password" class="form-control" name="password" placeholder="留空或保留默认表示不修改">
+                <div class="form-item" style="background:#f0f9ff; border:1px dashed var(--primary); padding:12px; border-radius:6px; margin-bottom:12px;">
+                    <label style="color:var(--primary);">💬 PushPlus 微信通知 Token (出纸成功 / 缺纸卡纸推送)</label>
+                    <input type="text" id="mail_pushplus_token" class="form-ctrl" placeholder="填写 PushPlus 发送的 Token 即可接收微信出纸状态">
                 </div>
-            </div>
-
-            <div class="form-group" style="background:#fdfefe; border:1px dashed #3498db; padding:14px; border-radius:8px;">
-                <label style="color:#2980b9;">💬 PushPlus 微信通知 Token (出纸成功 / 缺纸卡纸推送)</label>
-                <input type="text" id="mail_pushplus_token" class="form-control" name="pushplus_token" placeholder="填写 PushPlus 发送的 Token 即可接收微信出纸状态">
-                <small style="color:#e67e22; display:block; margin-top:5px;">💡 打印机真正出纸完成后向微信推送“出纸成功”；缺纸或卡纸时即刻告警！</small>
-            </div>
-
-            <div class="form-group">
-                <label>🔑 打印暗号 (邮件标题或正文中包含即可打印)</label>
-                <input type="text" id="mail_keyword" class="form-control" name="keyword" placeholder="例如: 888 或 打印 (留空则不校验暗号)">
-            </div>
-            <div class="form-group">
-                <label>📧 指定发送人邮箱 (留空 = 允许所有人凭暗号打印)</label>
-                <input type="text" id="mail_whitelist" class="form-control" name="whitelist" placeholder="留空允许任意邮箱；填了则仅限指定邮箱 (多邮箱用逗号隔开)">
-            </div>
-
-            <button type="submit" class="btn">💾 保存云邮件策略并立即生效</button>
-        </form>
-        <div id="mail-status" class="status-box"></div>
-    </div>
-</div>
-
-<!-- 弹窗预览模态框 (支持 PDF/图片放大缩小) -->
-<div id="preview-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <span id="modal-title" style="font-weight:600;">文件预览</span>
-            <span style="cursor:pointer; font-size:22px;" onclick="closeModal()">&times;</span>
-        </div>
-        <div class="modal-toolbar">
-            <button type="button" class="btn-sm btn-secondary" onclick="zoomPreview(0.2)">🔍 放大</button>
-            <button type="button" class="btn-sm btn-secondary" onclick="zoomPreview(-0.2)">🔎 缩小</button>
-            <button type="button" class="btn-sm btn-secondary" onclick="resetZoom()">↺ 还原</button>
-        </div>
-        <div class="modal-body" id="modal-container">
-            <img id="modal-img" style="transform-origin: center top; transition: transform 0.2s;" src="" alt="预览">
-            <canvas id="modal-pdf-canvas" style="transform-origin: center top; transition: transform 0.2s; display:none;"></canvas>
+                <div class="param-grid" style="margin-bottom:15px;">
+                    <div class="form-item">
+                        <label>🔑 打印暗号 (邮件标题包含即可打印)</label>
+                        <input type="text" id="mail_keyword" class="form-ctrl" placeholder="例如: 888 或 打印">
+                    </div>
+                    <div class="form-item">
+                        <label>📧 发件人白名单 (留空允许任意邮箱)</label>
+                        <input type="text" id="mail_whitelist" class="form-ctrl" placeholder="多个邮箱用逗号隔开">
+                    </div>
+                </div>
+                <button type="submit" class="btn-submit-print">💾 保存云邮件配置并立即生效</button>
+                <div id="mail-alert" class="status-alert"></div>
+            </form>
         </div>
     </div>
 </div>
 
 <script>
-let selectedFiles = [];
-let currentScale = 1.0;
+let currentNav = 'print';
+let currentPrintType = 'normal'; // 'normal' | 'invoice' | 'idcard'
+let currentColorMode = 'monochrome'; // 'monochrome' | 'color'
+let currentOrientation = 'portrait'; // 'portrait' | 'landscape'
+
+let fileQueue = [];
 let idFrontFile = null;
 let idBackFile = null;
 
-function switchTab(name) {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+// 顶部主导航切换
+function switchNavTab(tab) {
+    currentNav = tab;
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel-container').forEach(p => p.classList.remove('active'));
     event.currentTarget.classList.add('active');
-    document.getElementById('tab-' + name).classList.add('active');
-    if (name === 'scan') loadScanDevices();
-    if (name === 'mail') loadMailConfig();
-    if (name === 'devices') loadPrinters(true);
+    document.getElementById('panel-' + tab).classList.add('active');
+
+    if (tab === 'scan') loadScanDevices();
+    if (tab === 'devices') loadPrinters(true);
+    if (tab === 'mail') loadMailConfig();
 }
 
-function showStatus(elemId, success, msg) {
-    const box = document.getElementById(elemId);
-    box.style.display = 'block';
-    box.className = 'status-box ' + (success ? 'status-success' : 'status-error');
-    box.innerText = msg;
+// 打印模式子标签切换
+function switchPrintType(t) {
+    currentPrintType = t;
+    document.querySelectorAll('.type-item').forEach(i => i.classList.remove('active'));
+    document.getElementById('tab-sub-' + t).classList.add('active');
+
+    const secNormal = document.getElementById('sec-upload-normal');
+    const secID = document.getElementById('sec-upload-idcard');
+    const vpIDHolder = document.getElementById('viewport-idcard-holder');
+
+    if (t === 'idcard') {
+        secNormal.style.display = 'none';
+        secID.style.display = 'block';
+        vpIDHolder.style.display = 'flex';
+        document.getElementById('viewport-empty-tip').style.display = 'none';
+        document.getElementById('viewport-img').style.display = 'none';
+        document.getElementById('pdf-canvas-render').style.display = 'none';
+    } else {
+        secNormal.style.display = 'block';
+        secID.style.display = 'none';
+        vpIDHolder.style.display = 'none';
+        renderCurrentFilePreview();
+    }
 }
 
-// ----------------- 多文件列表与删除键 -----------------
-function handleFilesSelected(input) {
+// 设置色彩模式与方向
+function setColorMode(mode) {
+    currentColorMode = mode;
+    document.getElementById('btn-color-mono').className = 'radio-btn ' + (mode === 'monochrome' ? 'active' : '');
+    document.getElementById('btn-color-rgb').className = 'radio-btn ' + (mode === 'color' ? 'active' : '');
+}
+
+function setOrientation(orient) {
+    currentOrientation = orient;
+    const vp = document.getElementById('a4-viewport');
+    document.getElementById('btn-orient-port').className = 'radio-btn ' + (orient === 'portrait' ? 'active' : '');
+    document.getElementById('btn-orient-land').className = 'radio-btn ' + (orient === 'landscape' ? 'active' : '');
+    if (orient === 'landscape') {
+        vp.classList.add('landscape');
+    } else {
+        vp.classList.remove('landscape');
+    }
+}
+
+// ---------------- 文件选择与列表管理 ----------------
+function onFilesSelected(input) {
     if (input.files) {
         for (let i = 0; i < input.files.length; i++) {
-            selectedFiles.push(input.files[i]);
+            fileQueue.push(input.files[i]);
         }
     }
     renderFileList();
@@ -339,76 +442,72 @@ function handleFilesSelected(input) {
 }
 
 function renderFileList() {
-    const container = document.getElementById('file-list-container');
-    const items = document.getElementById('file-list-items');
-    const count = document.getElementById('file-count');
-    items.innerHTML = '';
-
-    if (selectedFiles.length === 0) {
-        container.style.display = 'none';
+    const listWrap = document.getElementById('file-list-view');
+    listWrap.innerHTML = '';
+    if (fileQueue.length === 0) {
+        listWrap.style.display = 'none';
+        renderCurrentFilePreview();
         return;
     }
-
-    container.style.display = 'block';
-    count.innerText = selectedFiles.length;
-
-    selectedFiles.forEach((file, idx) => {
+    listWrap.style.display = 'block';
+    fileQueue.forEach((file, idx) => {
         const div = document.createElement('div');
-        div.className = 'file-item';
+        div.className = 'file-row ' + (idx === 0 ? 'active' : '');
         div.innerHTML = `
-            <div class="file-info">
-                <span>📄</span>
-                <span class="file-name">${file.name}</span>
-                <span style="color:#95a5a6; font-size:12px;">(${(file.size/1024).toFixed(1)} KB)</span>
-            </div>
-            <div class="file-actions">
-                <button type="button" class="btn-sm btn-secondary" onclick="openPreview(${idx})">👁️ 预览</button>
-                <button type="button" class="btn-sm btn-danger" onclick="removeFile(${idx})">❌ 删除</button>
-            </div>
+            <span style="cursor:pointer;" onclick="selectPreviewFile(${idx})">📄 ${file.name} (${(file.size/1024).toFixed(1)}KB)</span>
+            <button type="button" class="btn-del" onclick="removeQueueFile(${idx})">❌</button>
         `;
-        items.appendChild(div);
+        listWrap.appendChild(div);
     });
+    renderCurrentFilePreview(fileQueue[0]);
 }
 
-function removeFile(idx) {
-    selectedFiles.splice(idx, 1);
+function removeQueueFile(idx) {
+    fileQueue.splice(idx, 1);
     renderFileList();
 }
 
 function clearAllFiles() {
-    selectedFiles = [];
+    fileQueue = [];
     renderFileList();
 }
 
-// ----------------- PDF与图片预览与缩放 -----------------
-function openPreview(idx) {
-    const file = selectedFiles[idx];
-    const modal = document.getElementById('preview-modal');
-    const title = document.getElementById('modal-title');
-    const img = document.getElementById('modal-img');
-    const canvas = document.getElementById('modal-pdf-canvas');
+function selectPreviewFile(idx) {
+    document.querySelectorAll('.file-row').forEach((r, i) => {
+        r.className = 'file-row ' + (i === idx ? 'active' : '');
+    });
+    renderCurrentFilePreview(fileQueue[idx]);
+}
 
-    currentScale = 1.0;
-    title.innerText = file.name;
-    modal.style.display = 'flex';
+// ---------------- 实时 A4 视窗渲染 ----------------
+function renderCurrentFilePreview(file) {
+    const tip = document.getElementById('viewport-empty-tip');
+    const img = document.getElementById('viewport-img');
+    const canvas = document.getElementById('pdf-canvas-render');
 
+    if (!file) {
+        tip.style.display = 'block';
+        img.style.display = 'none';
+        canvas.style.display = 'none';
+        return;
+    }
+
+    tip.style.display = 'none';
     if (file.type.startsWith('image/')) {
         canvas.style.display = 'none';
-        img.style.display = 'inline-block';
-        img.style.transform = 'scale(1.0)';
+        img.style.display = 'block';
         const reader = new FileReader();
         reader.onload = e => { img.src = e.target.result; };
         reader.readAsDataURL(file);
     } else if (file.type === 'application/pdf') {
         img.style.display = 'none';
-        canvas.style.display = 'inline-block';
-        canvas.style.transform = 'scale(1.0)';
+        canvas.style.display = 'block';
         const reader = new FileReader();
         reader.onload = function(e) {
             const typedarray = new Uint8Array(e.target.result);
             pdfjsLib.getDocument(typedarray).promise.then(pdf => {
                 pdf.getPage(1).then(page => {
-                    const viewport = page.getViewport({ scale: 1.5 });
+                    const viewport = page.getViewport({ scale: 0.8 });
                     const context = canvas.getContext('2d');
                     canvas.height = viewport.height;
                     canvas.width = viewport.width;
@@ -420,65 +519,42 @@ function openPreview(idx) {
     }
 }
 
-function zoomPreview(val) {
-    currentScale = Math.max(0.4, Math.min(3.0, currentScale + val));
-    document.getElementById('modal-img').style.transform = `scale(${currentScale})`;
-    document.getElementById('modal-pdf-canvas').style.transform = `scale(${currentScale})`;
-}
-
-function resetZoom() {
-    currentScale = 1.0;
-    document.getElementById('modal-img').style.transform = 'scale(1.0)';
-    document.getElementById('modal-pdf-canvas').style.transform = 'scale(1.0)';
-}
-
-function closeModal() {
-    document.getElementById('preview-modal').style.display = 'none';
-}
-
-// ----------------- 身份证 A4 纸排版操作 -----------------
-function handleIDImage(input, side) {
+// ---------------- 身份证处理 ----------------
+function onIDCardFile(input, side) {
     if (input.files && input.files[0]) {
         const file = input.files[0];
         const reader = new FileReader();
         reader.onload = function(e) {
-            if (side === 'front') {
+            if (side === 'f') {
                 idFrontFile = file;
-                const img = document.getElementById('front-img');
+                const img = document.getElementById('img-id-f-preview');
                 img.src = e.target.result;
                 img.style.display = 'block';
-                document.getElementById('front-label').style.display = 'none';
+                document.getElementById('lbl-id-f').style.display = 'none';
+                document.getElementById('preview-a4-id-f').src = e.target.result;
+                document.getElementById('preview-a4-id-f').style.display = 'block';
             } else {
                 idBackFile = file;
-                const img = document.getElementById('back-img');
+                const img = document.getElementById('img-id-b-preview');
                 img.src = e.target.result;
                 img.style.display = 'block';
-                document.getElementById('back-label').style.display = 'none';
+                document.getElementById('lbl-id-b').style.display = 'none';
+                document.getElementById('preview-a4-id-b').src = e.target.result;
+                document.getElementById('preview-a4-id-b').style.display = 'block';
             }
         };
         reader.readAsDataURL(file);
     }
 }
 
-function resetIDCards() {
-    idFrontFile = null;
-    idBackFile = null;
-    document.getElementById('front-img').style.display = 'none';
-    document.getElementById('back-img').style.display = 'none';
-    document.getElementById('front-label').style.display = 'block';
-    document.getElementById('back-label').style.display = 'block';
-}
-
-// ----------------- 设备与打印交互 -----------------
+// ---------------- 打印机加载与任务提交 ----------------
 function loadPrinters(renderTable) {
     fetch('/api/devices')
         .then(r => r.json())
         .then(d => {
             if (d.success && d.data && d.data.printers) {
                 const sel = document.getElementById('printer-select');
-                const selCard = document.getElementById('idcard-printer-select');
                 sel.innerHTML = '';
-                selCard.innerHTML = '';
                 const tbody = document.getElementById('device-tbody');
                 if (renderTable) tbody.innerHTML = '';
 
@@ -486,16 +562,18 @@ function loadPrinters(renderTable) {
                     const opt = document.createElement('option');
                     opt.value = p.name;
                     opt.innerText = p.name + (p.is_default ? ' (默认)' : '');
-                    if (p.is_default) opt.selected = true;
+                    if (p.is_default) {
+                        opt.selected = true;
+                        document.getElementById('status-printer-name').innerText = p.name;
+                    }
                     sel.appendChild(opt);
-                    selCard.appendChild(opt.cloneNode(true));
 
                     if (renderTable) {
                         const tr = document.createElement('tr');
                         tr.innerHTML = `<td style="padding:10px;"><b>${p.name}</b></td>
-                                        <td style="padding:10px; text-align:center;"><span style="color:#27ae60;">● ${p.status}</span></td>
-                                        <td style="padding:10px; text-align:center;">${p.is_default ? '<b style="color:#2980b9;">默认</b>' : '否'}</td>
-                                        <td style="padding:10px; text-align:center;"><button class="btn btn-secondary" style="width:auto; padding:4px 10px; font-size:12px;" onclick="printTestPage('${p.name}')">打印测试页</button></td>`;
+                                        <td style="padding:10px; text-align:center;"><span style="color:var(--success);">● ${p.status}</span></td>
+                                        <td style="padding:10px; text-align:center;">${p.is_default ? '<b style="color:var(--primary);">默认</b>' : '否'}</td>
+                                        <td style="padding:10px; text-align:center;"><button type="button" class="nav-btn" onclick="printTestPage('${p.name}')">测试页</button></td>`;
                         tbody.appendChild(tr);
                     }
                 });
@@ -503,88 +581,98 @@ function loadPrinters(renderTable) {
         });
 }
 
-function printTestPage(pName) {
-    if (!confirm('确定要在 ' + pName + ' 上打印一张测试页吗？')) return;
-    fetch('/api/printer_admin?action=test_page&printer=' + encodeURIComponent(pName), { method: 'POST' })
-        .then(r => r.json())
-        .then(d => alert(d.message || (d.success ? '测试页已派发' : '下发失败')));
-}
+function submitPrintJob() {
+    const btn = document.getElementById('btn-submit');
+    const alertBox = document.getElementById('print-alert');
+    const printer = document.getElementById('printer-select').value;
+    const copies = document.getElementById('p-copies').value;
+    const duplex = document.getElementById('p-duplex').value;
+    const media = document.getElementById('p-media').value;
+    const enhance = document.getElementById('p-enhance').value;
 
-function cleanSpoolJobs() {
-    if (!confirm('确定要清除所有等待中的打印任务吗？')) return;
-    fetch('/api/printer_admin?action=cancel_all', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            alert(d.message || '打印队列已清空');
-            loadPrinters(true);
-        });
-}
-
-// 通用打印提交 (携带全部列表文件)
-document.getElementById('print-form').onsubmit = function(e) {
-    e.preventDefault();
-    if (selectedFiles.length === 0) {
-        alert('请先选择需要打印的文件！');
+    if (!printer) {
+        alert('请选择打印机！');
         return;
     }
-    const btn = this.querySelector('button[type="submit"]');
-    btn.disabled = true;
-    btn.innerText = '正在智能处理并下发打印...';
 
-    const fd = new FormData(this);
-    fd.delete('file');
-    selectedFiles.forEach(f => fd.append('file', f));
+    // 身份证提交逻辑
+    if (currentPrintType === 'idcard') {
+        if (!idFrontFile || !idBackFile) {
+            alert('请上传身份证正面和反面照片！');
+            return;
+        }
+        btn.disabled = true;
+        btn.innerText = '正在拼版并生成 1:1 标准规格...';
+
+        const fd = new FormData();
+        fd.append('printer', printer);
+        fd.append('copies', copies);
+        fd.append('front', idFrontFile);
+        fd.append('back', idBackFile);
+
+        fetch('/api/idcard', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                btn.disabled = false;
+                btn.innerText = '🚀 提交打印任务';
+                alertBox.style.display = 'block';
+                alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
+                alertBox.innerText = res.message;
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerText = '🚀 提交打印任务';
+                alertBox.style.display = 'block';
+                alertBox.className = 'status-alert status-error';
+                alertBox.innerText = '请求异常: ' + err;
+            });
+        return;
+    }
+
+    // 标准/发票打印提交逻辑
+    if (fileQueue.length === 0) {
+        alert('请先选择或拖拽上传需要打印的文件！');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = '正在优化图像并下发 CUPS 队列...';
+
+    const fd = new FormData();
+    fd.append('printer', printer);
+    fd.append('copies', copies);
+    fd.append('duplex', duplex);
+    fd.append('color_mode', currentColorMode);
+    fd.append('media', media);
+    fd.append('enhance', enhance);
+
+    fileQueue.forEach(f => fd.append('file', f));
 
     fetch('/api/print', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(res => {
             btn.disabled = false;
-            btn.innerText = '🚀 开始打印 (内部硬件级缩放留白，内容绝对居中)';
-            showStatus('print-status', res.success, res.message || (res.success ? '任务已成功发送' : '打印失败'));
+            btn.innerText = '🚀 提交打印任务';
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
+            alertBox.innerText = res.message;
             if (res.success) clearAllFiles();
         })
         .catch(err => {
             btn.disabled = false;
-            btn.innerText = '🚀 开始打印 (内部硬件级缩放留白，内容绝对居中)';
-            showStatus('print-status', false, '网络或服务异常: ' + err);
+            btn.innerText = '🚀 提交打印任务';
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '服务异常: ' + err;
         });
-};
+}
 
-// 身份证排版打印提交
-document.getElementById('idcard-form').onsubmit = function(e) {
-    e.preventDefault();
-    if (!idFrontFile || !idBackFile) {
-        alert('请点击 A4 框分别上传身份证的【正面】和【反面】图片！');
-        return;
-    }
-    const btn = this.querySelector('button[type="submit"]');
-    btn.disabled = true;
-    btn.innerText = '正在拼版并生成 1:1 标准规格...';
-
-    const fd = new FormData(this);
-    fd.append('front', idFrontFile);
-    fd.append('back', idBackFile);
-
-    fetch('/api/idcard', { method: 'POST', body: fd })
-        .then(r => r.json())
-        .then(res => {
-            btn.disabled = false;
-            btn.innerText = '🪪 自动漂白拼版并 1:1 打印';
-            showStatus('idcard-status', res.success, res.message || (res.success ? '身份证已下发打印' : '打印失败'));
-        })
-        .catch(err => {
-            btn.disabled = false;
-            btn.innerText = '🪪 自动漂白拼版并 1:1 打印';
-            showStatus('idcard-status', false, '服务请求异常: ' + err);
-        });
-};
-
-// 扫描与邮箱
+// ---------------- 扫描与设备管理操作 ----------------
 function loadScanDevices() {
     fetch('/api/scan/devices')
         .then(r => r.json())
         .then(d => {
-            const sel = document.getElementById('scan-device-select');
+            const sel = document.getElementById('scan-dev-select');
             sel.innerHTML = '';
             if (d.success && d.data && d.data.devices && d.data.devices.length > 0) {
                 d.data.devices.forEach(dev => {
@@ -596,21 +684,21 @@ function loadScanDevices() {
             } else {
                 const opt = document.createElement('option');
                 opt.value = '';
-                opt.innerText = '未检测到可用扫描仪 (请检查通电与USB)';
+                opt.innerText = '未检测到可用扫描仪';
                 sel.appendChild(opt);
             }
         });
 }
 
 function startScan() {
-    const btn = document.getElementById('btn-scan');
-    const dev = document.getElementById('scan-device-select').value;
+    const dev = document.getElementById('scan-dev-select').value;
     const res = document.getElementById('scan-res').value;
     const mode = document.getElementById('scan-mode').value;
+    const alertBox = document.getElementById('scan-alert');
 
-    btn.disabled = true;
-    btn.innerText = '正在驱动硬件扫描并拉平增强，请稍候...';
-    document.getElementById('scan-preview').style.display = 'none';
+    alertBox.style.display = 'block';
+    alertBox.className = 'status-alert status-success';
+    alertBox.innerText = '正在驱动硬件扫描并拉平去灰底，请稍候...';
 
     const fd = new FormData();
     fd.append('device', dev);
@@ -620,26 +708,29 @@ function startScan() {
     fetch('/api/scan', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
-            btn.disabled = false;
-            btn.innerText = '📷 启动硬件扫描 (A4 边界保护 + 自动去黑条)';
             if (d.success) {
-                showStatus('scan-status', true, '扫描成功！已完成白底增强与无伤裁切');
-                const img = document.getElementById('scan-img');
-                img.src = d.data.url + '?t=' + new Date().getTime();
-                document.getElementById('scan-download').href = '/api/scan/download?file=' + d.data.filename;
-                document.getElementById('scan-preview').style.display = 'block';
+                alertBox.innerText = '扫描成功！已完成白底增强';
+                document.getElementById('scan-img-elem').src = d.data.url + '?t=' + new Date().getTime();
+                document.getElementById('scan-dl-btn').href = '/api/scan/download?file=' + d.data.filename;
+                document.getElementById('scan-res-box').style.display = 'block';
             } else {
-                showStatus('scan-status', false, '扫描失败: ' + d.message);
+                alertBox.className = 'status-alert status-error';
+                alertBox.innerText = '扫描中断: ' + d.message;
             }
-        })
-        .catch(err => {
-            btn.disabled = false;
-            btn.innerText = '📷 启动硬件扫描 (A4 边界保护 + 自动去黑条)';
-            showStatus('scan-status', false, '请求中断: ' + err);
         });
 }
 
-// 加载邮箱配置
+function printTestPage(p) {
+    fetch('/api/printer_admin?action=test_page&printer=' + encodeURIComponent(p), { method: 'POST' })
+        .then(r => r.json()).then(d => alert(d.message));
+}
+
+function cleanSpoolJobs() {
+    fetch('/api/printer_admin?action=cancel_all', { method: 'POST' })
+        .then(r => r.json()).then(d => { alert(d.message); loadPrinters(true); });
+}
+
+// ---------------- 云邮箱设置保存 (原生 FormData 提交，100% 解决保存失败) ----------------
 function loadMailConfig() {
     fetch('/api/mail_config')
         .then(r => r.json())
@@ -655,17 +746,13 @@ function loadMailConfig() {
                 document.getElementById('mail_keyword').value = cfg.keyword || '';
                 document.getElementById('mail_whitelist').value = cfg.whitelist || '';
             }
-        })
-        .catch(err => {
-            console.error('加载邮箱配置失败:', err);
         });
 }
 
-// 保存邮箱配置 (使用原生 FormData 方式，确保参数稳定传递)
-document.getElementById('mail-form').onsubmit = function(e) {
+document.getElementById('mail-cfg-form').onsubmit = function(e) {
     e.preventDefault();
     const btn = this.querySelector('button[type="submit"]');
-    const originalText = btn.innerText;
+    const alertBox = document.getElementById('mail-alert');
     btn.disabled = true;
     btn.innerText = '正在保存配置...';
 
@@ -678,29 +765,31 @@ document.getElementById('mail-form').onsubmit = function(e) {
     fd.append('pushplus_token', document.getElementById('mail_pushplus_token').value.trim());
     fd.append('keyword', document.getElementById('mail_keyword').value.trim());
     fd.append('whitelist', document.getElementById('mail_whitelist').value.trim());
-    
+
     const printerSelect = document.getElementById('printer-select');
     if (printerSelect && printerSelect.value) {
         fd.append('default_printer', printerSelect.value);
     }
 
-    fetch('/api/mail_config', {
-        method: 'POST',
-        body: fd
-    })
-    .then(r => r.json())
-    .then(d => {
-        btn.disabled = false;
-        btn.innerText = originalText;
-        showStatus('mail-status', d.success, d.message || (d.success ? '设置已更新生效' : '保存失败'));
-    })
-    .catch(err => {
-        btn.disabled = false;
-        btn.innerText = originalText;
-        showStatus('mail-status', false, '保存错误: ' + err);
-    });
+    fetch('/api/mail_config', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.innerText = '💾 保存云邮件配置并立即生效';
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
+            alertBox.innerText = d.message || (d.success ? '设置已更新生效' : '保存失败');
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerText = '💾 保存云邮件配置并立即生效';
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '保存错误: ' + err;
+        });
 };
 
+// 页面初始化
 loadPrinters(false);
 </script>
 
