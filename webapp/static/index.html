@@ -31,6 +31,8 @@
         .btn-danger:hover { background: #c0392b; }
         .btn-secondary { background: #95a5a6; }
         .btn-secondary:hover { background: #7f8c8d; }
+        .btn-warning { background: #e67e22; }
+        .btn-warning:hover { background: #d35400; }
         .status-box { margin-top: 15px; padding: 12px; border-radius: 6px; display: none; font-size: 14px; word-break: break-all; }
         .status-success { background: #e8f8f5; color: #27ae60; border: 1px solid #a3e4d7; }
         .status-error { background: #fdedec; color: #e74c3c; border: 1px solid #f5b7b1; }
@@ -117,7 +119,7 @@
                 <div class="col form-group">
                     <label>智能试卷优化</label>
                     <select name="enhance" class="form-control">
-                        <option value="true" selected>开启 (去灰底白底化、笔迹加黑、92%防切字留白)</option>
+                        <option value="true" selected>开启 (去灰底白底化、笔迹加黑、90%防切字留白)</option>
                         <option value="false">关闭 (原样输出)</option>
                     </select>
                 </div>
@@ -161,16 +163,16 @@
 
             <div class="a4-sheet-container">
                 <div class="a4-sheet">
-                    <span style="position:absolute; top:8px; left:12px; font-size:11px; color:#95a5a6;">A4 标准标准排版框 (210mm × 297mm)</span>
+                    <span style="position:absolute; top:8px; left:12px; font-size:11px; color:#95a5a6;">A4 标准排版框 (210mm × 297mm)</span>
                     <!-- 正面点击上传框 -->
                     <div class="idcard-placeholder" onclick="document.getElementById('id-front-input').click()">
                         <span class="idcard-label" id="front-label">点击上传：身份证人像面 (正面)</span>
-                        <img id="front-img" style="display:none;">
+                        <img id="front-img" style="display:none;" alt="正面">
                     </div>
                     <!-- 反面点击上传框 -->
                     <div class="idcard-placeholder" onclick="document.getElementById('id-back-input').click()">
                         <span class="idcard-label" id="back-label">点击上传：身份证国徽面 (反面)</span>
-                        <img id="back-img" style="display:none;">
+                        <img id="back-img" style="display:none;" alt="反面">
                     </div>
                 </div>
             </div>
@@ -209,7 +211,7 @@
         <button type="button" id="btn-scan" class="btn btn-success" onclick="startScan()">📷 启动硬件扫描 (A4 边界保护 + 自动去黑条)</button>
         <div id="scan-status" class="status-box"></div>
         <div id="scan-preview" style="display:none; text-align:center; margin-top:20px;">
-            <img id="scan-img" style="max-width:100%; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+            <img id="scan-img" style="max-width:100%; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="扫描结果">
             <div style="margin-top:15px;">
                 <a id="scan-download" href="#" class="btn" style="width:auto; padding:10px 25px; text-decoration:none;">💾 下载高清扫描件</a>
             </div>
@@ -296,7 +298,7 @@
             <button type="button" class="btn-sm btn-secondary" onclick="resetZoom()">↺ 还原</button>
         </div>
         <div class="modal-body" id="modal-container">
-            <img id="modal-img" style="transform-origin: center top; transition: transform 0.2s;" src="">
+            <img id="modal-img" style="transform-origin: center top; transition: transform 0.2s;" src="" alt="预览">
             <canvas id="modal-pdf-canvas" style="transform-origin: center top; transition: transform 0.2s; display:none;"></canvas>
         </div>
     </div>
@@ -518,7 +520,7 @@ function cleanSpoolJobs() {
         });
 }
 
-// 打印提交 (携带全部列表文件)
+// 通用打印提交 (携带全部列表文件)
 document.getElementById('print-form').onsubmit = function(e) {
     e.preventDefault();
     if (selectedFiles.length === 0) {
@@ -637,13 +639,14 @@ function startScan() {
         });
 }
 
+// 加载邮箱配置
 function loadMailConfig() {
     fetch('/api/mail_config')
         .then(r => r.json())
         .then(d => {
             if (d.success && d.data) {
                 const cfg = d.data;
-                document.getElementById('mail_enable').value = cfg.enable ? 'true' : 'false';
+                document.getElementById('mail_enable').value = (cfg.enable === true || cfg.enable === 'true') ? 'true' : 'false';
                 document.getElementById('mail_server').value = cfg.server || 'imap.qq.com';
                 document.getElementById('mail_port').value = cfg.port || 993;
                 document.getElementById('mail_user').value = cfg.user || '';
@@ -652,32 +655,48 @@ function loadMailConfig() {
                 document.getElementById('mail_keyword').value = cfg.keyword || '';
                 document.getElementById('mail_whitelist').value = cfg.whitelist || '';
             }
+        })
+        .catch(err => {
+            console.error('加载邮箱配置失败:', err);
         });
 }
 
+// 保存邮箱配置 (使用原生 FormData 方式，确保参数稳定传递)
 document.getElementById('mail-form').onsubmit = function(e) {
     e.preventDefault();
-    const payload = {
-        enable: document.getElementById('mail_enable').value === 'true',
-        server: document.getElementById('mail_server').value.trim(),
-        port: parseInt(document.getElementById('mail_port').value) || 993,
-        user: document.getElementById('mail_user').value.trim(),
-        password: document.getElementById('mail_password').value.trim(),
-        pushplus_token: document.getElementById('mail_pushplus_token').value.trim(),
-        keyword: document.getElementById('mail_keyword').value.trim(),
-        whitelist: document.getElementById('mail_whitelist').value.trim()
-    };
+    const btn = this.querySelector('button[type="submit"]');
+    const originalText = btn.innerText;
+    btn.disabled = true;
+    btn.innerText = '正在保存配置...';
+
+    const fd = new FormData();
+    fd.append('enable', document.getElementById('mail_enable').value);
+    fd.append('server', document.getElementById('mail_server').value.trim());
+    fd.append('port', document.getElementById('mail_port').value.trim());
+    fd.append('user', document.getElementById('mail_user').value.trim());
+    fd.append('password', document.getElementById('mail_password').value.trim());
+    fd.append('pushplus_token', document.getElementById('mail_pushplus_token').value.trim());
+    fd.append('keyword', document.getElementById('mail_keyword').value.trim());
+    fd.append('whitelist', document.getElementById('mail_whitelist').value.trim());
+    
+    const printerSelect = document.getElementById('printer-select');
+    if (printerSelect && printerSelect.value) {
+        fd.append('default_printer', printerSelect.value);
+    }
 
     fetch('/api/mail_config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: fd
     })
     .then(r => r.json())
     .then(d => {
+        btn.disabled = false;
+        btn.innerText = originalText;
         showStatus('mail-status', d.success, d.message || (d.success ? '设置已更新生效' : '保存失败'));
     })
     .catch(err => {
+        btn.disabled = false;
+        btn.innerText = originalText;
         showStatus('mail-status', false, '保存错误: ' + err);
     });
 };
