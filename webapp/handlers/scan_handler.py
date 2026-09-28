@@ -6,18 +6,28 @@ import time
 import uuid
 import subprocess
 import threading
-from PIL import Image
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
 SCAN_DIR = "/opt/webapp/static/scans"
 os.makedirs(SCAN_DIR, exist_ok=True)
 
+def release_usb_lock():
+    """
+    释放底层 USB 端口占用，防止 SANE 与 CUPS 冲突抛出 Error during device I/O
+    """
+    try:
+        subprocess.run(["rmmod", "usblp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 def detect_scan_devices():
     devices = []
+    seen = set()
     try:
         env = os.environ.copy()
         env["LANG"] = "C"
+        env["SANE_CONFIG_DIR"] = "/etc/sane.d"
         res = subprocess.run(["scanimage", "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=6)
         for line in res.stdout.splitlines():
             line = line.strip()
@@ -25,22 +35,29 @@ def detect_scan_devices():
                 parts = line.split("`", 1)[1].split("'", 1)
                 dev_id = parts[0].strip()
                 dev_desc = parts[1].replace("is a", "").strip() if len(parts) > 1 else dev_id
-                
-                if dev_id.startswith("hpaio"):
-                    devices.insert(0, {"id": dev_id, "name": f"HP 官方通道 ({dev_desc})"})
+
+                if dev_id in seen:
+                    continue
+                seen.add(dev_id)
+
+                if dev_id.startswith("airscan"):
+                    devices.insert(0, {"id": dev_id, "name": f"🌐 局域网免驱 ({dev_desc})"})
+                elif dev_id.startswith("hpaio"):
+                    devices.append({"id": dev_id, "name": f"🔌 HP 硬件专有驱动 ({dev_desc})"})
                 else:
-                    devices.append({"id": dev_id, "name": dev_desc})
+                    devices.append({"id": dev_id, "name": f"📷 通用扫描仪 ({dev_desc})"})
     except Exception as e:
         print(f"[ScanHandler] 动态枚举异常: {e}", flush=True)
 
-    # 兜底通道：当 scanimage -L 阻塞时，检测 USB 硬件 ID 自动匹配
+    # 兜底通道：当探测超时，自动探测 USB 节点匹配直通通道
     if not devices:
         try:
-            lsusb_res = subprocess.run(["lsusb"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if "03f0:222a" in lsusb_res.stdout:
-                fallback_uri = "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=CNBKK873D4"
-                print(f"[ScanHandler] 触发硬件兜底通道: {fallback_uri}", flush=True)
-                devices.append({"id": fallback_uri, "name": "HP LaserJet Pro MFP M126a (直通模式)"})
+            lsusb = subprocess.run(["lsusb"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
+            if "03f0:222a" in lsusb:
+                devices.append({
+                    "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=CNBKK873D4",
+                    "name": "🔌 HP LaserJet Pro MFP M126a (直通模式)"
+                })
         except Exception:
             pass
 
@@ -52,10 +69,13 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
     raw_path = os.path.join(SCAN_DIR, f"raw_{token}.jpg")
     final_path = os.path.join(SCAN_DIR, output_filename)
 
+    release_usb_lock()
+
     env = os.environ.copy()
     env["LANG"] = "C"
+    env["SANE_CONFIG_DIR"] = "/etc/sane.d"
 
-    # 严格限定 A4 边界 (210mm x 297mm)
+    # 限定 A4 物理边界与格式输出
     cmd = [
         "scanimage",
         "-d", device_id,
@@ -68,17 +88,29 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
         "--format=jpeg"
     ]
 
-    print(f"[ScanHandler] 下发扫描任务: {' '.join(cmd)}", flush=True)
+    print(f"[ScanHandler] 执行硬件扫描任务: {' '.join(cmd)}", flush=True)
     with open(raw_path, "wb") as f_out:
-        res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=60)
+        res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=90)
+
+    # 针对 Device I/O 冲突增加二次重试
+    if res.returncode != 0:
+        err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
+        print(f"[ScanHandler] 首次扫描失败: {err_msg}", flush=True)
+        if "device I/O" in err_msg or "busy" in err_msg.lower():
+            time.sleep(1.2)
+            release_usb_lock()
+            with open(raw_path, "wb") as f_out:
+                res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=90)
 
     if res.returncode != 0:
         err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
-        print(f"[ScanHandler] 扫描硬件通信失败: {err_msg}", flush=True)
         if os.path.exists(raw_path):
             os.remove(raw_path)
-        raise RuntimeError(err_msg or "硬件通信超时，请检查一体机 USB 连接")
+        if "device I/O" in err_msg:
+            raise RuntimeError("扫描仪 USB 硬件处于繁忙或死锁状态，请将一体机断电重启后重试！")
+        raise RuntimeError(err_msg or "扫描仪硬件通信超时")
 
+    # 接入仿扫描全能王图像流水线增强
     try:
         if not process_image_for_print(raw_path, final_path):
             os.rename(raw_path, final_path)
@@ -86,7 +118,7 @@ def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
             if os.path.exists(raw_path):
                 os.remove(raw_path)
     except Exception as e:
-        print(f"[ScanHandler] 图像优化异常，使用原始扫描件: {e}", flush=True)
+        print(f"[ScanHandler] 图像处理异常，返回原图: {e}", flush=True)
         os.rename(raw_path, final_path)
 
     return f"/static/scans/{output_filename}", output_filename
@@ -106,7 +138,7 @@ class ScanHandler(BaseHandler):
             if not device:
                 devs = detect_scan_devices()
                 if not devs:
-                    self.write_json(False, "未检测到可用的扫描仪硬件，请确认一体机已通电并连接 USB")
+                    self.write_json(False, "未检测到可用扫描设备，请确认一体机已通电并连接 USB")
                     return
                 device = devs[0]["id"]
 
