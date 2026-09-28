@@ -40,17 +40,20 @@ def load_mail_config():
 
 def save_mail_config(cfg):
     try:
-        # 确保目录存在且有权限
         cfg_dir = os.path.dirname(CONFIG_FILE)
         os.makedirs(cfg_dir, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        # 兼容宿主机挂载的各种异常文件锁
+        tmp_file = CONFIG_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, CONFIG_FILE)
         os.chmod(CONFIG_FILE, 0o666)
         mail_wake_event.set()
-        return True
+        return True, ""
     except Exception as e:
-        print(f"[MailConfig] 写入配置异常: {e}", flush=True)
-        return False
+        err = str(e)
+        print(f"[MailConfig] 写入配置失败: {err}", flush=True)
+        return False, err
 
 def push_wechat_notice(token, title, content):
     if not token:
@@ -125,7 +128,6 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
         "-o", "media=A4",
         "-o", "PageSize=A4",
         "-o", "fit-to-page",
-        "-o", "natural-scaling=95",
         "-o", "position=center",
         target_file
     ]
@@ -257,9 +259,10 @@ class MailConfigHandler(BaseHandler):
                 "default_printer": default_printer
             }
 
-            if save_mail_config(new_cfg):
+            ok, err = save_mail_config(new_cfg)
+            if ok:
                 self.write_json(True, "云邮件及 PushPlus 微信通知设置已保存生效！")
             else:
-                self.write_json(False, "配置文件写入失败，请检查 /opt/webapp 目录权限")
+                self.write_json(False, f"配置文件写入失败: {err}")
         except Exception as e:
             self.write_json(False, f"保存配置异常: {str(e)}")
