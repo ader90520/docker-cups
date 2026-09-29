@@ -97,8 +97,7 @@ def make_app():
 
 if __name__ == "__main__":
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    os.system("fuser -k 8088/tcp 2>/dev/null || true")
     app = make_app()
     app.listen(8088, address="0.0.0.0")
-    print("[Server] CUPS Web 服务已启动，监听端口 8088...", flush=True)
+    print("[Server] CUPS Web 服务已启动，监听端口 0.0.0.0:8088...", flush=True)
     tornado.ioloop.IOLoop.current().start()
