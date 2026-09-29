@@ -251,9 +251,8 @@ def process_image_for_print(input_path, output_path):
 
             ink_mask = (divided < 218.0) & ((grad_pad > 11.0) | (divided < 170.0))
             
-            # 【核心修复】：自然层次渐变加黑，彻底根治字体过浓、粗黑粘连
+            # 自然阶调映射：45 ~ 95 之间，清秀深黑，彻底消除糊字
             ink_vals = divided[ink_mask]
-            # 映射到 45 ~ 85 之间，清秀自然、深黑且绝不洇墨
             natural_ink = np.clip(ink_vals * 0.45, 45.0, 95.0)
             out[ink_mask] = natural_ink
 
@@ -307,7 +306,7 @@ def process_image_for_print(input_path, output_path):
 
             ink_mask = (divided < 218.0) & ((grad_pad > 11.0) | (divided < 170.0))
             
-            # 【核心修复】：自然层次渐变加黑
+            # 自然阶调映射：45 ~ 95 之间
             ink_vals = divided[ink_mask]
             natural_ink = np.clip(ink_vals * 0.45, 45.0, 95.0)
             out[ink_mask] = natural_ink
