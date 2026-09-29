@@ -11,22 +11,38 @@ export LANGUAGE="zh_CN:zh"
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 if ! id "$CUPS_USER" &>/dev/null; then
-    useradd -r -G lpadmin -M -s /usr/sbin/nologin "$CUPS_USER"
+    useradd -r -G lpadmin,scanner -M -s /usr/sbin/nologin "$CUPS_USER"
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
+usermod -a -G lp,scanner root 2>/dev/null || true
 
-# 2. 运行时目录及权限保障（保留 data 目录与旧配置迁移，确保保存成功）
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data
-chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data 2>/dev/null || true
+# 2. 运行时目录与锁文件重置（清理残留锁，防止服务启动崩溃）
+rm -rf /var/run/dbus/* /var/run/avahi-daemon/* /var/lock/sane/* /var/run/cups/cups.sock 2>/dev/null || true
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data
+chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data 2>/dev/null || true
 
-# 自动处理可能遗留的旧路径配置
-if [ -f "/opt/webapp/mail_config.json" ] && [ ! -f "/opt/webapp/data/mail_config.json" ]; then
-    cp -f /opt/webapp/mail_config.json /opt/webapp/data/mail_config.json 2>/dev/null || true
+# 3. 彻底修复 Avahi 容器化崩溃问题（禁用 rlimit，允许在 host 模式广播）
+if [ -f /etc/avahi/avahi-daemon.conf ]; then
+    sed -i 's/^rlimit-/#rlimit-/g' /etc/avahi/avahi-daemon.conf
+    sed -i 's/^#enable-dbus=yes/enable-dbus=yes/g' /etc/avahi/avahi-daemon.conf
+    sed -i 's/^enable-dbus=no/enable-dbus=yes/g' /etc/avahi/avahi-daemon.conf
+    sed -i 's/^use-iff-running=yes/use-iff-running=no/g' /etc/avahi/avahi-daemon.conf
 fi
 
-# 3. 容器内热插拔守护
+# 4. 唤醒系统底层 D-Bus 与 Avahi 广播
+echo ">>> [Init] 启动 D-Bus 系统总线..."
+dbus-uuidgen --ensure 2>/dev/null || true
+mkdir -p /var/run/dbus
+dbus-daemon --system --fork 2>/dev/null || service dbus start 2>/dev/null || true
+sleep 1
+
+echo ">>> [Init] 启动 Avahi mDNS 广播守护进程..."
+avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
+sleep 1
+
+# 5. 唤醒 SANE 扫描仪配置与 USB 热插拔
 auto_usb_daemon() {
-    echo ">>> [Hotplug] 容器内自动热插拔守护已上线..."
+    echo ">>> [Hotplug] 容器内自动热插拔与扫描端点守护已上线..."
     while true; do
         if lsmod 2>/dev/null | grep -q usblp; then
             rmmod usblp 2>/dev/null || true
@@ -34,16 +50,14 @@ auto_usb_daemon() {
         if [ -d /dev/bus/usb ]; then
             chmod -R 666 /dev/bus/usb 2>/dev/null || true
         fi
-        sleep 3
+        # 保持 SANE hpaio 端口响应
+        hp-probe -busb 2>/dev/null || true
+        sleep 5
     done
 }
 auto_usb_daemon &
 
-# 4. 唤醒系统底层服务
-/bin/bash /opt/modules/init/10_dbus.sh 2>/dev/null || true
-/bin/bash /opt/modules/init/20_sane.sh 2>/dev/null || true
-
-# 5. 生成标准健壮的 cupsd.conf
+# 6. 生成标准健壮的 cupsd.conf
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -123,9 +137,8 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ==================== 全量部署纯净中文，彻底剔除所有跳转代码 ====================
-echo ">>> [Patch] 部署纯净全中文模板（彻底剔除任何跳转代码）..."
-
+# ==================== 全量部署纯净中文 ====================
+echo ">>> [Patch] 部署纯净全中文模板..."
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 
 if [ -d /tmp/zh_templates ]; then
@@ -146,17 +159,14 @@ if [ -f /tmp/index.html ]; then
     sed -i '/8088/d' /usr/share/cups/doc-root/index.html 2>/dev/null || true
     chmod 644 /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
-# ======================================================================
+# =========================================================
 
 echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
 /usr/sbin/cupsd
 sleep 2
 
-service avahi-daemon start 2>/dev/null || true
-
-# 6. 关闭 set -e 保护，启动 8088 综合控制台
+# 7. 启动 8088 综合控制台
 set +e
-
 echo ">>> [2/2] 启动 8088 综合控制台..."
 cd /opt/webapp
 export PYTHONPATH="/opt/webapp:${PYTHONPATH}"
