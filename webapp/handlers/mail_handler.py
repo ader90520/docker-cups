@@ -20,14 +20,14 @@ CONFIG_FILE = "/opt/webapp/mail_config.json"
 mail_wake_event = threading.Event()
 
 def load_mail_config():
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(CONFIG_FILE) and os.path.isfile(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content:
                     return json.loads(content)
         except Exception as e:
-            print(f"[MailConfig] 读取异常: {e}", flush=True)
+            print(f"[MailConfig] 读取配置异常: {e}", flush=True)
     return {
         "enable": False,
         "server": "imap.qq.com",
@@ -42,13 +42,17 @@ def load_mail_config():
 
 def save_mail_config(cfg):
     try:
+        # 如果挂载点被宿主机误创建为目录，强行纠正
+        if os.path.exists(CONFIG_FILE) and os.path.isdir(CONFIG_FILE):
+            os.system(f"rm -rf {CONFIG_FILE}")
+
         cfg_dir = os.path.dirname(CONFIG_FILE)
         if cfg_dir and not os.path.exists(cfg_dir):
             os.makedirs(cfg_dir, exist_ok=True)
 
         json_str = json.dumps(cfg, ensure_ascii=False, indent=2)
 
-        # 直接写入截断，避免跨文件系统 rename 抛出 Invalid argument
+        # 覆写文件
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
             f.flush()
@@ -79,7 +83,7 @@ def push_wechat_notice(token, title, content):
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=8)
     except Exception as e:
-        print(f"[PushPlus] 推送异常: {e}", flush=True)
+        print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
 
 def get_target_printer(preferred_printer=""):
     if preferred_printer:
@@ -281,6 +285,6 @@ class MailConfigHandler(BaseHandler):
             if ok:
                 self.write_json(True, "云邮箱及微信通知设置已成功保存并立即生效！")
             else:
-                self.write_json(False, f"保存失败: {err}")
+                self.write_json(False, f"写入配置失败: {err}")
         except Exception as e:
-            self.write_json(False, f"保存失败，系统异常: {str(e)}")
+            self.write_json(False, f"保存异常: {str(e)}")
