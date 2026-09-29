@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 1. 大内存版依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、OpenCV视觉处理全家桶
+# 1. 大内存版依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、OpenCV视觉处理全家桶、隔空打印PDF处理组件
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -38,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-requests \
     python3-numpy \
     python3-opencv \
+    poppler-utils \
+    img2pdf \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
@@ -89,9 +91,10 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 准备运行目录及扫描临时输出目录
+# 7. 准备运行目录及扫描临时输出目录（追加 /opt/webapp/data 专属持久化目录）
 RUN mkdir -p /opt/cups_data \
              /scans \
+             /opt/webapp/data \
              /opt/webapp/static/scans \
              /opt/webapp/static/uploads \
              /tmp/cups_web_uploads \
@@ -99,7 +102,7 @@ RUN mkdir -p /opt/cups_data \
              /etc/cups/ssl \
              /var/lock/sane \
              /var/run/dbus && \
-    chmod -R 777 /scans /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
+    chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
     chmod 700 /etc/cups/ssl
 
 EXPOSE 631 8088
