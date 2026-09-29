@@ -21,7 +21,6 @@ class IDCardHandler(BaseHandler):
                 self.write_json(False, "必须同时上传身份证正面与反面照片")
                 return
 
-            # 安全校验：防止命令注入
             if not printer or printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', printer):
                 self.write_json(False, "非法打印机设备名称")
                 return
@@ -45,14 +44,14 @@ class IDCardHandler(BaseHandler):
             f_opt = os.path.join(UPLOAD_DIR, f"idf_opt_{token}.jpg")
             b_opt = os.path.join(UPLOAD_DIR, f"idb_opt_{token}.jpg")
 
-            # 双面执行去黑底、阶调加黑与去透墨
+            # 双面执行去黑底、自然阶调加黑与去透墨
             if not process_image_for_print(f_src, f_opt):
                 f_opt = f_src
             if not process_image_for_print(b_src, b_opt):
                 b_opt = b_src
 
             # A4 300DPI 标准像素尺寸: 2480 x 3508
-            # 身份证标准比例: 85.6mm x 54mm -> 对应 300DPI 约为 1010 x 638 像素
+            # 身份证标准规格: 85.6mm x 54mm -> 300DPI 下为 1010 x 638 像素
             canvas = Image.new("RGB", (2480, 3508), (255, 255, 255))
             card_w, card_h = 1010, 638
 
