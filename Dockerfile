@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 1. 大内存版依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、OpenCV视觉处理全家桶、隔空打印PDF处理组件
+# 1. 大内存版依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、OpenCV视觉处理全家桶
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -38,8 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-requests \
     python3-numpy \
     python3-opencv \
-    poppler-utils \
-    img2pdf \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
@@ -53,15 +51,9 @@ COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/zh_CN/ /opt/i18/
 
-# 3. 递归清洗换行符、赋权，并挂载隔空打印过滤器
+# 3. 递归清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
-    chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true && \
-    if [ -f /opt/webapp/filter/cups_image_enhancer ]; then \
-        cp -f /opt/webapp/filter/cups_image_enhancer /usr/lib/cups/filter/cups_image_enhancer && \
-        dos2unix /usr/lib/cups/filter/cups_image_enhancer 2>/dev/null || true && \
-        chown root:root /usr/lib/cups/filter/cups_image_enhancer && \
-        chmod 755 /usr/lib/cups/filter/cups_image_enhancer; \
-    fi
+    chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
 # 4. 构建期固化 HPLIP 专有扫描插件 (SourceForge 源防403，静默应答免交互)
 ARG HPLIP_VER=3.22.10
@@ -97,7 +89,7 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 准备运行目录及扫描临时输出目录（包含持久化数据目录 /opt/webapp/data）
+# 7. 准备运行目录及扫描临时输出目录（保留 /opt/webapp/data 专属持久化目录规范）
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
