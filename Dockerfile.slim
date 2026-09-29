@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 深度精准安装：基础库、CUPS、字体、全品牌扫描依赖（libsane-common + sane-airscan，不装体积巨大的 printer-driver-all）
+# 1. 精简依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、PIL+NumPy轻量图像引擎、隔空打印PDF处理组件 (不装 OpenCV 避免 1GB 内存受限崩溃)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,6 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tornado \
     python3-requests \
     python3-numpy \
+    poppler-utils \
+    img2pdf \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
@@ -46,11 +48,17 @@ COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/zh_CN/ /opt/i18/
 
-# 3. 递归清洗换行符并赋权
+# 3. 递归清洗换行符、赋权，并挂载隔空打印过滤器
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
-    chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
+    chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true && \
+    if [ -f /opt/webapp/filter/cups_image_enhancer ]; then \
+        cp -f /opt/webapp/filter/cups_image_enhancer /usr/lib/cups/filter/cups_image_enhancer && \
+        dos2unix /usr/lib/cups/filter/cups_image_enhancer 2>/dev/null || true && \
+        chown root:root /usr/lib/cups/filter/cups_image_enhancer && \
+        chmod 755 /usr/lib/cups/filter/cups_image_enhancer; \
+    fi
 
-# 4. 固化安装 HPLIP 专有扫描插件 (SourceForge 防403 + 全自动静默应答，彻底根治 SANE 硬件 I/O 错误)
+# 4. 构建期固化 HPLIP 专有扫描插件 (SourceForge 源防403，静默应答免交互)
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -63,7 +71,7 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 6. 构建期直接注入中文语言包与模板
+# 6. 构建期注入中文语言包与模板
 RUN mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
@@ -84,9 +92,18 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 准备运行目录及扫描临时输出目录
-RUN mkdir -p /opt/cups_data /scans /opt/webapp/static/scans /opt/webapp/static/uploads /tmp/cups_web_uploads /tmp/mail_print_tasks /etc/cups/ssl /var/lock/sane /var/run/dbus && \
-    chmod -R 777 /scans /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
+# 7. 准备运行目录及扫描临时输出目录（包含持久化数据目录 /opt/webapp/data）
+RUN mkdir -p /opt/cups_data \
+             /scans \
+             /opt/webapp/data \
+             /opt/webapp/static/scans \
+             /opt/webapp/static/uploads \
+             /tmp/cups_web_uploads \
+             /tmp/mail_print_tasks \
+             /etc/cups/ssl \
+             /var/lock/sane \
+             /var/run/dbus && \
+    chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
     chmod 700 /etc/cups/ssl
 
 EXPOSE 631 8088
