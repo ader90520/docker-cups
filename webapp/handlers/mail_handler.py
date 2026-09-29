@@ -45,9 +45,10 @@ def save_mail_config(cfg):
         cfg_dir = os.path.dirname(CONFIG_FILE)
         if cfg_dir and not os.path.exists(cfg_dir):
             os.makedirs(cfg_dir, exist_ok=True)
-            
+
         json_str = json.dumps(cfg, ensure_ascii=False, indent=2)
-        # 使用 r+ 或 w 截断写入，杜绝跨文件系统重命名引发的权限死锁
+
+        # 直接写入截断，避免跨文件系统 rename 抛出 Invalid argument
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
             f.flush()
