@@ -3,8 +3,11 @@
 
 import os
 import sys
+import re
 import json
 import time
+import uuid
+import shutil
 import subprocess
 import threading
 import email
@@ -14,9 +17,8 @@ import imaplib
 import urllib.request
 import urllib.parse
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
-from handlers.print_handler import process_image_for_print
+from handlers.print_handler import process_image_for_print, clean_old_tmp_files
 
-# 最佳方案：指向专用挂载数据目录，彻底避免单文件挂载冲突
 DATA_DIR = "/opt/webapp/data"
 CONFIG_FILE = os.path.join(DATA_DIR, "mail_config.json")
 mail_wake_event = threading.Event()
@@ -52,9 +54,11 @@ def load_mail_config():
 def save_mail_config(cfg):
     try:
         ensure_config_dir()
+        if os.path.exists(CONFIG_FILE) and os.path.isdir(CONFIG_FILE):
+            shutil.rmtree(CONFIG_FILE, ignore_errors=True)
+
         json_str = json.dumps(cfg, ensure_ascii=False, indent=2)
 
-        # 在专属数据目录下覆写，安全无锁死风险
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
             f.flush()
@@ -150,6 +154,10 @@ def print_attachment_file(file_path, printer_name="", skip_filter=False, token="
 
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     filename = os.path.basename(file_path)
+    
+    # 打印完成后立即执行垃圾清理，防闪存爆盘
+    clean_old_tmp_files(UPLOAD_DIR)
+
     if res.returncode == 0:
         print(f"[MailWorker] 邮件附件成功送达打印: {target_file}", flush=True)
         push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机！")
@@ -200,12 +208,14 @@ def mail_polling_worker():
                         for part in msg.walk():
                             if part.get_content_maintype() == "multipart":
                                 continue
-                            filename = part.get_filename()
-                            if filename:
-                                filename = decode_str(filename)
-                                ext = os.path.splitext(filename)[-1].lower()
+                            raw_fname = part.get_filename()
+                            if raw_fname:
+                                clean_fname = os.path.basename(decode_str(raw_fname)).replace("/", "").replace("\\", "")
+                                clean_fname = re.sub(r'[\r\n\t]', '', clean_fname)
+                                ext = os.path.splitext(clean_fname)[-1].lower()
                                 if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".webp"]:
-                                    save_path = os.path.join(UPLOAD_DIR, f"mail_{int(time.time())}_{filename}")
+                                    safe_name = f"mail_{int(time.time())}_{uuid.uuid4().hex[:6]}_{clean_fname}"
+                                    save_path = os.path.join(UPLOAD_DIR, safe_name)
                                     with open(save_path, "wb") as f:
                                         f.write(part.get_payload(decode=True))
                                     print_attachment_file(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
