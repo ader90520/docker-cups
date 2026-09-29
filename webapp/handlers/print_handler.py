@@ -9,9 +9,6 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 
-# -------------------------------------------------------------
-# 1. 动态感知环境：大设备开启 OpenCV 加速，小设备无感知降级到 PIL
-# -------------------------------------------------------------
 HAVE_OPENCV = False
 try:
     import cv2
@@ -27,9 +24,6 @@ def log_debug(msg):
         pass
     print(f"[PrintLog] {msg}", flush=True)
 
-# -------------------------------------------------------------
-# 2. 边缘除污与轻微白边清理
-# -------------------------------------------------------------
 def safe_clean_edge_shadows(arr):
     try:
         h, w = arr.shape[:2]
@@ -39,22 +33,22 @@ def safe_clean_edge_shadows(arr):
         right_w = int(w * 0.975)
 
         for y in range(top_h):
-            mask = arr[y, :] < 120
+            mask = arr[y, :] < 130
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
         for y in range(bot_h, h):
-            mask = arr[y, :] < 120
+            mask = arr[y, :] < 130
             if np.sum(mask) > 0:
                 arr[y, mask] = 255.0
 
         for x in range(left_w):
-            mask = arr[:, x] < 120
+            mask = arr[:, x] < 130
             if np.sum(mask) > 0:
                 arr[mask, x] = 255.0
 
         for x in range(right_w, w):
-            mask = arr[:, x] < 120
+            mask = arr[:, x] < 130
             if np.sum(mask) > 0:
                 arr[mask, x] = 255.0
 
@@ -68,9 +62,6 @@ def safe_clean_edge_shadows(arr):
         pass
     return arr
 
-# -------------------------------------------------------------
-# 3. 满幅版面适配（97% 充满度，留白仅 3~5mm，彻底杜绝 3 公分空白）
-# -------------------------------------------------------------
 def fit_to_a4_safe_frame(img, fill_ratio=0.97):
     target_w, target_h = 2480, 3508
     orig_w, orig_h = img.size
@@ -87,9 +78,6 @@ def fit_to_a4_safe_frame(img, fill_ratio=0.97):
     canvas.paste(resized_img, (pos_x, pos_y))
     return canvas
 
-# -------------------------------------------------------------
-# 4. 小内存设备专属算法（纯 PIL + NumPy）
-# -------------------------------------------------------------
 def measure_line_skew(gray_img):
     try:
         w, h = gray_img.size
@@ -134,7 +122,6 @@ def adaptive_perspective_flatten_pil(pil_img):
         if abs(dy_top) >= 3 or abs(dy_bot) >= 3:
             quad = (0, tl_y, 0, bl_y, w, br_y, w, tr_y)
             pil_img = pil_img.transform((w, h), Image.Transform.QUAD, quad, resample=Image.Resampling.BICUBIC, fillcolor=(255, 255, 255))
-            log_debug("PIL 模式: 透视拉平完成")
     except Exception as e:
         log_debug(f"PIL 拉直跳过: {e}")
     return pil_img
@@ -172,9 +159,6 @@ def auto_crop_paper_boundaries_pil(img):
         pass
     return img
 
-# -------------------------------------------------------------
-# 5. 大内存设备专属算法（OpenCV 硬件四点透视变换）
-# -------------------------------------------------------------
 def order_points_cv(pts):
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
@@ -221,18 +205,14 @@ def auto_perspective_crop_cv(cv_img):
                 dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
                 M = cv2.getPerspectiveTransform(rect, dst)
                 warped = cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_CUBIC)
-                log_debug("OpenCV 模式: 透视拉平成功")
                 return warped
     except Exception as e:
         log_debug(f"OpenCV 透视跳过: {e}")
     return cv_img
 
-# -------------------------------------------------------------
-# 6. 核心图像增强流水线（大设备 OpenCV，小设备 PIL，效果与尺度完全对齐）
-# -------------------------------------------------------------
 def process_image_for_print(input_path, output_path):
     try:
-        log_debug(f"启动满幅优化流水线: {input_path} (OpenCV加速={HAVE_OPENCV})")
+        log_debug(f"流水线启动: {input_path} (OpenCV={HAVE_OPENCV})")
 
         if HAVE_OPENCV:
             cv_img = cv2.imread(input_path)
@@ -242,10 +222,8 @@ def process_image_for_print(input_path, output_path):
             if w > h:
                 cv_img = cv2.rotate(cv_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-            # OpenCV 专属四点透视拉平
             cv_img = auto_perspective_crop_cv(cv_img)
 
-            # 缩放到标准计算幅面
             calc_w = 2100
             calc_h = int(cv_img.shape[0] * (calc_w / float(cv_img.shape[1])))
             cv_img = cv2.resize(cv_img, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
@@ -253,7 +231,6 @@ def process_image_for_print(input_path, output_path):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 弱彩色保真（粉红题框、虚线保护）
             red_line_mask = (r_f - np.maximum(g_f, b_f)) > 8.0
             max_c = np.maximum(np.maximum(r_f, g_f), b_f)
             min_c = np.minimum(np.minimum(r_f, g_f), b_f)
@@ -263,28 +240,27 @@ def process_image_for_print(input_path, output_path):
             gray[color_diff_mask] = np.clip(gray[color_diff_mask] - (max_c[color_diff_mask] - min_c[color_diff_mask]) * 1.5, 0, 255)
             gray[red_line_mask] = np.clip(gray[red_line_mask] - 40.0, 0, 255)
 
-            # 光照除法
             bg = cv2.blur(gray, (35, 35)) + 1.0
             divided = (gray / bg) * 255.0
             out = np.full_like(divided, 255.0)
 
-            # 边缘梯度抑制透墨
             grad_x = np.abs(gray[:, 2:] - gray[:, :-2])
             grad_y = np.abs(gray[2:, :] - gray[:-2, :])
             grad_pad = np.zeros_like(gray)
             grad_pad[1:-1, 1:-1] = grad_x[1:-1, :] + grad_y[:, 1:-1]
 
-            ink_mask = (divided < 218.0) & ((grad_pad > 12.0) | (divided < 175.0))
-            out[ink_mask] = 10.0  # 实心深黑填充，消除空心字
+            ink_mask = (divided < 218.0) & ((grad_pad > 11.0) | (divided < 170.0))
+            
+            # 【核心修复】：自然层次渐变加黑，彻底根治字体过浓、粗黑粘连
+            ink_vals = divided[ink_mask]
+            # 映射到 45 ~ 85 之间，清秀自然、深黑且绝不洇墨
+            natural_ink = np.clip(ink_vals * 0.45, 45.0, 95.0)
+            out[ink_mask] = natural_ink
 
             out = safe_clean_edge_shadows(out)
 
             res_uint8 = np.clip(out, 0, 255).astype(np.uint8)
-            gaussian = cv2.GaussianBlur(res_uint8, (0, 0), 0.8)
-            sharp = cv2.addWeighted(res_uint8, 1.25, gaussian, -0.25, 0)
-
-            sharp_pil = Image.fromarray(sharp).convert("RGB")
-            # 统一应用 97% 充满度适配
+            sharp_pil = Image.fromarray(res_uint8).convert("RGB")
             final_canvas = fit_to_a4_safe_frame(sharp_pil, fill_ratio=0.97)
             final_canvas.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
 
@@ -308,7 +284,6 @@ def process_image_for_print(input_path, output_path):
             g_arr = np.array(g, dtype=np.float32)
             b_arr = np.array(b, dtype=np.float32)
 
-            # 弱彩色保真
             red_line_mask = (r_arr - np.maximum(g_arr, b_arr)) > 8.0
             max_c = np.maximum(np.maximum(r_arr, g_arr), b_arr)
             min_c = np.minimum(np.minimum(r_arr, g_arr), b_arr)
@@ -325,26 +300,27 @@ def process_image_for_print(input_path, output_path):
             divided = (gray_arr / bg_arr) * 255.0
             out = np.full_like(divided, 255.0)
 
-            # 梯度抑制透墨
             grad_x = np.abs(gray_arr[:, 2:] - gray_arr[:, :-2])
             grad_y = np.abs(gray_arr[2:, :] - gray_arr[:-2, :])
             grad_pad = np.zeros_like(gray_arr)
             grad_pad[1:-1, 1:-1] = grad_x[1:-1, :] + grad_y[:, 1:-1]
 
-            ink_mask = (divided < 218.0) & ((grad_pad > 12.0) | (divided < 175.0))
-            out[ink_mask] = 10.0  # 实心深黑填充
+            ink_mask = (divided < 218.0) & ((grad_pad > 11.0) | (divided < 170.0))
+            
+            # 【核心修复】：自然层次渐变加黑
+            ink_vals = divided[ink_mask]
+            natural_ink = np.clip(ink_vals * 0.45, 45.0, 95.0)
+            out[ink_mask] = natural_ink
 
             out = safe_clean_edge_shadows(out)
 
             clean_gray = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
-            sharp = clean_gray.filter(ImageFilter.UnsharpMask(radius=0.8, percent=100, threshold=2))
-            sharp_rgb = Image.merge("RGB", [sharp, sharp, sharp])
+            sharp_rgb = Image.merge("RGB", [clean_gray, clean_gray, clean_gray])
 
-            # 统一应用 97% 充满度适配
             final_canvas = fit_to_a4_safe_frame(sharp_rgb, fill_ratio=0.97)
             final_canvas.save(output_path, format="JPEG", quality=95, dpi=(300, 300))
 
-        log_debug(f"图像流水线完成，大字版输出: {output_path}")
+        log_debug(f"图像流水线优化完成: {output_path}")
         return True
     except Exception as e:
         log_debug(f"图像增强异常: {e}")
@@ -363,9 +339,6 @@ def clean_old_tmp_files(directory, max_age_seconds=1800):
     except Exception:
         pass
 
-# -------------------------------------------------------------
-# 7. 打印 Handler
-# -------------------------------------------------------------
 class PrintHandler(BaseHandler):
     def post(self):
         try:
