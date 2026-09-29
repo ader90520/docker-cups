@@ -27,7 +27,7 @@ def load_mail_config():
                 if content:
                     return json.loads(content)
         except Exception as e:
-            print(f"[MailConfig] 读取配置异常: {e}", flush=True)
+            print(f"[MailConfig] 读取异常: {e}", flush=True)
     return {
         "enable": False,
         "server": "imap.qq.com",
@@ -46,21 +46,22 @@ def save_mail_config(cfg):
         if cfg_dir and not os.path.exists(cfg_dir):
             os.makedirs(cfg_dir, exist_ok=True)
             
+        json_str = json.dumps(cfg, ensure_ascii=False, indent=2)
+        # 使用 r+ 或 w 截断写入，杜绝跨文件系统重命名引发的权限死锁
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.write(json_str)
             f.flush()
-            os.fsync(f.fileno())
-            
+
         try:
             os.chmod(CONFIG_FILE, 0o666)
         except Exception:
             pass
-            
+
         mail_wake_event.set()
         return True, ""
     except Exception as e:
         err = str(e)
-        print(f"[MailConfig] 写入配置异常: {err}", flush=True)
+        print(f"[MailConfig] 写入配置失败: {err}", flush=True)
         return False, err
 
 def push_wechat_notice(token, title, content):
@@ -224,7 +225,6 @@ class MailConfigHandler(BaseHandler):
 
     def post(self):
         try:
-            # 兼容无论前端发 JSON 还是发原生 Form 表单
             body_data = {}
             if self.request.body:
                 try:
@@ -258,11 +258,9 @@ class MailConfigHandler(BaseHandler):
             default_printer = str(fetch("default_printer", "")).strip()
 
             old_cfg = load_mail_config()
-            # 如果没改密码或带了 ******，保留原有密码
             if password == "******" or not password:
                 password = old_cfg.get("password", "")
 
-            # 如果没选打印机，继承原有设置
             if not default_printer:
                 default_printer = old_cfg.get("default_printer", "")
 
@@ -280,8 +278,8 @@ class MailConfigHandler(BaseHandler):
 
             ok, err = save_mail_config(new_cfg)
             if ok:
-                self.write_json(True, "云邮箱及 PushPlus 微信通知设置已成功保存并立即生效！")
+                self.write_json(True, "云邮箱及微信通知设置已成功保存并立即生效！")
             else:
                 self.write_json(False, f"保存失败: {err}")
         except Exception as e:
-            self.write_json(False, f"保存失败，后端异常: {str(e)}")
+            self.write_json(False, f"保存失败，系统异常: {str(e)}")
