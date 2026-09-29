@@ -2,13 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import os
-import re
 import shutil
 import subprocess
-from handlers.base_handler import BaseHandler, UPLOAD_DIR
+from handlers.base_handler import BaseHandler
 
 CUPS_PPD_DIR = "/etc/cups/ppd"
-MODEL_DIR = "/usr/share/cups/model"
 
 def run_cmd(cmd, env=None):
     if env is None:
@@ -37,7 +35,7 @@ def parse_printer_detailed_status(printer_name):
     if ok and "printer-is-shared=true" in out:
         status_info["is_shared"] = True
 
-    # 2. 检查详细告警状态
+    # 2. 检查详细告警状态 (卡纸/缺纸/缺墨)
     ok, out, _ = run_cmd(["lpstat", "-p", printer_name, "-l"])
     if ok:
         out_lower = out.lower()
@@ -69,22 +67,35 @@ def perform_system_diagnostics():
             "detail": "宿主机 /dev/bus/usb 未映射进容器，打印机与扫描仪无法通信。"
         })
 
-    # 2. Avahi 守护进程检测 (隔空打印核心)
-    _, out, _ = run_cmd(["pidof", "avahi-daemon"])
-    if not out:
-        issues.append({
-            "level": "danger",
-            "title": "Avahi mDNS 广播未运行",
-            "detail": "Avahi 广播离线，导致苹果 iPhone/Mac 无法通过隔空打印搜索到设备。"
-        })
+    # 2. Avahi 广播多重兼容检测（改用 pgrep 与 ps 复合探测，彻底根治精简系统误报）
+    ok_avahi, out_a, _ = run_cmd(["sh", "-c", "pgrep -x avahi-daemon || ps -ef | grep [a]vahi-daemon"])
+    if not ok_avahi or not out_a:
+        # 尝试静默自愈唤醒一次
+        run_cmd(["sh", "-c", "rm -rf /var/run/avahi-daemon/* && avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true"])
+        # 二次核验
+        ok_retry, out_r, _ = run_cmd(["sh", "-c", "pgrep -x avahi-daemon || ps -ef | grep [a]vahi-daemon"])
+        if not ok_retry or not out_r:
+            issues.append({
+                "level": "danger",
+                "title": "Avahi mDNS 广播未运行",
+                "detail": "Avahi 广播服务离线，导致苹果 iPhone/Mac 无法通过隔空打印搜索到设备。"
+            })
 
-    # 3. SANE 扫描仪驱动与硬件通信检测
-    ok, out, err = run_cmd(["scanimage", "-L"])
-    if not ok or "No scanners were identified" in out or not out:
+    # 3. SANE 扫描仪驱动与硬件通信检测 (适配 HP 一体机 hpaio 协议与 USB 物理端口)
+    ok_sane, out_s, _ = run_cmd(["scanimage", "-L"])
+    has_scanner = ok_sane and out_s and ("No scanners were identified" not in out_s)
+
+    if not has_scanner:
+        # 针对 HP 打印扫描一体机 (如 M126a) 进行底层 USB 物理端点探测兜底
+        ok_find, out_find, _ = run_cmd(["sane-find-scanner", "-q"])
+        if ok_find and "found USB scanner" in out_find:
+            has_scanner = True
+
+    if not has_scanner:
         issues.append({
             "level": "warning",
             "title": "未检测到就绪的扫描仪",
-            "detail": "SANE 未识别到可用扫描仪。若有多功能一体机，请确认 USB 已插紧并支持 HPLIP/SANE。"
+            "detail": "SANE 未识别到可用扫描仪。若是 HP M126a 等一体机，请确认 USB 插紧，并确认容器已赋予 --privileged 权限。"
         })
 
     # 4. PPD 驱动健康度检测
@@ -104,7 +115,7 @@ def perform_system_diagnostics():
         issues.append({
             "level": "danger",
             "title": f"系统存储空间爆满告急 ({used_pct}%)",
-            "detail": "可用闪存不足，会导致打印任务写入失败、日志卡死，请立即点击下方一键清理！"
+            "detail": "可用闪存不足，会导致打印任务写入失败、日志卡死，请立即点击上方一键清理！"
         })
 
     return issues
@@ -154,16 +165,18 @@ class DevicesHandler(BaseHandler):
             details = parse_printer_detailed_status(p)
             devices.append({
                 "name": p,
+                "status": details["state_message"],
+                "status_msg": details["state_message"],
                 "is_default": (p == default_printer),
                 "is_shared": details["is_shared"],
                 "media_empty": details["media_empty"],
                 "paper_jam": details["paper_jam"],
                 "toner_low": details["toner_low"],
                 "toner_empty": details["toner_empty"],
-                "status_msg": details["state_message"]
+                "has_error": (details["media_empty"] or details["paper_jam"] or details["toner_empty"])
             })
 
-        # 磁盘空间监控
+        # 磁盘空间监控 (防海纳思闪存写满)
         total, used, free = shutil.disk_usage("/")
         disk_info = {
             "total_gb": round(total / (1024**3), 2),
@@ -177,93 +190,3 @@ class DevicesHandler(BaseHandler):
             "disk": disk_info,
             "diagnostics": perform_system_diagnostics()
         })
-
-class PrinterAdminHandler(BaseHandler):
-    def post(self):
-        action = self.get_argument("action", "").strip()
-        printer = self.get_argument("printer", "").strip()
-
-        # 安全防注入校验
-        if printer and (printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', printer)):
-            self.write_json(False, "非法打印机设备名称")
-            return
-
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-
-        # 1. 切换共享打印机并刷新 Avahi (隔空打印关键)
-        if action == "toggle_share":
-            enable_str = self.get_argument("shared", "true").lower()
-            is_share = enable_str in ["true", "1", "yes"]
-            flag = "true" if is_share else "false"
-
-            ok, _, err = run_cmd(["lpadmin", "-p", printer, "-o", f"printer-is-shared={flag}"], env=env)
-            # 重启 avahi 广播立即生效
-            run_cmd(["service", "avahi-daemon", "restart"])
-            if ok:
-                msg = f"已{'开启' if is_share else '关闭'} [{printer}] 的局域网与隔空打印(AirPrint)共享！"
-                self.write_json(True, msg)
-            else:
-                self.write_json(False, f"设置共享失败: {err}")
-
-        # 2. 设为默认打印机
-        elif action == "set_default":
-            ok, _, err = run_cmd(["lpadmin", "-d", printer], env=env)
-            if ok:
-                self.write_json(True, f"已将 [{printer}] 设置为默认打印机")
-            else:
-                self.write_json(False, f"设置默认失败: {err}")
-
-        # 3. 发送测试页
-        elif action == "test_page":
-            test_file = "/usr/share/cups/data/testprint"
-            if not os.path.exists(test_file):
-                test_file = "/opt/webapp/static/favicon.ico"
-            ok, _, err = run_cmd(["lp", "-d", printer, test_file], env=env)
-            if ok:
-                self.write_json(True, f"已向 [{printer}] 发送测试打印页！")
-            else:
-                self.write_json(False, f"测试页发送失败: {err}")
-
-        # 4. 清空打印队列
-        elif action == "cancel_all":
-            run_cmd(["cancel", "-a"], env=env)
-            self.write_json(True, "已强制清空所有卡死与排队的打印任务！")
-
-        # 5. 上传 PPD 驱动并同步到 631 驱动库
-        elif action == "upload_ppd":
-            files = self.request.files.get("ppd_file", [])
-            if not files:
-                self.write_json(False, "未收到上传的 PPD 驱动文件")
-                return
-
-            ppd = files[0]
-            fname = os.path.basename(ppd["filename"])
-            if not fname.lower().endswith(".ppd"):
-                self.write_json(False, "仅支持标准 .ppd 格式驱动文件")
-                return
-
-            os.makedirs(MODEL_DIR, exist_ok=True)
-            save_path = os.path.join(MODEL_DIR, fname)
-            with open(save_path, "wb") as f:
-                f.write(ppd["body"])
-
-            os.chmod(save_path, 0o644)
-            # 刷新 CUPS 驱动库缓存，使 631 后台即时可选
-            run_cmd(["cupsfilter", "-m", "application/vnd.cups-raw", save_path])
-            self.write_json(True, f"驱动 [{fname}] 已成功安装到系统驱动库！在 631 后台添加打印机时即可直接选取。")
-
-        # 6. 一键深度清理闪存垃圾
-        elif action == "clean_disk":
-            try:
-                # 清理 Web 上传缓存
-                shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
-                os.makedirs(UPLOAD_DIR, exist_ok=True)
-                # 清理系统 /tmp 缓存与遗留打印任务
-                run_cmd(["sh", "-c", "rm -rf /tmp/mail_* /tmp/cups_* /tmp/*.pdf /tmp/*.jpg /tmp/*.png 2>/dev/null || true"])
-                self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成，闪存空间已释放！")
-            except Exception as e:
-                self.write_json(False, f"清理异常: {str(e)}")
-
-        else:
-            self.write_json(False, "未知操作指令")
