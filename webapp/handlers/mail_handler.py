@@ -16,10 +16,19 @@ import urllib.parse
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
-CONFIG_FILE = "/opt/webapp/mail_config.json"
+# 最佳方案：指向专用挂载数据目录，彻底避免单文件挂载冲突
+DATA_DIR = "/opt/webapp/data"
+CONFIG_FILE = os.path.join(DATA_DIR, "mail_config.json")
 mail_wake_event = threading.Event()
 
+def ensure_config_dir():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"[MailConfig] 创建数据目录异常: {e}", flush=True)
+
 def load_mail_config():
+    ensure_config_dir()
     if os.path.exists(CONFIG_FILE) and os.path.isfile(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -42,17 +51,10 @@ def load_mail_config():
 
 def save_mail_config(cfg):
     try:
-        # 如果挂载点被宿主机误创建为目录，强行纠正
-        if os.path.exists(CONFIG_FILE) and os.path.isdir(CONFIG_FILE):
-            os.system(f"rm -rf {CONFIG_FILE}")
-
-        cfg_dir = os.path.dirname(CONFIG_FILE)
-        if cfg_dir and not os.path.exists(cfg_dir):
-            os.makedirs(cfg_dir, exist_ok=True)
-
+        ensure_config_dir()
         json_str = json.dumps(cfg, ensure_ascii=False, indent=2)
 
-        # 覆写文件
+        # 在专属数据目录下覆写，安全无锁死风险
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
             f.flush()
