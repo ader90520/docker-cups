@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import os
+import tempfile
+import subprocess
+
+sys.path.insert(0, '/opt/webapp')
+try:
+    from handlers.print_handler import process_image_for_print
+except Exception as e:
+    sys.stderr.write(f"[Enhancer] 模块导入失败: {e}\n")
+    process_image_for_print = None
+
+def main():
+    if len(sys.argv) > 6 and sys.argv[6]:
+        input_source = sys.argv[6]
+        use_stdin = False
+    else:
+        use_stdin = True
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        raw_input = os.path.join(tmpdir, "job_raw_input")
+
+        if use_stdin:
+            with open(raw_input, "wb") as f:
+                f.write(sys.stdin.buffer.read())
+        else:
+            raw_input = input_source
+
+        if not os.path.exists(raw_input) or os.path.getsize(raw_input) == 0:
+            return 0
+
+        with open(raw_input, "rb") as f:
+            header = f.read(4)
+
+        output_pdf = os.path.join(tmpdir, "enhanced_result.pdf")
+
+        # 处理 iPhone 发送的 PDF
+        if header.startswith(b"%PDF"):
+            ppm_prefix = os.path.join(tmpdir, "page")
+            subprocess.run(["pdftoppm", "-png", "-r", "300", raw_input, ppm_prefix],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            png_files = sorted([os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.startswith("page-") and f.endswith(".png")])
+
+            if png_files and process_image_for_print:
+                opt_pages = []
+                for p in png_files:
+                    opt_path = p.replace(".png", "_opt.jpg")
+                    if process_image_for_print(p, opt_path):
+                        opt_pages.append(opt_path)
+                    else:
+                        opt_pages.append(p)
+                subprocess.run(["img2pdf", "-o", output_pdf] + opt_pages,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                output_pdf = raw_input
+        else:
+            opt_single = os.path.join(tmpdir, "single_opt.jpg")
+            if process_image_for_print and process_image_for_print(raw_input, opt_single):
+                subprocess.run(["img2pdf", "-o", output_pdf, opt_single],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                output_pdf = raw_input
+
+        cmd = ["/usr/lib/cups/filter/pdftoraster"] + sys.argv[1:6]
+        with open(output_pdf, "rb") as f_in:
+            res = subprocess.run(cmd, stdin=f_in, stdout=sys.stdout.buffer, stderr=sys.stderr.buffer)
+
+    return res.returncode
+
+if __name__ == "__main__":
+    sys.exit(main())
