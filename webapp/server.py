@@ -80,18 +80,18 @@ def perform_system_diagnostics():
             "detail": "宿主机 /dev/bus/usb 未映射进容器，打印机与扫描仪无法通信。"
         })
 
-    # 2. Avahi 广播检测 (苹果隔空打印搜不到的元凶)
-    _, out, _ = run_cmd(["pidof", "avahi-daemon"])
-    if not out:
+    # 2. Avahi 广播多重兼容检测（避免 pidof 截断进程名误报）
+    ok_avahi, out_a, _ = run_cmd(["sh", "-c", "pgrep avahi-daemon || ps -ef | grep [a]vahi-daemon"])
+    if not ok_avahi or not out_a:
         issues.append({
             "level": "danger",
             "title": "Avahi mDNS 广播未运行",
             "detail": "Avahi 广播服务离线，导致苹果 iPhone/Mac 无法通过隔空打印搜索到设备。"
         })
 
-    # 3. SANE 扫描仪驱动检测
-    ok, out, _ = run_cmd(["scanimage", "-L"])
-    if not ok or "No scanners were identified" in out or not out:
+    # 3. SANE 扫描仪驱动检测 (支持 HP 一体机探测)
+    ok_sane, out_s, _ = run_cmd(["scanimage", "-L"])
+    if not ok_sane or "No scanners were identified" in out_s or not out_s:
         issues.append({
             "level": "warning",
             "title": "未检测到就绪的扫描仪",
