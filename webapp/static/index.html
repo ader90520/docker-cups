@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>在线打印 - CUPS 智能云工作台</title>
+    <title>在线打印 - CUPS 智能工作台</title>
     <!-- 引入 PDF.js 用于客户端快速无损预览 PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <style>
@@ -139,7 +139,7 @@
         <div class="main-layout">
             <!-- 左侧：参数与上传区域 -->
             <div class="col-left">
-                <!-- A. 通用文件上传区域 (标准/发票打印展示) -->
+                <!-- 通用文件上传区域 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文件</span>
@@ -153,7 +153,7 @@
                     <div class="file-list" id="file-list-view" style="display:none;"></div>
                 </div>
 
-                <!-- B. 身份证专属上传区域 (身份证模式下展示) -->
+                <!-- 身份证专属上传区域 -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">🪪 上传身份证</div>
                     <div class="idcard-grid">
@@ -219,7 +219,7 @@
                 </div>
             </div>
 
-            <!-- 右侧：WanOS 实时 A4 视窗预览 + 状态 -->
+            <!-- 右侧：实时 A4 视窗预览 + 状态 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
@@ -244,7 +244,7 @@
                     </div>
                 </div>
 
-                <!-- 打印机状态与简报卡片 -->
+                <!-- 打印机状态简报 -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span>⚡ 打印机状态</span>
@@ -317,7 +317,7 @@
             <form id="mail-cfg-form">
                 <div class="form-item" style="margin-bottom:12px;">
                     <label>云邮件自动打印服务</label>
-                    <select id="mail_enable" class="form-ctrl">
+                    <select id="mail_enable" name="enable" class="form-ctrl">
                         <option value="true">开启 (后台每 5 秒轮询检测)</option>
                         <option value="false">关闭</option>
                     </select>
@@ -325,35 +325,35 @@
                 <div class="param-grid" style="margin-bottom:12px;">
                     <div class="form-item">
                         <label>IMAP 服务器</label>
-                        <input type="text" id="mail_server" class="form-ctrl" value="imap.qq.com">
+                        <input type="text" id="mail_server" name="server" class="form-ctrl" value="imap.qq.com">
                     </div>
                     <div class="form-item">
                         <label>端口</label>
-                        <input type="number" id="mail_port" class="form-ctrl" value="993">
+                        <input type="number" id="mail_port" name="port" class="form-ctrl" value="993">
                     </div>
                 </div>
                 <div class="param-grid" style="margin-bottom:12px;">
                     <div class="form-item">
                         <label>邮箱账号</label>
-                        <input type="email" id="mail_user" class="form-ctrl" placeholder="例如: 137062870@qq.com">
+                        <input type="email" id="mail_user" name="user" class="form-ctrl" placeholder="例如: 137062870@qq.com">
                     </div>
                     <div class="form-item">
                         <label>授权码 / 专用密码</label>
-                        <input type="password" id="mail_password" class="form-ctrl" placeholder="留空或保留默认表示不修改">
+                        <input type="password" id="mail_password" name="password" class="form-ctrl" placeholder="留空或保留默认表示不修改">
                     </div>
                 </div>
                 <div class="form-item" style="background:#f0f9ff; border:1px dashed var(--primary); padding:12px; border-radius:6px; margin-bottom:12px;">
                     <label style="color:var(--primary);">💬 PushPlus 微信通知 Token (出纸成功 / 缺纸卡纸推送)</label>
-                    <input type="text" id="mail_pushplus_token" class="form-ctrl" placeholder="填写 PushPlus 发送的 Token 即可接收微信出纸状态">
+                    <input type="text" id="mail_pushplus_token" name="pushplus_token" class="form-ctrl" placeholder="填写 PushPlus 发送的 Token 即可接收微信出纸状态">
                 </div>
                 <div class="param-grid" style="margin-bottom:15px;">
                     <div class="form-item">
                         <label>🔑 打印暗号 (邮件标题包含即可打印)</label>
-                        <input type="text" id="mail_keyword" class="form-ctrl" placeholder="例如: 888 或 打印">
+                        <input type="text" id="mail_keyword" name="keyword" class="form-ctrl" placeholder="例如: 888 或 打印">
                     </div>
                     <div class="form-item">
                         <label>📧 发件人白名单 (留空允许任意邮箱)</label>
-                        <input type="text" id="mail_whitelist" class="form-ctrl" placeholder="多个邮箱用逗号隔开">
+                        <input type="text" id="mail_whitelist" name="whitelist" class="form-ctrl" placeholder="多个邮箱用逗号隔开">
                     </div>
                 </div>
                 <button type="submit" class="btn-submit-print">💾 保存云邮件配置并立即生效</button>
@@ -365,9 +365,9 @@
 
 <script>
 let currentNav = 'print';
-let currentPrintType = 'normal'; // 'normal' | 'invoice' | 'idcard'
-let currentColorMode = 'monochrome'; // 'monochrome' | 'color'
-let currentOrientation = 'portrait'; // 'portrait' | 'landscape'
+let currentPrintType = 'normal';
+let currentColorMode = 'monochrome';
+let currentOrientation = 'portrait';
 
 let fileQueue = [];
 let idFrontFile = null;
@@ -595,7 +595,6 @@ function submitPrintJob() {
         return;
     }
 
-    // 身份证提交逻辑
     if (currentPrintType === 'idcard') {
         if (!idFrontFile || !idBackFile) {
             alert('请上传身份证正面和反面照片！');
@@ -629,7 +628,6 @@ function submitPrintJob() {
         return;
     }
 
-    // 标准/发票打印提交逻辑
     if (fileQueue.length === 0) {
         alert('请先选择或拖拽上传需要打印的文件！');
         return;
@@ -730,13 +728,13 @@ function cleanSpoolJobs() {
         .then(r => r.json()).then(d => { alert(d.message); loadPrinters(true); });
 }
 
-// ---------------- 云邮箱设置保存 (原生 FormData 提交，100% 解决保存失败) ----------------
+// ---------------- 云邮箱设置保存与数据加载 ----------------
 function loadMailConfig() {
     fetch('/api/mail_config')
         .then(r => r.json())
         .then(d => {
-            if (d.success && d.data) {
-                const cfg = d.data;
+            const cfg = d.data || d;
+            if (cfg) {
                 document.getElementById('mail_enable').value = (cfg.enable === true || cfg.enable === 'true') ? 'true' : 'false';
                 document.getElementById('mail_server').value = cfg.server || 'imap.qq.com';
                 document.getElementById('mail_port').value = cfg.port || 993;
@@ -756,37 +754,44 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     btn.disabled = true;
     btn.innerText = '正在保存配置...';
 
-    const fd = new FormData();
-    fd.append('enable', document.getElementById('mail_enable').value);
-    fd.append('server', document.getElementById('mail_server').value.trim());
-    fd.append('port', document.getElementById('mail_port').value.trim());
-    fd.append('user', document.getElementById('mail_user').value.trim());
-    fd.append('password', document.getElementById('mail_password').value.trim());
-    fd.append('pushplus_token', document.getElementById('mail_pushplus_token').value.trim());
-    fd.append('keyword', document.getElementById('mail_keyword').value.trim());
-    fd.append('whitelist', document.getElementById('mail_whitelist').value.trim());
+    const payload = {
+        enable: document.getElementById('mail_enable').value === 'true',
+        server: document.getElementById('mail_server').value.trim(),
+        port: parseInt(document.getElementById('mail_port').value) || 993,
+        user: document.getElementById('mail_user').value.trim(),
+        password: document.getElementById('mail_password').value.trim(),
+        pushplus_token: document.getElementById('mail_pushplus_token').value.trim(),
+        keyword: document.getElementById('mail_keyword').value.trim(),
+        whitelist: document.getElementById('mail_whitelist').value.trim()
+    };
 
     const printerSelect = document.getElementById('printer-select');
     if (printerSelect && printerSelect.value) {
-        fd.append('default_printer', printerSelect.value);
+        payload.default_printer = printerSelect.value;
     }
 
-    fetch('/api/mail_config', { method: 'POST', body: fd })
-        .then(r => r.json())
-        .then(d => {
-            btn.disabled = false;
-            btn.innerText = '💾 保存云邮件配置并立即生效';
-            alertBox.style.display = 'block';
-            alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
-            alertBox.innerText = d.message || (d.success ? '设置已更新生效' : '保存失败');
-        })
-        .catch(err => {
-            btn.disabled = false;
-            btn.innerText = '💾 保存云邮件配置并立即生效';
-            alertBox.style.display = 'block';
-            alertBox.className = 'status-alert status-error';
-            alertBox.innerText = '保存错误: ' + err;
-        });
+    fetch('/api/mail_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(d => {
+        btn.disabled = false;
+        btn.innerText = '💾 保存云邮件配置并立即生效';
+        alertBox.style.display = 'block';
+        const isSuccess = d.success === true || d.status === true;
+        const msg = d.message || d.msg || (isSuccess ? '设置已更新生效' : '保存失败');
+        alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+        alertBox.innerText = msg;
+    })
+    .catch(err => {
+        btn.disabled = false;
+        btn.innerText = '💾 保存云邮件配置并立即生效';
+        alertBox.style.display = 'block';
+        alertBox.className = 'status-alert status-error';
+        alertBox.innerText = '请求失败: ' + err;
+    });
 };
 
 // 页面初始化
