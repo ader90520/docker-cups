@@ -15,9 +15,20 @@ if ! id "$CUPS_USER" &>/dev/null; then
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 
-# 2. 运行时目录及权限保障
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models
-chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks 2>/dev/null || true
+# 2. 运行时目录及权限保障（追加 data 目录与旧配置兼容迁移）
+mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data
+chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data 2>/dev/null || true
+
+# 自动处理可能遗留的旧路径配置
+if [ -f "/opt/webapp/mail_config.json" ] && [ ! -f "/opt/webapp/data/mail_config.json" ]; then
+    cp -f /opt/webapp/mail_config.json /opt/webapp/data/mail_config.json 2>/dev/null || true
+fi
+
+# 确保隔空打印过滤器符合 CUPS 安全规范
+if [ -f "/usr/lib/cups/filter/cups_image_enhancer" ]; then
+    chown root:root /usr/lib/cups/filter/cups_image_enhancer
+    chmod 755 /usr/lib/cups/filter/cups_image_enhancer
+fi
 
 # 3. 容器内热插拔守护
 auto_usb_daemon() {
@@ -123,21 +134,18 @@ echo ">>> [Patch] 部署纯净全中文模板（彻底剔除任何跳转代码�
 
 mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
 
-# 将中文包直接覆盖到根目录、zh_CN 以及 zh，双重保证绝不回退英文
 if [ -d /tmp/zh_templates ]; then
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh/ 2>/dev/null || true
 fi
 
-# 确保所有模板文件没有任何 8088 污染代码
 for tmpl in $(find /usr/share/cups/templates -name "*.tmpl" 2>/dev/null); do
     sed -i '/btn-to-8088/d' "$tmpl" 2>/dev/null || true
     sed -i '/8088/d' "$tmpl" 2>/dev/null || true
 done
 chmod -R 755 /usr/share/cups/templates
 
-# 中文纯净首页部署
 if [ -f /tmp/index.html ]; then
     cp -f /tmp/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
     sed -i '/btn-to-8088/d' /usr/share/cups/doc-root/index.html 2>/dev/null || true
@@ -151,6 +159,34 @@ echo ">>> [1/2] 启动 CUPS 后台服务 (631)..."
 sleep 2
 
 service avahi-daemon start 2>/dev/null || true
+
+# 异步自动挂载：隔空打印增强队列
+(
+    sleep 4
+    export CUPS_SERVER="/run/cups/cups.sock"
+    BASE_PPD=$(find /etc/cups/ppd/ -name "*.ppd" ! -name "*_Enhanced.ppd" | head -n 1 || true)
+    if [ -n "$BASE_PPD" ]; then
+        BASE_PRINTER=$(basename "$BASE_PPD" .ppd)
+        ENHANCED_PRINTER="${BASE_PRINTER}_Enhanced"
+        ENHANCED_PPD="/etc/cups/ppd/${ENHANCED_PRINTER}.ppd"
+        URI=$(lpstat -v "$BASE_PRINTER" 2>/dev/null | awk '{print $NF}' || true)
+        
+        if [ -n "$URI" ] && [ ! -f "$ENHANCED_PPD" ] && [ -f "/usr/lib/cups/filter/cups_image_enhancer" ]; then
+            echo ">>> [AirPrint] 自动创建增强通道: ${ENHANCED_PRINTER}..."
+            cp "$BASE_PPD" "$ENHANCED_PPD"
+            sed -i '/\*cupsFilter:/d' "$ENHANCED_PPD"
+            echo '*cupsFilter: "application/pdf 0 cups_image_enhancer"' >> "$ENHANCED_PPD"
+            echo '*cupsFilter: "application/vnd.cups-pdf 0 cups_image_enhancer"' >> "$ENHANCED_PPD"
+            echo '*cupsFilter: "image/png 0 cups_image_enhancer"' >> "$ENHANCED_PPD"
+            echo '*cupsFilter: "image/jpeg 0 cups_image_enhancer"' >> "$ENHANCED_PPD"
+            
+            lpadmin -p "$ENHANCED_PRINTER" -v "$URI" -P "$ENHANCED_PPD" -D "${BASE_PRINTER} (试卷去黑底增强通道)" -E
+            cupsenable "$ENHANCED_PRINTER"
+            cupsaccept "$ENHANCED_PRINTER"
+            echo ">>> [AirPrint] 增强通道已成功上线并广播！"
+        fi
+    fi
+) &
 
 # 6. 关闭 set -e 保护，启动 8088 综合控制台
 set +e
