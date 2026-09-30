@@ -74,7 +74,7 @@ def order_points_cv(pts):
     return rect
 
 def auto_perspective_crop_cv(cv_img):
-    """极速四角梯形校正与透视拉平 (耗时 <0.08秒)"""
+    """大盒子功能：极速四角梯形校正与透视拉平"""
     try:
         orig = cv_img.copy()
         h, w = cv_img.shape[:2]
@@ -117,15 +117,13 @@ def auto_perspective_crop_cv(cv_img):
 
 def process_image_for_print(input_path, output_path):
     """
-    全能王真彩色超清极速流水线：
-    1. 自动透视梯形拉平与旋转检测
-    2. 降采样极速光照估计 (消除阴影发黄，提速8倍)
-    3. 迷宫红色折线、红色虚线框、标号反白字完整保全
-    4. 纯黑铅字深黑扎实，拼音声调根根分明
+    双引擎图像增强处理：
+    - 大盒子环境自动启用 OpenCV 梯形矫正与精确通道分离
+    - 小盒子环境自动降级使用 PIL 纯轻量化矩阵加速
     """
     try:
         t0 = time.time()
-        log_debug(f"极速图像增强启动: {input_path} (OpenCV={HAVE_OPENCV})")
+        log_debug(f"图像增强流水线启动: {input_path} (HAVE_OPENCV={HAVE_OPENCV})")
 
         if HAVE_OPENCV:
             cv_img = cv2.imread(input_path)
@@ -136,20 +134,16 @@ def process_image_for_print(input_path, output_path):
             if w > h:
                 cv_img = cv2.rotate(cv_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-            # 1. 自动梯形透视校正
             cv_img = auto_perspective_crop_cv(cv_img)
 
-            # 2. 优化计算基准宽度: 1654 像素 (200 DPI 标准，出纸极速)
             calc_w = 1654
             calc_h = int(cv_img.shape[0] * (calc_w / float(cv_img.shape[1])))
             cv_img = cv2.resize(cv_img, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
 
             b, g, r = cv2.split(cv_img)
-            b_f = b.astype(np.float32)
-            g_f = g.astype(np.float32)
-            r_f = r.astype(np.float32)
+            b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 3. 极速降采样背景估计（先降采样到 1/4 计算闭运算，再还原回原图）
+            # 4倍降采样光照闭运算
             brightness = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
             small_w, small_h = max(100, calc_w // 4), max(100, calc_h // 4)
             small_b = cv2.resize(brightness, (small_w, small_h), interpolation=cv2.INTER_AREA)
@@ -159,18 +153,16 @@ def process_image_for_print(input_path, output_path):
             bg_morph = cv2.resize(bg_morph_small, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
             bg_float = cv2.GaussianBlur(bg_morph, (15, 15), 0).astype(np.float32) + 1.0
 
-            # 归一化漂白背景
             r_div = (r_f / bg_float) * 255.0
             g_div = (g_f / bg_float) * 255.0
             b_div = (b_f / bg_float) * 255.0
 
-            # 4. 彩色笔迹保护（捕获浅红迷宫折线与红虚线框）
+            # 彩色笔划召回（迷宫折线、红色虚线框）
             red_excess = r_f - np.maximum(g_f, b_f)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
             color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
             all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
 
-            # 5. 快速梯度与黑白正文字迹检测
             gray_div = (0.299 * r_div + 0.587 * g_div + 0.114 * b_div)
             grad_x = cv2.Sobel(gray_div, cv2.CV_32F, 1, 0, ksize=3)
             grad_y = cv2.Sobel(gray_div, cv2.CV_32F, 0, 1, ksize=3)
@@ -185,19 +177,16 @@ def process_image_for_print(input_path, output_path):
             out_g = np.full_like(g_div, 255.0)
             out_b = np.full_like(b_div, 255.0)
 
-            # 彩色区域：轻度压深色阶，黑白打印实心清晰，彩色打印鲜艳真实
             out_r[all_color_mask] = np.clip(r_div[all_color_mask] * 0.85, 0, 255)
             out_g[all_color_mask] = np.clip(g_div[all_color_mask] * 0.75, 0, 255)
             out_b[all_color_mask] = np.clip(b_div[all_color_mask] * 0.75, 0, 255)
 
-            # 纯黑文字：深黑阶调映射
             ink_vals = gray_div[is_text_mask]
             enhanced_ink = np.clip(ink_vals * 0.36 + 18.0, 25.0, 90.0)
             out_r[is_text_mask] = enhanced_ink
             out_g[is_text_mask] = enhanced_ink
             out_b[is_text_mask] = enhanced_ink
 
-            # 6. 四周极限边缘切除与画布装裱
             out_bgr = cv2.merge([out_b, out_g, out_r])
             out_bgr = clean_extreme_edges_only(out_bgr, margin_ratio=0.010)
 
@@ -205,10 +194,10 @@ def process_image_for_print(input_path, output_path):
             res_rgb = cv2.cvtColor(res_uint8, cv2.COLOR_BGR2RGB)
             sharp_pil = Image.fromarray(res_rgb)
             final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97)
-            final_canvas.save(output_path, format="JPEG", quality=82, dpi=(200, 200))
+            final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         else:
-            # PIL 引擎轻量降维分支
+            # 小盒子 PIL 降维分支：纯 PIL+NumPy，无 OpenCV 依赖，极低内存消耗
             with Image.open(input_path) as disk_img:
                 img = ImageOps.exif_transpose(disk_img.convert("RGB"))
 
@@ -263,7 +252,7 @@ def process_image_for_print(input_path, output_path):
             res_uint8 = np.clip(rgb_stack, 0, 255).astype(np.uint8)
             sharp_pil = Image.fromarray(res_uint8, mode="RGB")
             final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97)
-            final_canvas.save(output_path, format="JPEG", quality=82, dpi=(200, 200))
+            final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         log_debug(f"图像增强耗时: {time.time() - t0:.2f}s -> {output_path}")
         return True
@@ -272,7 +261,6 @@ def process_image_for_print(input_path, output_path):
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
-    """安全清空过期文件，绝不删除目录本身"""
     try:
         if not os.path.exists(directory):
             os.makedirs(directory, exist_ok=True)
@@ -317,7 +305,7 @@ class PrintHandler(BaseHandler):
             if media.startswith("-") or not re.match(r'^[a-zA-Z0-9_\-]+$', media):
                 media = "A4"
 
-            # 目录自愈（杜绝 [Errno 2]）
+            # 目录自愈
             os.makedirs(UPLOAD_DIR, exist_ok=True)
 
             jobs = []
@@ -344,12 +332,16 @@ class PrintHandler(BaseHandler):
                     if process_image_for_print(src_path, enhanced_path):
                         target_file = enhanced_path
 
+                # 核心防切片参数：严格绑定 fit-to-page 与 scaling=100
                 cmd = [
                     "lp",
                     "-d", printer,
                     "-n", str(copies_int),
                     "-o", f"media={media}",
                     "-o", f"PageSize={media}",
+                    "-o", "fit-to-page",
+                    "-o", "scaling=100",
+                    "-o", "natural-scaling=100",
                     "-o", "position=center"
                 ]
 
