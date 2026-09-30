@@ -123,8 +123,8 @@
         <div class="print-header-bar">
             <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨️ 打印</span>
             <div class="printer-select-wrap">
-                <select id="printer-select" class="select-ctrl"></select>
-                <button type="button" class="btn-refresh-icon" onclick="loadPrinters(false)" title="刷新打印机">🔄</button>
+                <select id="printer-select" class="select-ctrl" onchange="onPrinterSelectionChange()"></select>
+                <button type="button" class="btn-refresh-icon" onclick="loadPrinters(false)" title="刷新打印机状态">🔄</button>
             </div>
         </div>
 
@@ -136,7 +136,7 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 文件上传区 (挂载拖拽事件) -->
+                <!-- 文件上传区 (原生拖拽监听) -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文件 (可直接拖拽文件进框)</span>
@@ -238,15 +238,20 @@
                     </div>
                 </div>
 
-                <!-- 打印机健康状态与硬件代号卡片 -->
+                <!-- 打印机健康状态与硬件代号卡片 (含一键网页恢复) -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span>⚡ 打印机硬件状态</span>
                         <span id="quick-hw-badge" style="font-size:12px; color:var(--success); font-weight:600;">● 就绪联机</span>
                     </div>
-                    <!-- 硬件告警栏 (如 E1 缺纸) -->
-                    <div id="quick-hw-alert-box" style="display:none; padding:8px 12px; border-radius:6px; font-size:13px; font-weight:600; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
+
+                    <!-- 硬件告警栏 (带网页端一键恢复按钮，免按实体键) -->
+                    <div id="quick-hw-alert-box" style="display:none; padding:12px; border-radius:6px; font-size:13px; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
+                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️ 检测到打印机故障</div>
+                        <div style="font-size:12px; line-height:1.5; margin-bottom:8px;" id="quick-hw-alert-desc">请确认纸盒内已放置充足 A4 纸张，并确认机盖合紧。</div>
+                        <button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; width:100%; padding:8px 0; font-size:13px; font-weight:700;" onclick="resumeCurrentPrinter()">▶️ 解决后点击：网页端一键恢复打印 (免按机身键)</button>
                     </div>
+
                     <div style="font-size:13px; color:var(--text-sub); line-height:1.8;">
                         纸张规格：<b style="color:var(--text-main);">A4 标准纸</b><br>
                         缩放标准：<b style="color:var(--text-main);">97% 安全充满度 (留白 3~5mm)</b><br>
@@ -314,11 +319,12 @@
             <div id="diag-list" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
 
-        <!-- 打印机设备列表卡片 (带硬件代号 E1~E4) -->
+        <!-- 打印机设备列表卡片 (带硬件代号 E1~E4 及恢复按键) -->
         <div class="card-box">
             <div class="card-title">
                 <span>🖨️ 打印机列表与 AirPrint 隔空打印控制</span>
                 <div style="display:flex; gap:8px;">
+                    <button type="button" class="nav-btn" style="color:var(--primary); font-weight:700;" onclick="resetUsbLock()">⚡ 复位USB通信</button>
                     <button type="button" class="nav-btn" onclick="loadPrinters(true)">🔄 刷新状态</button>
                     <button type="button" class="nav-btn" style="color:#ef4444;" onclick="cleanSpoolJobs()">🧹 清空队列</button>
                 </div>
@@ -326,7 +332,7 @@
             <div id="device-card-list" style="display:flex; flex-direction:column; gap:12px; margin-top:10px;"></div>
         </div>
 
-        <!-- 全功能 631 驱动库在线检索与添加面板 -->
+        <!-- 631 驱动库在线检索 -->
         <div class="card-box">
             <div class="card-title">🔎 检索系统驱动库（同步 631 驱动池）</div>
             <p style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">输入打印机型号关键词（如: <code>HP</code>, <code>1020</code>, <code>M126</code>, <code>Generic</code> 等），无需进入 631 即可直接检索并绑定安装驱动。</p>
@@ -371,7 +377,7 @@
                 <div class="param-grid" style="margin-bottom:12px;">
                     <div class="form-item">
                         <label>邮箱账号</label>
-                        <input type="email" id="mail_user" name="user" class="form-ctrl" placeholder="例如: 88888888@qq.com">
+                        <input type="email" id="mail_user" name="user" class="form-ctrl" placeholder="例如: 137062870@qq.com">
                     </div>
                     <div class="form-item">
                         <label>授权码 / 专用密码</label>
@@ -408,6 +414,7 @@ let currentOrientation = 'portrait';
 let fileQueue = [];
 let idFrontFile = null;
 let idBackFile = null;
+let globalPrintersData = [];
 
 // 通用安全消息提取器
 function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失败') {
@@ -415,7 +422,7 @@ function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失
     return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
 }
 
-// ---------------- 拖拽事件监听流 (解决不能拖拽上传的问题) ----------------
+// ---------------- 拖拽事件监听流 ----------------
 const dropZone = document.getElementById('drag-drop-zone');
 const dropTip = document.getElementById('drag-drop-tip');
 
@@ -617,10 +624,10 @@ function loadPrinters(renderTable) {
         .then(d => {
             if (!d.success || !d.data) return;
             const data = d.data;
+            globalPrintersData = data.printers || [];
 
             const sel = document.getElementById('printer-select');
-            let hasActiveError = false;
-            let activeErrorMsg = '';
+            let currentSelected = sel ? sel.value : '';
 
             if (sel) {
                 sel.innerHTML = '';
@@ -628,31 +635,14 @@ function loadPrinters(renderTable) {
                     const opt = document.createElement('option');
                     opt.value = p.name;
                     opt.innerText = p.name + (p.is_default ? ' (默认)' : '');
-                    if (p.is_default) {
+                    if (currentSelected ? (p.name === currentSelected) : p.is_default) {
                         opt.selected = true;
-                        document.getElementById('status-printer-name').innerText = p.name;
-                        if (p.has_error) {
-                            hasActiveError = true;
-                            activeErrorMsg = p.error_desc || `硬件报警: ${p.error_code}`;
-                        }
                     }
                     sel.appendChild(opt);
                 });
             }
 
-            // 更新首页硬件状态与 E1 错误展示
-            const badge = document.getElementById('quick-hw-badge');
-            const alertBox = document.getElementById('quick-hw-alert-box');
-            if (hasActiveError) {
-                badge.style.color = '#ef4444';
-                badge.innerText = '● 硬件故障告警';
-                alertBox.style.display = 'block';
-                alertBox.innerHTML = `⚠️ <b>${activeErrorMsg}</b><br><span style="font-weight:normal; font-size:12px;">请确认纸盒已放入充足 A4 纸张、门盖关闭且已去除卡纸。</span>`;
-            } else {
-                badge.style.color = 'var(--success)';
-                badge.innerText = '● 就绪联机';
-                alertBox.style.display = 'none';
-            }
+            updateSelectedPrinterStatus();
 
             if (!renderTable) return;
 
@@ -686,7 +676,7 @@ function loadPrinters(renderTable) {
                 diagBox.style.display = 'none';
             }
 
-            // 渲染设备列表卡片 (带醒目 E1~E4 代号)
+            // 渲染设备列表卡片 (带硬件代号 E1~E4 及恢复出纸操作按钮)
             const cardList = document.getElementById('device-card-list');
             cardList.innerHTML = '';
             if (data.printers.length === 0) {
@@ -702,8 +692,10 @@ function loadPrinters(renderTable) {
                 card.style.background = '#fff';
 
                 let warnTags = '';
-                if (p.error_code) {
-                    warnTags += `<span style="background:#fee2e2; color:#b91c1c; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:800; border:1px solid #fca5a5;">🚨 硬件代号: ${p.error_code} (${p.error_desc})</span> `;
+                let resumeBtn = '';
+                if (p.has_error || p.error_code) {
+                    warnTags += `<span style="background:#fee2e2; color:#b91c1c; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:800; border:1px solid #fca5a5;">🚨 硬件故障: ${p.error_code || '异常'} (${p.error_desc || p.status})</span> `;
+                    resumeBtn = `<button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; font-weight:700;" onclick="resumePrinterByName('${p.name}')">▶️ 远程恢复</button>`;
                 }
 
                 card.innerHTML = `
@@ -714,13 +706,14 @@ function loadPrinters(renderTable) {
                         </div>
                         <div>${warnTags}</div>
                     </div>
-                    <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">状态: ${p.status_msg || '就绪'}</div>
+                    <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">状态: ${p.status_msg || p.status || '就绪'}</div>
                     <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #f1f5f9; padding-top:10px;">
                         <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;">
                             <input type="checkbox" ${p.is_shared ? 'checked' : ''} onchange="togglePrinterShare('${p.name}', this.checked)">
                             <b>共享此打印机 (解决苹果隔空打印搜不到)</b>
                         </label>
                         <div style="display:flex; gap:6px;">
+                            ${resumeBtn}
                             ${!p.is_default ? `<button type="button" class="nav-btn" onclick="setDefaultPrinter('${p.name}')">设为默认</button>` : ''}
                             <button type="button" class="nav-btn" onclick="printTestPage('${p.name}')">测试页</button>
                         </div>
@@ -729,6 +722,56 @@ function loadPrinters(renderTable) {
                 cardList.appendChild(card);
             });
         });
+}
+
+function onPrinterSelectionChange() {
+    updateSelectedPrinterStatus();
+}
+
+function updateSelectedPrinterStatus() {
+    const sel = document.getElementById('printer-select');
+    if (!sel || !sel.value) return;
+    const pName = sel.value;
+    document.getElementById('status-printer-name').innerText = pName;
+
+    const p = globalPrintersData.find(item => item.name === pName);
+    const badge = document.getElementById('quick-hw-badge');
+    const alertBox = document.getElementById('quick-hw-alert-box');
+    const alertTitle = document.getElementById('quick-hw-alert-title');
+    const alertDesc = document.getElementById('quick-hw-alert-desc');
+
+    if (p && (p.has_error || p.error_code)) {
+        badge.style.color = '#ef4444';
+        badge.innerText = `● 硬件故障 (${p.error_code || '异常'})`;
+        alertBox.style.display = 'block';
+        alertTitle.innerText = `⚠️ 打印机报告: ${p.error_desc || p.status}`;
+        alertDesc.innerText = '已加纸或排除故障后，无需按打印机面板按键，点击下方按钮即可远程恢复继续出纸。';
+    } else {
+        badge.style.color = 'var(--success)';
+        badge.innerText = '● 就绪联机';
+        alertBox.style.display = 'none';
+    }
+}
+
+// ---------------- 远程恢复打印（免按实体键） ----------------
+function resumeCurrentPrinter() {
+    const sel = document.getElementById('printer-select');
+    if (!sel || !sel.value) return;
+    resumePrinterByName(sel.value);
+}
+
+function resumePrinterByName(printerName) {
+    const fd = new FormData();
+    fd.append('action', 'resume_printer');
+    fd.append('printer', printerName);
+
+    fetch('/api/printer_admin', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            alert(getRespMsg(d, '已向打印机发送远程恢复指令！'));
+            loadPrinters(true);
+        })
+        .catch(err => alert('恢复请求失败: ' + err));
 }
 
 // ---------------- 631 驱动库在线检索 ----------------
@@ -772,7 +815,6 @@ function selectDriverToBind(drvId, drvName) {
     const pName = prompt(`确定使用驱动【${drvName}】创建或绑定打印机吗？\n请输入打印机名称:`, "My_Printer");
     if (!pName) return;
 
-    // 先探测当前 USB 端口
     fetch('/api/printer_admin?action=discovered_devices')
         .then(r => r.json())
         .then(d => {
@@ -795,7 +837,7 @@ function selectDriverToBind(drvId, drvName) {
         .catch(err => alert('安装绑定失败: ' + err));
 }
 
-// ---------------- 提交打印与操作 ----------------
+// ---------------- 提交打印与常规操作 ----------------
 function submitPrintJob() {
     const btn = document.getElementById('btn-submit');
     const alertBox = document.getElementById('print-alert');
@@ -880,6 +922,18 @@ function submitPrintJob() {
             alertBox.className = 'status-alert status-error';
             alertBox.innerText = '打印服务异常: ' + err;
         });
+}
+
+function resetUsbLock() {
+    const fd = new FormData();
+    fd.append('action', 'reset_usb');
+    fetch('/api/printer_admin', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            alert(getRespMsg(d, 'USB 通信与设备锁已成功复位！'));
+            loadPrinters(true);
+        })
+        .catch(err => alert('复位请求失败: ' + err));
 }
 
 function togglePrinterShare(printer, isShared) {
@@ -1091,7 +1145,13 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
+// 页面初始化与 4 秒轻量状态轮询
 loadPrinters(false);
+setInterval(() => {
+    if (currentNav === 'print' || currentNav === 'devices') {
+        loadPrinters(false);
+    }
+}, 4000);
 </script>
 
 </body>
