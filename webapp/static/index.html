@@ -22,61 +22,51 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f1f5f9; color: var(--text-main); line-height: 1.5; padding: 15px; }
         .wrapper { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid var(--border-color); }
         
-        /* 顶部导航 */
         .top-navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
         .nav-tabs { display: flex; gap: 6px; }
         .nav-btn { border: 1px solid var(--border-color); background: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-sub); transition: all 0.2s; }
         .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
-        /* 顶栏控制 */
         .print-header-bar { display: flex; align-items: center; gap: 15px; padding: 15px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .printer-select-wrap { display: flex; align-items: center; gap: 8px; flex: 1; }
         .select-ctrl { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
         .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: var(--primary); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 
-        /* 子分类切换 */
         .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
         .type-item { flex: 1; padding: 12px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .type-item.active { color: var(--primary); border-bottom-color: var(--primary); background: #f0f7ff; }
 
-        /* 双栏网格 */
         .main-layout { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; padding: 20px; background: #f8fafc; }
         @media (max-width: 900px) { .main-layout { grid-template-columns: 1fr; } }
 
         .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .card-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
         
-        /* 拖拽上传区 */
         .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; cursor: pointer; transition: all 0.2s; position: relative; }
         .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0f7ff; }
         .upload-icon { font-size: 32px; color: #94a3b8; margin-bottom: 6px; }
         .upload-text { font-size: 13px; color: var(--text-sub); }
 
-        /* 身份证框 */
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .idcard-box { border: 2px dashed #cbd5e1; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fff; overflow: hidden; }
         .idcard-box img { width: 100%; height: 100%; object-fit: cover; }
         .idcard-box .text-tip { font-size: 12px; color: var(--text-sub); }
 
-        /* 文件列表 */
         .file-list { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; background: #fff; }
         .file-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
         .file-row:last-child { border-bottom: none; }
         .file-row.active { background: #eff6ff; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
-        /* 表单网格 */
         .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
         .form-ctrl { width: 100%; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
 
-        /* 单选组 */
         .radio-btn-group { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
         .radio-btn { flex: 1; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
         .radio-btn.active { background: var(--primary); color: #fff; }
 
-        /* 预览视窗 */
         .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; }
         .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 14px; align-items: center; }
         .sheet-a4-viewport { width: 300px; height: 424px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
@@ -85,22 +75,18 @@
         .sheet-img-render { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
 
-        /* PDF 翻页控制器 */
         .pdf-pager-bar { display: none; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); }
         .pager-btn { padding: 3px 10px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
         .pager-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* 身份证视窗 */
         .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 20px 0; }
         .idcard-a4-item { width: 180px; height: 114px; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fdfefe; }
         .idcard-a4-item img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* 提交动作 */
         .action-bar { margin-top: 15px; }
         .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-submit-print:hover { background: var(--primary-hover); }
 
-        /* 状态与告警 */
         .status-alert { margin-top: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; display: none; }
         .status-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .status-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
@@ -112,7 +98,6 @@
 <body>
 
 <div class="wrapper">
-    <!-- 顶部导航 -->
     <div class="top-navbar">
         <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
         <div class="nav-tabs">
@@ -141,7 +126,6 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 文件上传区 (原生拖拽监听) -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文件 (可直接拖拽文件进框)</span>
@@ -155,7 +139,6 @@
                     <div class="file-list" id="file-list-view" style="display:none;"></div>
                 </div>
 
-                <!-- 身份证专属上传区 -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">🪪 上传身份证照片</div>
                     <div class="idcard-grid">
@@ -172,7 +155,6 @@
                     <input type="file" id="id-b-file" accept="image/*" style="display:none;" onchange="onIDCardFile(this, 'b')">
                 </div>
 
-                <!-- 打印参数配置 -->
                 <div class="card-box">
                     <div class="card-title">⚙ 打印参数</div>
                     <div style="margin-bottom: 12px;">
@@ -250,14 +232,12 @@
                     </div>
                 </div>
 
-                <!-- 打印机健康状态与硬件代号卡片 (含一键网页恢复) -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span>⚡ 打印机硬件状态</span>
                         <span id="quick-hw-badge" style="font-size:12px; color:var(--success); font-weight:600;">● 就绪联机</span>
                     </div>
 
-                    <!-- 硬件告警栏 (带网页端一键恢复按钮，免按实体键) -->
                     <div id="quick-hw-alert-box" style="display:none; padding:12px; border-radius:6px; font-size:13px; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
                         <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️ 检测到打印机故障</div>
                         <div style="font-size:12px; line-height:1.5; margin-bottom:8px;" id="quick-hw-alert-desc">请确认纸盒内已放置充足 A4 纸张，并确认机盖合紧。</div>
@@ -274,7 +254,7 @@
         </div>
     </div>
 
-    <!-- 2. 在线扫描面板 (含实时视窗预览器) -->
+    <!-- 2. 在线扫描面板 (含 Blob 完美视窗直出) -->
     <div id="panel-scan" class="tab-panel-container">
         <div class="main-layout" style="padding:0; background:transparent;">
             <div class="col-left">
@@ -323,7 +303,6 @@
 
     <!-- 3. 设备管理与状态运维面板 -->
     <div id="panel-devices" class="tab-panel-container">
-        <!-- 全景硬件健康与告警看板（带每日自动静默清理） -->
         <div class="card-box" id="sec-hw-status-panel">
             <div class="card-title">
                 <span id="hw-panel-title">🚨 设备运行与故障告警看板</span>
@@ -341,13 +320,11 @@
             </div>
         </div>
 
-        <!-- 硬件与驱动冲突诊断 -->
         <div class="card-box" id="sec-diagnostics" style="display:none;">
             <div class="card-title">🩺 硬件与驱动冲突诊断</div>
             <div id="diag-list" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
 
-        <!-- 打印机设备列表卡片 (带硬件代号 E1~E4 及恢复按键) -->
         <div class="card-box">
             <div class="card-title">
                 <span>🖨️ 打印机列表与 AirPrint 隔空打印控制</span>
@@ -360,7 +337,6 @@
             <div id="device-card-list" style="display:flex; flex-direction:column; gap:12px; margin-top:10px;"></div>
         </div>
 
-        <!-- 631 驱动库在线检索 -->
         <div class="card-box">
             <div class="card-title">🔎 检索系统驱动库（同步 631 驱动池）</div>
             <p style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">输入打印机型号关键词（如: <code>HP</code>, <code>1020</code>, <code>M126</code>, <code>Generic</code> 等），无需进入 631 即可直接检索并绑定安装驱动。</p>
@@ -370,7 +346,6 @@
             </div>
             <div id="driver-search-results" style="max-height:160px; overflow-y:auto; border:1px solid var(--border-color); border-radius:6px; display:none; margin-bottom:12px; font-size:12px;"></div>
 
-            <!-- 本地 PPD 驱动上传 -->
             <div class="card-title" style="margin-top:15px; font-size:13px;">📦 或上传自定义 PPD 驱动文件</div>
             <div style="display:flex; gap:10px; align-items:center;">
                 <input type="file" id="ppd-file-input" accept=".ppd" class="form-ctrl" style="flex:1;">
@@ -378,7 +353,6 @@
             </div>
             <div id="ppd-alert" class="status-alert"></div>
 
-            <!-- 扫描仪闭源插件上传入口 -->
             <div class="card-title" style="margin-top:20px; font-size:13px; color:#1e293b;">📷 上传扫描仪闭源插件包 (.run) —— 解决 Device I/O 报错</div>
             <p style="font-size:12px; color:var(--text-sub); margin-bottom:8px;">针对 HP M126a、M125、M1005 等复合机，在此直接上传对应版本的 <code>hplip-xxx-plugin.run</code> 即可在后台静默安装生效，彻底免去终端命令行。</p>
             <div style="display:flex; gap:10px; align-items:center;">
@@ -463,7 +437,6 @@ function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失
     return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
 }
 
-// ---------------- 拖拽事件监听流 ----------------
 const dropZone = document.getElementById('drag-drop-zone');
 const dropTip = document.getElementById('drag-drop-tip');
 
@@ -538,7 +511,6 @@ function selectPreviewFile(idx) {
     renderCurrentFilePreview(fileQueue[idx]);
 }
 
-// ---------------- 多页 PDF 与图片渲染器 ----------------
 function renderCurrentFilePreview(file) {
     const tip = document.getElementById('viewport-empty-tip');
     const img = document.getElementById('viewport-img');
@@ -693,7 +665,6 @@ function onIDCardFile(input, side) {
     }
 }
 
-// ---------------- 链式防雪崩轮询 ----------------
 function scheduleNextPoll() {
     setTimeout(() => {
         if (currentNav === 'print' || currentNav === 'devices') {
@@ -706,7 +677,6 @@ function scheduleNextPoll() {
     }, 4000);
 }
 
-// ---------------- 加载打印机、故障代号与全景看板 ----------------
 function loadPrinters(renderTable, callback) {
     if (isPollingActive) {
         if (callback) callback();
@@ -881,7 +851,7 @@ function updateSelectedPrinterStatus() {
         badge.style.color = '#ef4444';
         badge.innerText = `● 硬件故障 (${p.error_code || '异常'})`;
         alertBox.style.display = 'block';
-        alertTitle.innerText = `⚠️️ 打印机报告: ${p.error_desc || p.status}`;
+        alertTitle.innerText = `⚠️ 打印机报告: ${p.error_desc || p.status}`;
         alertDesc.innerText = '已加纸或排除故障后，无需按打印机面板按键，点击下方按钮即可远程恢复继续出纸。';
     } else {
         badge.style.color = 'var(--success)';
@@ -1137,7 +1107,7 @@ function uploadScannerPlugin() {
 
     alertBox.style.display = 'block';
     alertBox.className = 'status-alert status-success';
-    alertBox.innerText = '⏳ 正在上传并后台静默注册扫描动态库，约耗时 15~30 秒，请稍候...';
+    alertBox.innerText = '⏳ 正在上传并解压注册 arm 专有动态库，请稍候...';
 
     fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
@@ -1207,6 +1177,7 @@ function loadScanDevices() {
         });
 }
 
+// ---------------- 扫描结果使用 Blob 原生二进制流直显 ----------------
 function startScan() {
     const dev = document.getElementById('scan-dev-select').value;
     const res = document.getElementById('scan-res').value;
@@ -1236,16 +1207,22 @@ function startScan() {
             btn.disabled = false;
             btn.innerText = '📷 启动硬件扫描并呈现原图';
             if (d.success) {
-                alertBox.innerText = getRespMsg(d, '扫描成功！已呈现原始件');
+                alertBox.innerText = getRespMsg(d, '扫描成功！原画无损呈现');
                 const liveImg = document.getElementById('scan-live-img');
                 const emptyTip = document.getElementById('scan-empty-tip');
                 const dlBtn = document.getElementById('scan-download-anchor');
 
                 emptyTip.style.display = 'none';
-                liveImg.src = d.data.url + '?t=' + new Date().getTime();
-                liveImg.style.display = 'block';
 
-                dlBtn.href = '/api/scan/download?file=' + d.data.filename;
+                const fetchUrl = d.data.download_url || ('/api/scan/download?file=' + d.data.filename);
+                fetch(fetchUrl)
+                    .then(res => res.blob())
+                    .then(blob => {
+                        liveImg.src = URL.createObjectURL(blob);
+                        liveImg.style.display = 'block';
+                    });
+
+                dlBtn.href = fetchUrl;
                 dlBtn.style.display = 'inline-block';
             } else {
                 alertBox.className = 'status-alert status-error';
