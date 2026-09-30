@@ -137,9 +137,7 @@ class PrinterAdminHandler(BaseHandler):
                 return
 
             try:
-                # 动作 A: 向底层通道注入 PJL CONTINUE 续打与清除错误信号
                 pjl_signal = b"\x1b%-12345X@PJL\r\n@PJL RESET\r\n@PJL CONTINUE\r\n\x1b%-12345X"
-                # 尝试通过 usblp 或 raw 管道直接写入
                 usb_devs = glob.glob("/dev/usb/lp*")
                 for dev in usb_devs:
                     try:
@@ -148,11 +146,9 @@ class PrinterAdminHandler(BaseHandler):
                     except Exception:
                         pass
 
-                # 动作 B: 强制解挂 CUPS 队列并清除错误锁
                 subprocess.run(["cupsenable", "-c", printer], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
                 subprocess.run(["cupsaccept", printer], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
-                # 动作 C: 刷新 USB 权限以防总线锁死
                 if os.path.exists("/dev/bus/usb"):
                     subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -266,7 +262,62 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"安装驱动异常: {str(e)}")
             return
 
-        # 8. 一键深度清理垃圾
+        # 8. 上传并自动安装扫描仪专有插件 (.run) —— 核心修复
+        elif action == "upload_scanner_plugin":
+            files = self.request.files.get("plugin_file", [])
+            if not files:
+                self.write_json(False, "未收到上传的插件安装包")
+                return
+
+            upload_file = files[0]
+            fname = os.path.basename(upload_file["filename"])
+            if not fname.lower().endswith(".run"):
+                self.write_json(False, "仅支持 HP 官方扫描插件包 (*-plugin.run)")
+                return
+
+            tmp_plugin_path = f"/tmp/{fname}"
+            try:
+                os.makedirs("/var/lib/hp", exist_ok=True)
+                os.makedirs(os.path.expanduser("~/.hplip"), exist_ok=True)
+
+                with open(tmp_plugin_path, "wb") as f:
+                    f.write(upload_file["body"])
+                os.chmod(tmp_plugin_path, 0o755)
+
+                # 调用 hp-plugin 指定本地路径进行静默安装
+                install_cmd = ["hp-plugin", "-i", "-q", "-p", "/tmp"]
+                res = subprocess.run(
+                    install_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=90
+                )
+
+                state_file = "/var/lib/hp/hplip.state"
+                is_installed = False
+                if os.path.exists(state_file):
+                    with open(state_file, "r") as sf:
+                        if "installed = 1" in sf.read().lower():
+                            is_installed = True
+
+                if is_installed or res.returncode == 0:
+                    self.write_json(True, f"扫描插件 [{fname}] 已成功注册安装！已彻底打通硬件扫描握手通道。")
+                else:
+                    self.write_json(False, f"插件安装失败: {res.stderr.strip() or res.stdout.strip()}")
+            except subprocess.TimeoutExpired:
+                self.write_json(False, "插件安装超时，请检查盒子负载。")
+            except Exception as e:
+                self.write_json(False, f"安装插件异常: {str(e)}")
+            finally:
+                if os.path.exists(tmp_plugin_path):
+                    try:
+                        os.remove(tmp_plugin_path)
+                    except Exception:
+                        pass
+            return
+
+        # 9. 一键深度清理垃圾
         elif action == "clean_disk":
             try:
                 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -280,13 +331,13 @@ class PrinterAdminHandler(BaseHandler):
                     except Exception:
                         pass
                 
-                subprocess.run(["sh", "-c", "rm -rf /tmp/mail_* /tmp/cups_* /tmp/*.pdf /tmp/*.jpg /tmp/*.png 2>/dev/null || true"])
+                subprocess.run(["sh", "-c", "rm -rf /tmp/mail_* /tmp/cups_* /tmp/*.pdf /tmp/*.jpg /tmp/*.png /tmp/*.run 2>/dev/null || true"])
                 self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成，闪存空间已释放！")
             except Exception as e:
                 self.write_json(False, f"清理异常: {str(e)}")
             return
 
-        # 9. 注册新打印机
+        # 10. 注册新打印机
         try:
             uri = self.get_argument("uri", "").strip()
             name = self.get_argument("name", "").strip()
