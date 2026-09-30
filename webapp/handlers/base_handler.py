@@ -26,7 +26,12 @@ class BaseHandler(tornado.web.RequestHandler):
         self.finish()
 
     def write_json(self, success=True, msg="", data=None, **kwargs):
-        resp = {"success": success, "msg": msg}
+        """双向注入 msg 与 message，彻底根治前端解析出的 undefined"""
+        resp = {
+            "success": bool(success),
+            "msg": str(msg),
+            "message": str(msg)
+        }
         if data is not None:
             resp["data"] = data
         resp.update(kwargs)
@@ -39,7 +44,10 @@ class BaseHandler(tornado.web.RequestHandler):
                 now = time.time()
                 for f in glob.glob(os.path.join(UPLOAD_DIR, "*")):
                     if os.path.isfile(f) and (now - os.path.getmtime(f) > max_age_seconds):
-                        os.remove(f)
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
             except Exception:
                 pass
         THREAD_POOL.submit(_cleanup)
