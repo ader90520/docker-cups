@@ -359,7 +359,7 @@
                 <div class="param-grid" style="margin-bottom:12px;">
                     <div class="form-item">
                         <label>邮箱账号</label>
-                        <input type="email" id="mail_user" name="user" class="form-ctrl" placeholder="例如: 137062870@qq.com">
+                        <input type="email" id="mail_user" name="user" class="form-ctrl" placeholder="例如: 1234567890@qq.com">
                     </div>
                     <div class="form-item">
                         <label>授权码 / 专用密码</label>
@@ -396,6 +396,12 @@ let currentOrientation = 'portrait';
 let fileQueue = [];
 let idFrontFile = null;
 let idBackFile = null;
+
+// 通用安全消息提取器：双向兼容 msg 与 message，彻底消灭 undefined
+function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失败') {
+    if (!d) return defaultFail;
+    return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
+}
 
 function switchNavTab(tab) {
     currentNav = tab;
@@ -646,7 +652,7 @@ function loadPrinters(renderTable) {
                         </div>
                         <div>${warnTags}</div>
                     </div>
-                    <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">状态: ${p.status_msg}</div>
+                    <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">状态: ${p.status_msg || p.status || '就绪'}</div>
                     <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #f1f5f9; padding-top:10px;">
                         <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;">
                             <input type="checkbox" ${p.is_shared ? 'checked' : ''} onchange="togglePrinterShare('${p.name}', this.checked)">
@@ -697,15 +703,16 @@ function submitPrintJob() {
                 btn.disabled = false;
                 btn.innerText = '🚀 提交打印任务';
                 alertBox.style.display = 'block';
-                alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
-                alertBox.innerText = res.message;
+                const isSuccess = res.success === true || res.status === true;
+                alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+                alertBox.innerText = getRespMsg(res, '身份证 1:1 标准拼版已成功送达打印机！');
             })
             .catch(err => {
                 btn.disabled = false;
                 btn.innerText = '🚀 提交打印任务';
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
-                alertBox.innerText = '请求异常: ' + err;
+                alertBox.innerText = '拼版请求异常: ' + err;
             });
         return;
     }
@@ -734,16 +741,17 @@ function submitPrintJob() {
             btn.disabled = false;
             btn.innerText = '🚀 提交打印任务';
             alertBox.style.display = 'block';
-            alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
-            alertBox.innerText = res.message;
-            if (res.success) clearAllFiles();
+            const isSuccess = res.success === true || res.status === true;
+            alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+            alertBox.innerText = getRespMsg(res, '文件已成功送达打印队列！');
+            if (isSuccess) clearAllFiles();
         })
         .catch(err => {
             btn.disabled = false;
             btn.innerText = '🚀 提交打印任务';
             alertBox.style.display = 'block';
             alertBox.className = 'status-alert status-error';
-            alertBox.innerText = '服务异常: ' + err;
+            alertBox.innerText = '打印服务异常: ' + err;
         });
 }
 
@@ -755,8 +763,11 @@ function togglePrinterShare(printer, isShared) {
     fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
-            alert(d.message);
+            alert(getRespMsg(d, '共享设置已更新！'));
             loadPrinters(true);
+        })
+        .catch(err => {
+            alert('共享设置请求失败: ' + err);
         });
 }
 
@@ -767,8 +778,11 @@ function setDefaultPrinter(printer) {
     fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
-            alert(d.message);
+            alert(getRespMsg(d, '默认打印机设置成功！'));
             loadPrinters(true);
+        })
+        .catch(err => {
+            alert('设置默认打印机失败: ' + err);
         });
 }
 
@@ -787,9 +801,15 @@ function uploadPpdDriver() {
         .then(r => r.json())
         .then(d => {
             alertBox.style.display = 'block';
-            alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
-            alertBox.innerText = d.message;
-            if (d.success) fileInput.value = '';
+            const isSuccess = d.success === true || d.status === true;
+            alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+            alertBox.innerText = getRespMsg(d, '驱动安装成功！');
+            if (isSuccess) fileInput.value = '';
+        })
+        .catch(err => {
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '安装驱动失败: ' + err;
         });
 }
 
@@ -800,19 +820,29 @@ function triggerCleanDisk() {
     fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
-            alert(d.message);
+            alert(getRespMsg(d, '临时打印缓存与垃圾文件已成功清理完成，闪存空间已释放！'));
             loadPrinters(true);
+        })
+        .catch(err => {
+            alert('清理垃圾失败: ' + err);
         });
 }
 
 function printTestPage(p) {
     fetch('/api/printer_admin?action=test_page&printer=' + encodeURIComponent(p), { method: 'POST' })
-        .then(r => r.json()).then(d => alert(d.message));
+        .then(r => r.json())
+        .then(d => alert(getRespMsg(d, '测试页已发送至打印机！')))
+        .catch(err => alert('测试页发送异常: ' + err));
 }
 
 function cleanSpoolJobs() {
     fetch('/api/printer_admin?action=cancel_all', { method: 'POST' })
-        .then(r => r.json()).then(d => { alert(d.message); loadPrinters(true); });
+        .then(r => r.json())
+        .then(d => {
+            alert(getRespMsg(d, '已清空打印队列！'));
+            loadPrinters(true);
+        })
+        .catch(err => alert('清空队列异常: ' + err));
 }
 
 function loadScanDevices() {
@@ -843,6 +873,11 @@ function startScan() {
     const mode = document.getElementById('scan-mode').value;
     const alertBox = document.getElementById('scan-alert');
 
+    if (!dev) {
+        alert('未检测到可用扫描仪，请先在上方选择扫描设备！');
+        return;
+    }
+
     alertBox.style.display = 'block';
     alertBox.className = 'status-alert status-success';
     alertBox.innerText = '正在驱动硬件扫描并拉平去灰底，请稍候...';
@@ -856,14 +891,18 @@ function startScan() {
         .then(r => r.json())
         .then(d => {
             if (d.success) {
-                alertBox.innerText = '扫描成功！已完成白底增强';
+                alertBox.innerText = getRespMsg(d, '扫描成功！已完成白底增强');
                 document.getElementById('scan-img-elem').src = d.data.url + '?t=' + new Date().getTime();
                 document.getElementById('scan-dl-btn').href = '/api/scan/download?file=' + d.data.filename;
                 document.getElementById('scan-res-box').style.display = 'block';
             } else {
                 alertBox.className = 'status-alert status-error';
-                alertBox.innerText = '扫描中断: ' + d.message;
+                alertBox.innerText = '扫描中断: ' + getRespMsg(d, '', '硬件通信超时或未就绪');
             }
+        })
+        .catch(err => {
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '扫描请求发生异常: ' + err;
         });
 }
 
@@ -919,9 +958,8 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
         btn.innerText = '💾 保存云邮件配置并立即生效';
         alertBox.style.display = 'block';
         const isSuccess = d.success === true || d.status === true;
-        const msg = d.message || d.msg || (isSuccess ? '设置已更新生效' : '保存失败');
         alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
-        alertBox.innerText = msg;
+        alertBox.innerText = getRespMsg(d, '云邮箱及微信通知设置已成功保存并立即生效！');
     })
     .catch(err => {
         btn.disabled = false;
@@ -932,6 +970,7 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
+// 页面初始化时拉取一次设备列表
 loadPrinters(false);
 </script>
 
