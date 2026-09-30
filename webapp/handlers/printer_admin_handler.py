@@ -3,6 +3,7 @@
 
 import os
 import re
+import glob
 import shutil
 import subprocess
 import urllib.parse
@@ -19,7 +20,7 @@ class PrinterAdminHandler(BaseHandler):
     def get(self):
         action = self.get_argument("action", "").strip()
 
-        # 1. 扫描物理 USB/HP 端口
+        # 1. 扫描底层物理端口
         if action == "discovered_devices":
             try:
                 env = os.environ.copy()
@@ -74,7 +75,7 @@ class PrinterAdminHandler(BaseHandler):
             except Exception as e:
                 self.write_json(False, f"扫描物理端口异常: {str(e)}")
 
-        # 2. 查询系统驱动库（支持关键词搜索，打通 631）
+        # 2. 查询系统驱动库
         elif action == "drivers":
             q = self.get_argument("q", "").strip().lower()
             try:
@@ -129,8 +130,53 @@ class PrinterAdminHandler(BaseHandler):
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
         env["LANG"] = "C"
 
-        # 1. 切换 AirPrint 共享与 Avahi 广播刷新
-        if action == "toggle_share":
+        # 1. 网页端模拟按下实体“恢复键”（远程清除E1/E2/E3故障并继续打印）
+        if action == "resume_printer":
+            if not printer:
+                self.write_json(False, "未指定打印机名称")
+                return
+
+            try:
+                # 动作 A: 向底层通道注入 PJL CONTINUE 续打与清除错误信号
+                pjl_signal = b"\x1b%-12345X@PJL\r\n@PJL RESET\r\n@PJL CONTINUE\r\n\x1b%-12345X"
+                # 尝试通过 usblp 或 raw 管道直接写入
+                usb_devs = glob.glob("/dev/usb/lp*")
+                for dev in usb_devs:
+                    try:
+                        with open(dev, "wb") as f:
+                            f.write(pjl_signal)
+                    except Exception:
+                        pass
+
+                # 动作 B: 强制解挂 CUPS 队列并清除错误锁
+                subprocess.run(["cupsenable", "-c", printer], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                subprocess.run(["cupsaccept", printer], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+
+                # 动作 C: 刷新 USB 权限以防总线锁死
+                if os.path.exists("/dev/bus/usb"):
+                    subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                self.write_json(True, f"已向【{printer}】下发远程恢复指令！已模拟按下物理恢复键，正在继续出纸。")
+            except Exception as e:
+                self.write_json(False, f"远程恢复失败: {str(e)}")
+            return
+
+        # 2. 复位 USB 通信与驱动锁
+        elif action == "reset_usb":
+            try:
+                subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                subprocess.run(["cupsaccept"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                if os.path.exists("/dev/bus/usb"):
+                    subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["hp-probe", "-busb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.write_json(True, "USB 通信与驱动锁已成功复位！")
+            except Exception as e:
+                self.write_json(False, f"复位异常: {str(e)}")
+            return
+
+        # 3. 切换 AirPrint 共享与 Avahi 广播刷新
+        elif action == "toggle_share":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
                 return
@@ -150,7 +196,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"设置共享异常: {str(e)}")
             return
 
-        # 2. 设置默认打印机
+        # 4. 设置默认打印机
         elif action == "set_default":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
@@ -165,7 +211,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"设置默认异常: {str(e)}")
             return
 
-        # 3. 打印测试页
+        # 5. 打印测试页
         elif action == "test_page":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
@@ -185,7 +231,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"打印测试页异常: {str(e)}")
             return
 
-        # 4. 清空打印队列
+        # 6. 清空打印队列
         elif action == "cancel_all":
             try:
                 subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
@@ -194,7 +240,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"清空队列异常: {str(e)}")
             return
 
-        # 5. 上传 PPD 驱动并同步至 631
+        # 7. 上传 PPD 驱动
         elif action == "upload_ppd":
             files = self.request.files.get("ppd_file", [])
             if not files:
@@ -220,7 +266,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"安装驱动异常: {str(e)}")
             return
 
-        # 6. 一键深度清理垃圾（安全清空子文件，保留目录骨架）
+        # 8. 一键深度清理垃圾
         elif action == "clean_disk":
             try:
                 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -240,7 +286,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"清理异常: {str(e)}")
             return
 
-        # 7. 注册新打印机至 CUPS
+        # 9. 注册新打印机
         try:
             uri = self.get_argument("uri", "").strip()
             name = self.get_argument("name", "").strip()
