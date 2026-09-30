@@ -2,152 +2,154 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 import time
-import uuid
 import subprocess
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
-SCAN_DIR = "/opt/webapp/static/scans"
-os.makedirs(SCAN_DIR, exist_ok=True)
+SCANS_DIR = "/scans"
+os.makedirs(SCANS_DIR, exist_ok=True)
 
-def release_usb_lock():
+def run_cmd(cmd, timeout=15):
     try:
-        subprocess.run(["rmmod", "usblp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
+    except Exception as e:
+        return False, "", str(e)
+
+def release_usb_printer_lock():
+    """解除因打印机缺纸/报错导致的 USB 端口死锁，将总线交还给扫描仪"""
+    try:
+        # 暂停可能正在死等进纸的 CUPS 打印队列
+        subprocess.run(["cupsdisable", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 确保权限全开
+        if os.path.exists("/dev/bus/usb"):
+            subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
     except Exception:
         pass
 
-def detect_scan_devices():
-    devices = []
-    seen = set()
+def restore_cups_queue():
+    """扫描完毕后唤醒打印队列"""
     try:
-        env = os.environ.copy()
-        env["LANG"] = "C"
-        env["SANE_CONFIG_DIR"] = "/etc/sane.d"
-        res = subprocess.run(["scanimage", "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=6)
-        for line in res.stdout.splitlines():
-            line = line.strip()
-            if line.startswith("device `"):
-                parts = line.split("`", 1)[1].split("'", 1)
-                dev_id = parts[0].strip()
-                dev_desc = parts[1].replace("is a", "").strip() if len(parts) > 1 else dev_id
-
-                if dev_id in seen:
-                    continue
-                seen.add(dev_id)
-
-                if dev_id.startswith("airscan"):
-                    devices.insert(0, {"id": dev_id, "name": f"🌐 局域网免驱 ({dev_desc})"})
-                elif dev_id.startswith("hpaio"):
-                    devices.append({"id": dev_id, "name": f"🔌 HP 硬件专有驱动 ({dev_desc})"})
-                else:
-                    devices.append({"id": dev_id, "name": f"📷 通用扫描仪 ({dev_desc})"})
-    except Exception as e:
-        print(f"[ScanHandler] 动态枚举异常: {e}", flush=True)
-
-    if not devices:
-        try:
-            lsusb = subprocess.run(["lsusb"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
-            if "03f0:222a" in lsusb:
-                devices.append({
-                    "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=CNBKK873D4",
-                    "name": "🔌 HP LaserJet Pro MFP M126a (直通模式)"
-                })
-        except Exception:
-            pass
-
-    return devices
-
-def execute_scan(device_id, resolution=150, mode="Color", format_type="jpeg"):
-    token = uuid.uuid4().hex[:8]
-    output_filename = f"scan_{token}.jpg"
-    raw_path = os.path.join(SCAN_DIR, f"raw_{token}.jpg")
-    final_path = os.path.join(SCAN_DIR, output_filename)
-
-    release_usb_lock()
-
-    env = os.environ.copy()
-    env["LANG"] = "C"
-    env["SANE_CONFIG_DIR"] = "/etc/sane.d"
-
-    cmd = [
-        "scanimage",
-        "-d", device_id,
-        "--resolution", str(resolution),
-        "--mode", mode,
-        "-l", "0",
-        "-t", "0",
-        "-x", "210",
-        "-y", "297",
-        "--format=jpeg"
-    ]
-
-    print(f"[ScanHandler] 执行扫描: {' '.join(cmd)}", flush=True)
-    with open(raw_path, "wb") as f_out:
-        res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=90)
-
-    # 遇到死锁进行二次延时重试
-    if res.returncode != 0:
-        err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
-        print(f"[ScanHandler] 首次扫描返回: {err_msg}", flush=True)
-        if "device I/O" in err_msg or "busy" in err_msg.lower():
-            time.sleep(1.2)
-            release_usb_lock()
-            with open(raw_path, "wb") as f_out:
-                res = subprocess.run(cmd, stdout=f_out, stderr=subprocess.PIPE, text=False, env=env, timeout=90)
-
-    if res.returncode != 0:
-        err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
-        if os.path.exists(raw_path):
-            os.remove(raw_path)
-        if "device I/O" in err_msg:
-            raise RuntimeError("扫描仪硬件正忙或处于死锁状态，请将一体机重启后重试！")
-        raise RuntimeError(err_msg or "扫描通信超时")
-
-    try:
-        if not process_image_for_print(raw_path, final_path):
-            os.rename(raw_path, final_path)
-        else:
-            if os.path.exists(raw_path):
-                os.remove(raw_path)
-    except Exception as e:
-        print(f"[ScanHandler] 图像处理异常，返回原图: {e}", flush=True)
-        os.rename(raw_path, final_path)
-
-    return f"/static/scans/{output_filename}", output_filename
+        subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 class ScanProbeHandler(BaseHandler):
     def get(self):
-        devs = detect_scan_devices()
-        self.write_json(True, "", data={"devices": devs})
+        """探测可用扫描仪（自动适配通用 SANE 与 HP 复合机）"""
+        devices = []
+        # 1. 尝试 scanimage 探测
+        ok, out, _ = run_cmd(["scanimage", "-L"], timeout=8)
+        if ok and out:
+            for line in out.splitlines():
+                if "is a" in line:
+                    match = re.search(r"`([^']+)'\s+is\s+a\s+(.+)", line)
+                    if match:
+                        devices.append({
+                            "id": match.group(1).strip(),
+                            "name": match.group(2).strip()
+                        })
+
+        # 2. 如果没抓到，尝试通过 hp-probe 探测复合设备
+        if not devices:
+            ok_hp, out_hp, _ = run_cmd(["hp-probe", "-busb"], timeout=8)
+            if ok_hp and out_hp:
+                for line in out_hp.splitlines():
+                    if "hp:/" in line or "hpaio:/" in line:
+                        parts = line.strip().split()
+                        uri = parts[0]
+                        devices.append({
+                            "id": uri.replace("hp:/", "hpaio:/"),
+                            "name": "HP LaserJet Pro MFP 复合扫描仪"
+                        })
+
+        # 3. 兜底默认通道
+        if not devices:
+            devices.append({
+                "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=default",
+                "name": "HP LaserJet Pro MFP M126a (自动推荐)"
+            })
+
+        self.write_json(True, "扫描设备探测完成", data={"devices": devices})
 
 class ScanHandler(BaseHandler):
     def post(self):
+        device = self.get_argument("device", "").strip()
+        resolution = self.get_argument("resolution", "150").strip()
+        mode = self.get_argument("mode", "Color").strip()
+
+        # 安全防注入
+        if device and (device.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:/=?&]+$', device)):
+            device = ""
+
+        # 预先解除可能的打印端点锁
+        release_usb_printer_lock()
+
+        timestamp = int(time.time())
+        raw_pnm = os.path.join(SCANS_DIR, f"scan_raw_{timestamp}.pnm")
+        final_jpg = os.path.join(SCANS_DIR, f"scan_{timestamp}.jpg")
+
+        cmd = ["scanimage", "--resolution", str(resolution), "--mode", str(mode)]
+        if device:
+            cmd.extend(["-d", device])
+        cmd.extend(["--format=pnm", f"--output-path={raw_pnm}"])
+
+        print(f"[ScanHandler] 执行硬件扫描命令: {' '.join(cmd)}", flush=True)
+        ok, stdout, stderr = run_cmd(cmd, timeout=45)
+
+        # 恢复打印队列
+        restore_cups_queue()
+
+        if not ok or not os.path.exists(raw_pnm):
+            err_msg = stderr.strip() if stderr else stdout.strip()
+            if "busy" in err_msg.lower() or "device busy" in err_msg.lower():
+                self.write_json(False, "扫描仪硬件正忙（通常因打印机正处于 E1 缺纸或卡纸阻塞状态），请先补充纸张或点击【复位USB通信】！")
+            elif "no devices" in err_msg.lower():
+                self.write_json(False, "未找到扫描仪硬件，请确认 USB 连接良好且赋予了 --privileged 权限。")
+            else:
+                self.write_json(False, f"扫描硬件拒绝: {err_msg or '通信超时'}")
+            return
+
+        # 自动执行图像漂白与去噪
+        enhanced_jpg = os.path.join(SCANS_DIR, f"scan_opt_{timestamp}.jpg")
+        if process_image_for_print(raw_pnm, enhanced_jpg):
+            out_filename = f"scan_opt_{timestamp}.jpg"
+        else:
+            # 降级直接转码为 JPG
+            subprocess.run(["convert", raw_pnm, final_jpg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out_filename = f"scan_{timestamp}.jpg"
+
         try:
-            device = self.get_argument("device", "").strip()
-            resolution = int(self.get_argument("resolution", "150"))
-            mode = self.get_argument("mode", "Color").strip()
+            if os.path.exists(raw_pnm):
+                os.remove(raw_pnm)
+        except Exception:
+            pass
 
-            if not device:
-                devs = detect_scan_devices()
-                if not devs:
-                    self.write_json(False, "未检测到可用扫描仪硬件，请确认一体机已通电并连接 USB")
-                    return
-                device = devs[0]["id"]
-
-            web_url, filename = execute_scan(device, resolution, mode)
-            self.write_json(True, "扫描完成", data={"url": web_url, "filename": filename})
-        except Exception as e:
-            self.write_json(False, f"扫描中断: {str(e)}")
+        self.write_json(True, "扫描并去灰底成功！", data={
+            "url": f"/scans/{out_filename}",
+            "filename": out_filename
+        })
 
 class DownloadScanHandler(BaseHandler):
     def get(self):
         filename = self.get_argument("file", "").strip()
-        filepath = os.path.join(SCAN_DIR, filename)
-        if os.path.exists(filepath):
-            self.set_header("Content-Type", "application/octet-stream")
-            self.set_header("Content-Disposition", f"attachment; filename={filename}")
-            with open(filepath, "rb") as f:
-                self.write(f.read())
-        else:
-            self.write_json(False, "文件不存在")
+        filename = os.path.basename(filename)
+        file_path = os.path.join(SCANS_DIR, filename)
+
+        if not os.path.exists(file_path):
+            self.set_status(404)
+            self.write("文件不存在")
+            return
+
+        self.set_header("Content-Type", "application/octet-stream")
+        self.set_header("Content-Disposition", f"attachment; filename={filename}")
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                self.write(chunk)
+        self.finish()
