@@ -130,7 +130,6 @@ class DevicesHandler(BaseHandler):
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
             env["LANG"] = "C"
 
-            # 1. 优先通过 lpstat -a 提取队列名称
             res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
             for line in res_a.stdout.splitlines():
                 parts = line.strip().split()
@@ -139,7 +138,6 @@ class DevicesHandler(BaseHandler):
                     if p and p not in printers_list:
                         printers_list.append(p)
 
-            # 2. 如果 -a 未取到，通过 lpstat -p 兜底
             if not printers_list:
                 res_p = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
                 for line in res_p.stdout.splitlines():
@@ -149,7 +147,6 @@ class DevicesHandler(BaseHandler):
                         if p and p not in printers_list:
                             printers_list.append(p)
 
-            # 3. 提取默认打印机
             res_d = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
             for line in res_d.stdout.splitlines():
                 if "：" in line:
@@ -179,7 +176,6 @@ class DevicesHandler(BaseHandler):
                 "has_error": (details["media_empty"] or details["paper_jam"] or details["toner_empty"])
             })
 
-        # 磁盘空间监控 (防海纳思闪存写满)
         total, used, free = shutil.disk_usage("/")
         disk_info = {
             "total_gb": round(total / (1024**3), 2),
