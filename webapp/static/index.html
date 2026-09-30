@@ -300,7 +300,7 @@
                             </select>
                         </div>
                     </div>
-                    <button type="button" class="btn-submit-print" id="btn-start-scan" onclick="startScan()">📷 启动硬件扫描并自动漂白加黑</button>
+                    <button type="button" class="btn-submit-print" id="btn-start-scan" onclick="startScan()">📷 启动硬件扫描并呈现原图</button>
                     <div id="scan-alert" class="status-alert"></div>
                 </div>
             </div>
@@ -323,17 +323,21 @@
 
     <!-- 3. 设备管理与状态运维面板 -->
     <div id="panel-devices" class="tab-panel-container">
-        <!-- 存储空间与一键清理 -->
-        <div class="card-box">
+        <!-- 全景硬件健康与告警看板（带每日自动静默清理） -->
+        <div class="card-box" id="sec-hw-status-panel">
             <div class="card-title">
-                <span>💾 闪存存储监控 (海纳思 eMMC)</span>
-                <button type="button" class="btn-del" onclick="triggerCleanDisk()" style="color:var(--primary); font-weight:700;">🧹 一键深度清理垃圾</button>
+                <span id="hw-panel-title">🚨 设备运行与故障告警看板</span>
+                <button type="button" class="btn-del" onclick="triggerCleanDisk()" style="color:var(--text-sub); font-size:12px; font-weight:normal;" title="后台已设为每日自动静默清理，亦可手动清理">🧹 立即手动清理垃圾</button>
             </div>
-            <div style="display:flex; align-items:center; gap:15px; margin-top:10px;">
-                <div style="flex:1; background:#e2e8f0; border-radius:10px; height:18px; overflow:hidden;">
-                    <div id="disk-prog-bar" style="height:100%; width:0%; background:var(--primary); transition:width 0.3s;"></div>
+            <div id="hw-panel-content" style="padding:12px; border-radius:6px; background:#f0fdf4; border:1px solid #bbf7d0; display:flex; justify-content:space-between; align-items:center;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:18px;">✔</span>
+                    <div>
+                        <b style="color:#166534; font-size:13px;" id="hw-panel-msg">打印与扫描通信链路正常</b>
+                        <div style="font-size:11px; color:#15803d; margin-top:2px;">系统已开启后台每日自动清理缓存机制，闪存安全健康。</div>
+                    </div>
                 </div>
-                <span id="disk-desc" style="font-size:13px; font-weight:600; min-width:140px;">检测中...</span>
+                <div id="hw-panel-action"></div>
             </div>
         </div>
 
@@ -366,13 +370,22 @@
             </div>
             <div id="driver-search-results" style="max-height:160px; overflow-y:auto; border:1px solid var(--border-color); border-radius:6px; display:none; margin-bottom:12px; font-size:12px;"></div>
 
-            <!-- 本地 PPD 补充上传 -->
+            <!-- 本地 PPD 驱动上传 -->
             <div class="card-title" style="margin-top:15px; font-size:13px;">📦 或上传自定义 PPD 驱动文件</div>
             <div style="display:flex; gap:10px; align-items:center;">
                 <input type="file" id="ppd-file-input" accept=".ppd" class="form-ctrl" style="flex:1;">
                 <button type="button" class="btn-submit-print" style="width:auto; padding:8px 18px;" onclick="uploadPpdDriver()">📤 安装PPD</button>
             </div>
             <div id="ppd-alert" class="status-alert"></div>
+
+            <!-- 扫描仪闭源插件上传入口 -->
+            <div class="card-title" style="margin-top:20px; font-size:13px; color:#1e293b;">📷 上传扫描仪闭源插件包 (.run) —— 解决 Device I/O 报错</div>
+            <p style="font-size:12px; color:var(--text-sub); margin-bottom:8px;">针对 HP M126a、M125、M1005 等复合机，在此直接上传对应版本的 <code>hplip-xxx-plugin.run</code> 即可在后台静默安装生效，彻底免去终端命令行。</p>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <input type="file" id="plugin-file-input" accept=".run" class="form-ctrl" style="flex:1;">
+                <button type="button" class="btn-submit-print" style="width:auto; padding:8px 18px; background:#059669;" onclick="uploadScannerPlugin()">📤 安装插件</button>
+            </div>
+            <div id="plugin-alert" class="status-alert"></div>
         </div>
     </div>
 
@@ -441,7 +454,6 @@ let idBackFile = null;
 let globalPrintersData = [];
 let isPollingActive = false;
 
-// PDF 预览全局状态
 let currentPdfDoc = null;
 let currentPdfPage = 1;
 let totalPdfPages = 1;
@@ -694,7 +706,7 @@ function scheduleNextPoll() {
     }, 4000);
 }
 
-// ---------------- 加载打印机与 E1~E4 硬件故障展示 ----------------
+// ---------------- 加载打印机、故障代号与全景看板 ----------------
 function loadPrinters(renderTable, callback) {
     if (isPollingActive) {
         if (callback) callback();
@@ -730,22 +742,13 @@ function loadPrinters(renderTable, callback) {
             }
 
             updateSelectedPrinterStatus();
+            updateHwDashboard(data);
 
             if (!renderTable) {
                 if (callback) callback();
                 return;
             }
 
-            // 渲染磁盘
-            if (data.disk) {
-                const pct = data.disk.used_pct;
-                const bar = document.getElementById('disk-prog-bar');
-                bar.style.width = pct + '%';
-                bar.style.background = pct >= 90 ? '#ef4444' : (pct >= 75 ? '#f59e0b' : '#007bff');
-                document.getElementById('disk-desc').innerText = `已用 ${pct}% (剩余 ${data.disk.free_gb} GB / 共 ${data.disk.total_gb} GB)`;
-            }
-
-            // 渲染诊断
             const diagBox = document.getElementById('sec-diagnostics');
             const diagList = document.getElementById('diag-list');
             diagList.innerHTML = '';
@@ -766,7 +769,6 @@ function loadPrinters(renderTable, callback) {
                 diagBox.style.display = 'none';
             }
 
-            // 渲染设备列表卡片 (带硬件代号 E1~E4 及恢复按键)
             const cardList = document.getElementById('device-card-list');
             cardList.innerHTML = '';
             if (data.printers.length === 0) {
@@ -821,6 +823,44 @@ function loadPrinters(renderTable, callback) {
         });
 }
 
+function updateHwDashboard(data) {
+    const pContent = document.getElementById('hw-panel-content');
+    if (!pContent) return;
+
+    let faultyPrinter = null;
+    if (data.printers) {
+        faultyPrinter = data.printers.find(p => p.has_error || p.error_code);
+    }
+
+    if (faultyPrinter) {
+        pContent.style.background = '#fef2f2';
+        pContent.style.borderColor = '#fecaca';
+        pContent.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:22px;">🚨</span>
+                <div>
+                    <b style="color:#b91c1c; font-size:14px;">打印机硬件报警：${faultyPrinter.error_code || '异常'} (${faultyPrinter.error_desc || faultyPrinter.status})</b>
+                    <div style="font-size:12px; color:#991b1b; margin-top:2px;">设备【${faultyPrinter.name}】上报异常阻断，装纸/排除障碍后可直接点击右侧一键恢复。</div>
+                </div>
+            </div>
+            <button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; font-weight:700; padding:8px 16px;" onclick="resumePrinterByName('${faultyPrinter.name}')">▶️ 远程恢复出纸</button>
+        `;
+    } else {
+        pContent.style.background = '#f0fdf4';
+        pContent.style.borderColor = '#bbf7d0';
+        pContent.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:20px; color:#16a34a;">✔</span>
+                <div>
+                    <b style="color:#166534; font-size:13px;">打印与扫描系统健康正常</b>
+                    <div style="font-size:11px; color:#15803d; margin-top:2px;">USB 通信就绪，系统已开启后台每日自动静默清理机制，免维护运行。</div>
+                </div>
+            </div>
+            <button type="button" class="nav-btn" style="color:var(--primary); font-weight:600;" onclick="resetUsbLock()">⚡ 复位总线</button>
+        `;
+    }
+}
+
 function onPrinterSelectionChange() {
     updateSelectedPrinterStatus();
 }
@@ -841,7 +881,7 @@ function updateSelectedPrinterStatus() {
         badge.style.color = '#ef4444';
         badge.innerText = `● 硬件故障 (${p.error_code || '异常'})`;
         alertBox.style.display = 'block';
-        alertTitle.innerText = `⚠️ 打印机报告: ${p.error_desc || p.status}`;
+        alertTitle.innerText = `⚠️️ 打印机报告: ${p.error_desc || p.status}`;
         alertDesc.innerText = '已加纸或排除故障后，无需按打印机面板按键，点击下方按钮即可远程恢复继续出纸。';
     } else {
         badge.style.color = 'var(--success)';
@@ -870,7 +910,6 @@ function resumePrinterByName(printerName) {
         .catch(err => alert('恢复请求失败: ' + err));
 }
 
-// ---------------- 631 驱动库在线检索 ----------------
 function searchCupsDrivers() {
     const kw = document.getElementById('driver-search-kw').value.trim();
     const resBox = document.getElementById('driver-search-results');
@@ -933,7 +972,6 @@ function selectDriverToBind(drvId, drvName) {
         .catch(err => alert('安装绑定失败: ' + err));
 }
 
-// ---------------- 提交打印 ----------------
 function submitPrintJob() {
     const btn = document.getElementById('btn-submit');
     const alertBox = document.getElementById('print-alert');
@@ -1086,14 +1124,45 @@ function uploadPpdDriver() {
         });
 }
 
+function uploadScannerPlugin() {
+    const fileInput = document.getElementById('plugin-file-input');
+    const alertBox = document.getElementById('plugin-alert');
+    if (!fileInput.files || !fileInput.files[0]) {
+        alert('请先选取官方插件包文件 (如 hplip-3.22.10-plugin.run)！');
+        return;
+    }
+    const fd = new FormData();
+    fd.append('action', 'upload_scanner_plugin');
+    fd.append('plugin_file', fileInput.files[0]);
+
+    alertBox.style.display = 'block';
+    alertBox.className = 'status-alert status-success';
+    alertBox.innerText = '⏳ 正在上传并后台静默注册扫描动态库，约耗时 15~30 秒，请稍候...';
+
+    fetch('/api/printer_admin', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            const isSuccess = d.success === true || d.status === true;
+            alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+            alertBox.innerText = getRespMsg(d, '扫描插件安装成功！');
+            if (isSuccess) {
+                fileInput.value = '';
+                loadScanDevices();
+            }
+        })
+        .catch(err => {
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '插件安装异常: ' + err;
+        });
+}
+
 function triggerCleanDisk() {
-    if (!confirm('确定要清理临时上传文件和打印缓存吗？')) return;
     const fd = new FormData();
     fd.append('action', 'clean_disk');
     fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
-            alert(getRespMsg(d, '临时打印缓存与垃圾文件已成功清理完成，闪存空间已释放！'));
+            alert(getRespMsg(d, '临时打印缓存与垃圾文件已成功清理完成！已同步开启后台每日自动静默清理。'));
             loadPrinters(true);
         })
         .catch(err => alert('清理垃圾失败: ' + err));
@@ -1116,7 +1185,6 @@ function cleanSpoolJobs() {
         .catch(err => alert('清空队列异常: ' + err));
 }
 
-// ---------------- 扫描仪探测与视窗渲染 ----------------
 function loadScanDevices() {
     fetch('/api/scan/devices')
         .then(r => r.json())
@@ -1152,10 +1220,10 @@ function startScan() {
     }
 
     btn.disabled = true;
-    btn.innerText = '⏳ 正在硬件扫描与白底增强中...';
+    btn.innerText = '⏳ 正在硬件扫描中...';
     alertBox.style.display = 'block';
     alertBox.className = 'status-alert status-success';
-    alertBox.innerText = '已解绑内核锁并启动扫描硬件，请稍候...';
+    alertBox.innerText = '正在调动硬件扫描头，请稍候...';
 
     const fd = new FormData();
     fd.append('device', dev);
@@ -1166,9 +1234,9 @@ function startScan() {
         .then(r => r.json())
         .then(d => {
             btn.disabled = false;
-            btn.innerText = '📷 启动硬件扫描并自动漂白加黑';
+            btn.innerText = '📷 启动硬件扫描并呈现原图';
             if (d.success) {
-                alertBox.innerText = getRespMsg(d, '扫描成功！已完成白底增强');
+                alertBox.innerText = getRespMsg(d, '扫描成功！已呈现原始件');
                 const liveImg = document.getElementById('scan-live-img');
                 const emptyTip = document.getElementById('scan-empty-tip');
                 const dlBtn = document.getElementById('scan-download-anchor');
@@ -1186,7 +1254,7 @@ function startScan() {
         })
         .catch(err => {
             btn.disabled = false;
-            btn.innerText = '📷 启动硬件扫描并自动漂白加黑';
+            btn.innerText = '📷 启动硬件扫描并呈现原图';
             alertBox.className = 'status-alert status-error';
             alertBox.innerText = '扫描请求发生异常: ' + err;
         });
@@ -1256,7 +1324,6 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
-// 页面初始化与启动链式防雪崩轮询调度
 loadPrinters(false);
 scheduleNextPoll();
 </script>
