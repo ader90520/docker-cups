@@ -19,6 +19,7 @@ class PrinterAdminHandler(BaseHandler):
     def get(self):
         action = self.get_argument("action", "").strip()
 
+        # 1. 扫描物理 USB/HP 端口
         if action == "discovered_devices":
             try:
                 env = os.environ.copy()
@@ -44,12 +45,10 @@ class PrinterAdminHandler(BaseHandler):
                     uri = parts[1].strip()
 
                     scheme = uri.split("://")[0].split(":")[0].lower()
-
                     if scheme in IGNORED_BACKENDS or uri.endswith("://") or uri.endswith(":/"):
                         continue
 
                     decoded_uri = urllib.parse.unquote(uri)
-
                     friendly_name = ""
                     if "://" in decoded_uri:
                         path_part = decoded_uri.split("://")[-1].split("?")[0]
@@ -75,6 +74,7 @@ class PrinterAdminHandler(BaseHandler):
             except Exception as e:
                 self.write_json(False, f"扫描物理端口异常: {str(e)}")
 
+        # 2. 查询系统驱动库（支持关键词搜索，打通 631）
         elif action == "drivers":
             q = self.get_argument("q", "").strip().lower()
             try:
@@ -129,6 +129,7 @@ class PrinterAdminHandler(BaseHandler):
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
         env["LANG"] = "C"
 
+        # 1. 切换 AirPrint 共享与 Avahi 广播刷新
         if action == "toggle_share":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
@@ -149,6 +150,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"设置共享异常: {str(e)}")
             return
 
+        # 2. 设置默认打印机
         elif action == "set_default":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
@@ -163,6 +165,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"设置默认异常: {str(e)}")
             return
 
+        # 3. 打印测试页
         elif action == "test_page":
             if not printer:
                 self.write_json(False, "未指定打印机名称")
@@ -182,6 +185,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"打印测试页异常: {str(e)}")
             return
 
+        # 4. 清空打印队列
         elif action == "cancel_all":
             try:
                 subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
@@ -190,6 +194,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"清空队列异常: {str(e)}")
             return
 
+        # 5. 上传 PPD 驱动并同步至 631
         elif action == "upload_ppd":
             files = self.request.files.get("ppd_file", [])
             if not files:
@@ -215,7 +220,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"安装驱动异常: {str(e)}")
             return
 
-        # 分支 6: 一键深度清理闪存垃圾与临时文件（安全清空子文件，保留目录）
+        # 6. 一键深度清理垃圾（安全清空子文件，保留目录骨架）
         elif action == "clean_disk":
             try:
                 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -235,6 +240,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"清理异常: {str(e)}")
             return
 
+        # 7. 注册新打印机至 CUPS
         try:
             uri = self.get_argument("uri", "").strip()
             name = self.get_argument("name", "").strip()
@@ -263,7 +269,6 @@ class PrinterAdminHandler(BaseHandler):
             else:
                 cmd.extend(["-m", "raw"])
 
-            print(f"[PrinterAdmin] 正在向 631 执行注册: {' '.join(cmd)}")
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
             if ppd_tmp and os.path.exists(ppd_tmp):
