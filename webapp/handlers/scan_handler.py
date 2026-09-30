@@ -82,6 +82,7 @@ class ScanHandler(BaseHandler):
         if not device or device not in valid_ids:
             device = available_devices[0]["id"]
 
+        # 扫描前临时挂起打印队列，防止并发 USB 读写冲突
         subprocess.run(["cupsdisable", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         timestamp = int(time.time())
@@ -102,41 +103,46 @@ class ScanHandler(BaseHandler):
         ]
 
         print(f"[ScanHandler] 执行硬件扫描 (设备: {device}): {' '.join(cmd)}", flush=True)
-        ok, stdout, stderr = run_cmd(cmd, env=env, timeout=50)
+        
+        try:
+            ok, stdout, stderr = run_cmd(cmd, env=env, timeout=50)
 
-        if not ok or not os.path.exists(raw_pnm):
-            print(f"[ScanHandler] scanimage 通信受阻 ({stderr})，调用 hp-scan 专有通道回退...", flush=True)
-            hp_dev = device.replace("hpaio:/", "hp:/")
-            hp_cmd = [
-                "hp-scan",
-                f"-d{hp_dev}",
-                "-m" + ("color" if mode == "Color" else "gray"),
-                f"-r{resolution}",
-                "-sfile",
-                f"-o{final_jpg}"
-            ]
-            ok_hp, _, hp_err = run_cmd(hp_cmd, env=env, timeout=50)
-            subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 若 scanimage 报错，尝试回退 hp-scan
+            if not ok or not os.path.exists(raw_pnm):
+                print(f"[ScanHandler] scanimage 通信受阻 ({stderr})，调用 hp-scan 专有通道回退...", flush=True)
+                hp_dev = device.replace("hpaio:/", "hp:/")
+                hp_cmd = [
+                    "hp-scan",
+                    f"-d{hp_dev}",
+                    "-m" + ("color" if mode == "Color" else "gray"),
+                    f"-r{resolution}",
+                    "-sfile",
+                    f"-o{final_jpg}"
+                ]
+                ok_hp, _, hp_err = run_cmd(hp_cmd, env=env, timeout=50)
 
-            if not ok_hp or not os.path.exists(final_jpg):
-                self.write_json(False, f"扫描硬件通信失败: {stderr or hp_err}。此机型需加载 HP 闭源插件，可在设备管理页面上传插件包。")
-                return
-        else:
-            subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            try:
-                subprocess.run(["convert", raw_pnm, "-quality", "95", final_jpg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if not os.path.exists(final_jpg):
-                    from PIL import Image
-                    with Image.open(raw_pnm) as img:
-                        img.save(final_jpg, format="JPEG", quality=95)
-            except Exception as e:
-                print(f"[ScanHandler] 转码异常: {e}", flush=True)
-
-            if os.path.exists(raw_pnm):
+                if not ok_hp or not os.path.exists(final_jpg):
+                    self.write_json(False, f"扫描硬件通信失败: {stderr or hp_err}。此机型需加载 HP 闭源插件，可在设备管理页面上传插件包。")
+                    return
+            else:
+                # 原始图像转码为 JPEG（100% 原始扫描细节，绝不执行去黑漂白）
                 try:
-                    os.remove(raw_pnm)
-                except Exception:
-                    pass
+                    subprocess.run(["convert", raw_pnm, "-quality", "95", final_jpg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if not os.path.exists(final_jpg):
+                        from PIL import Image
+                        with Image.open(raw_pnm) as img:
+                            img.save(final_jpg, format="JPEG", quality=95)
+                except Exception as e:
+                    print(f"[ScanHandler] 转码异常: {e}", flush=True)
+
+                if os.path.exists(raw_pnm):
+                    try:
+                        os.remove(raw_pnm)
+                    except Exception:
+                        pass
+        finally:
+            # 无论扫描成功还是异常，必须唤醒 CUPS 打印队列，绝不阻塞后续打印任务
+            subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         out_filename = f"scan_{timestamp}.jpg"
         self.write_json(True, "原始扫描完成！已呈现原件真实细节", data={
