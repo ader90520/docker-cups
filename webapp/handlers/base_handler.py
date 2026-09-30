@@ -26,7 +26,7 @@ class BaseHandler(tornado.web.RequestHandler):
         self.finish()
 
     def write_json(self, success=True, msg="", data=None, **kwargs):
-        """双向注入 msg 与 message，彻底根治前端解析出的 undefined"""
+        """同时注入 msg 与 message，彻底根治前端解析出的 undefined"""
         resp = {
             "success": bool(success),
             "msg": str(msg),
@@ -38,10 +38,13 @@ class BaseHandler(tornado.web.RequestHandler):
         self.write(resp)
 
     def clean_old_files(self, max_age_seconds=600):
-        """非阻塞后台清理：清理 10 分钟前的缓存文件，彻底防止存储占满"""
+        """非阻塞后台清理：清理 10 分钟前的缓存文件，保留目录本身"""
         def _cleanup():
             try:
                 now = time.time()
+                if not os.path.exists(UPLOAD_DIR):
+                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+                    return
                 for f in glob.glob(os.path.join(UPLOAD_DIR, "*")):
                     if os.path.isfile(f) and (now - os.path.getmtime(f) > max_age_seconds):
                         try:
@@ -57,13 +60,12 @@ class BaseHandler(tornado.web.RequestHandler):
         cmd = ["lp"]
         if printer:
             cmd.extend(["-d", printer])
-        cmd.extend(["-n", str(copies), "-o", "fit-to-page"])
+        cmd.extend(["-n", str(copies), "-o", "fit-to-page", "-o", "scaling=100", "-o", "position=center"])
         if extra_opts:
             for opt in extra_opts:
                 cmd.extend(["-o", opt])
         cmd.append(file_path)
 
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-        # 触发一次异步清理
         self.clean_old_files()
         return res
