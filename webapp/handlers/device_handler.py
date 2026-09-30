@@ -28,13 +28,8 @@ def run_cmd(cmd, env=None, timeout=2):
         return False, "", str(e)
 
 def read_ieee1284_raw_status():
-    """
-    直接读取内核 /sys 节点或 usb 接口上报的原始 1284 状态字符串
-    能够穿透所有层级，100% 捕获 PAPER_EMPTY (E1), DOOR_OPEN (E2), JAM (E3)
-    """
     raw_status = ""
     try:
-        # 遍历 USB 打印机设备状态节点
         for dev_name in os.listdir("/sys/class/usblp") if os.path.exists("/sys/class/usblp") else []:
             status_file = os.path.join("/sys/class/usblp", dev_name, "device", "ieee1284_id")
             if os.path.exists(status_file):
@@ -48,13 +43,6 @@ def read_ieee1284_raw_status():
     return raw_status.lower()
 
 def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_output, lpstat_p_output):
-    """
-    深度捕获硬件代号：
-    - E1: 缺纸 / 纸张不符
-    - E2: 机盖打开
-    - E3: 内部卡纸
-    - E4: 缺墨 / 耗材异常
-    """
     status_info = {
         "is_shared": False,
         "media_empty": False,
@@ -83,11 +71,9 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     p_lower = lpstat_p_output.lower()
     raw_1284 = read_ieee1284_raw_status()
 
-    # 1. AirPrint 共享属性
     if "shared" in block_lower or "printer-is-shared=true" in block_lower:
         status_info["is_shared"] = True
 
-    # 2. 深度穿透 E1 (缺纸)
     is_e1 = (
         "paper_empty" in raw_1284 or "out_of_paper" in raw_1284 or
         any(k in block_lower for k in ["media-empty", "out-of-paper", "out of paper", "media-needed", "tray-empty", "paper out", "waiting for paper", "缺纸", "装入纸张"]) or
@@ -95,13 +81,8 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
         any(k in p_lower for k in ["media-empty", "out of paper", "offline", "paused", "disabled"])
     )
 
-    # 3. E2 (机盖打开)
     is_e2 = "door_open" in raw_1284 or any(k in block_lower for k in ["cover-open", "door-open", "door open", "机盖"])
-
-    # 4. E3 (卡纸)
     is_e3 = "jam" in raw_1284 or any(k in block_lower for k in ["media-jam", "paper jam", "jam", "卡纸"])
-
-    # 5. E4 (缺墨/硒鼓)
     is_e4 = any(k in block_lower for k in ["toner-empty", "out of toner", "marker-supply-empty", "无墨", "更换耗材"])
 
     if is_e1:
@@ -167,15 +148,6 @@ def perform_system_diagnostics(has_any_printer):
             "detail": "当前系统没有任何可用队列，请在下方【检索系统驱动库】搜索驱动并一键添加。"
         })
 
-    total, used, free = shutil.disk_usage("/")
-    used_pct = int((used / total) * 100)
-    if used_pct >= 90:
-        issues.append({
-            "level": "danger",
-            "title": f"系统存储空间爆满告急 ({used_pct}%)",
-            "detail": "可用闪存不足，会导致打印任务写入失败、日志卡死，请立即点击下方一键清理！"
-        })
-
     DIAG_CACHE["data"] = issues
     DIAG_CACHE["last_time"] = now
     return issues
@@ -234,16 +206,8 @@ class DevicesHandler(BaseHandler):
                 "has_error": bool(details["error_code"])
             })
 
-        total, used, free = shutil.disk_usage("/")
-        disk_info = {
-            "total_gb": round(total / (1024**3), 2),
-            "free_gb": round(free / (1024**3), 2),
-            "used_pct": int((used / total) * 100)
-        }
-
         self.write_json(True, "", data={
             "printers": devices,
             "default": default_printer,
-            "disk": disk_info,
             "diagnostics": perform_system_diagnostics(has_any_printer=bool(printers_list))
         })
