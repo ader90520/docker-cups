@@ -121,7 +121,7 @@
     <!-- 1. 智能打印主面板 -->
     <div id="panel-print" class="tab-panel-container active" style="padding:0;">
         <div class="print-header-bar">
-            <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨️ 打印</span>
+            <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨️️ 打印</span>
             <div class="printer-select-wrap">
                 <select id="printer-select" class="select-ctrl" onchange="onPrinterSelectionChange()"></select>
                 <button type="button" class="btn-refresh-icon" onclick="loadPrinters(false)" title="刷新打印机状态">🔄</button>
@@ -415,6 +415,7 @@ let fileQueue = [];
 let idFrontFile = null;
 let idBackFile = null;
 let globalPrintersData = [];
+let isPollingActive = false;
 
 // 通用安全消息提取器
 function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失败') {
@@ -617,12 +618,35 @@ function onIDCardFile(input, side) {
     }
 }
 
+// ---------------- 链式防雪崩轮询核心调度 ----------------
+function scheduleNextPoll() {
+    setTimeout(() => {
+        if (currentNav === 'print' || currentNav === 'devices') {
+            loadPrinters(false, () => {
+                scheduleNextPoll();
+            });
+        } else {
+            scheduleNextPoll();
+        }
+    }, 4000);
+}
+
 // ---------------- 加载打印机与 E1~E4 硬件代号解析 ----------------
-function loadPrinters(renderTable) {
+function loadPrinters(renderTable, callback) {
+    if (isPollingActive) {
+        if (callback) callback();
+        return;
+    }
+    isPollingActive = true;
+
     fetch('/api/devices')
         .then(r => r.json())
         .then(d => {
-            if (!d.success || !d.data) return;
+            isPollingActive = false;
+            if (!d.success || !d.data) {
+                if (callback) callback();
+                return;
+            }
             const data = d.data;
             globalPrintersData = data.printers || [];
 
@@ -644,7 +668,10 @@ function loadPrinters(renderTable) {
 
             updateSelectedPrinterStatus();
 
-            if (!renderTable) return;
+            if (!renderTable) {
+                if (callback) callback();
+                return;
+            }
 
             // 渲染磁盘
             if (data.disk) {
@@ -681,6 +708,7 @@ function loadPrinters(renderTable) {
             cardList.innerHTML = '';
             if (data.printers.length === 0) {
                 cardList.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8;">暂未检测到打印机，请在下方搜索驱动添加或连接 USB 打印机</div>';
+                if (callback) callback();
                 return;
             }
 
@@ -721,6 +749,12 @@ function loadPrinters(renderTable) {
                 `;
                 cardList.appendChild(card);
             });
+
+            if (callback) callback();
+        })
+        .catch(err => {
+            isPollingActive = false;
+            if (callback) callback();
         });
 }
 
@@ -1145,13 +1179,9 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
-// 页面初始化与 4 秒轻量状态轮询
+// 页面初始化时执行一次渲染，并启动链式防雪崩轮询调度
 loadPrinters(false);
-setInterval(() => {
-    if (currentNav === 'print' || currentNav === 'devices') {
-        loadPrinters(false);
-    }
-}, 4000);
+scheduleNextPoll();
 </script>
 
 </body>
