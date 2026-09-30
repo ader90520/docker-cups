@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>在线打印 - CUPS 智能工作台</title>
-    <!-- PDF.js 用于客户端快速预览 -->
+    <!-- PDF.js 客户端预览引擎 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <style>
         :root {
@@ -85,6 +85,11 @@
         .sheet-img-render { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
 
+        /* PDF 翻页控制器 */
+        .pdf-pager-bar { display: none; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); }
+        .pager-btn { padding: 3px 10px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
+        .pager-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
         /* 身份证视窗 */
         .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 20px 0; }
         .idcard-a4-item { width: 180px; height: 114px; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fdfefe; }
@@ -121,7 +126,7 @@
     <!-- 1. 智能打印主面板 -->
     <div id="panel-print" class="tab-panel-container active" style="padding:0;">
         <div class="print-header-bar">
-            <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨️️ 打印</span>
+            <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨 打印</span>
             <div class="printer-select-wrap">
                 <select id="printer-select" class="select-ctrl" onchange="onPrinterSelectionChange()"></select>
                 <button type="button" class="btn-refresh-icon" onclick="loadPrinters(false)" title="刷新打印机状态">🔄</button>
@@ -236,6 +241,13 @@
                             <div class="idcard-a4-item"><img id="preview-a4-id-b" style="display:none;" alt="国徽面"></div>
                         </div>
                     </div>
+
+                    <!-- PDF 多页翻页控制器 -->
+                    <div class="pdf-pager-bar" id="pdf-pager-ctrl">
+                        <button type="button" class="pager-btn" id="pdf-prev-btn" onclick="prevPdfPage()">◀ 上一页</button>
+                        <span id="pdf-page-num-desc">1 / 1</span>
+                        <button type="button" class="pager-btn" id="pdf-next-btn" onclick="nextPdfPage()">下一页 ▶</button>
+                    </div>
                 </div>
 
                 <!-- 打印机健康状态与硬件代号卡片 (含一键网页恢复) -->
@@ -262,36 +274,48 @@
         </div>
     </div>
 
-    <!-- 2. 在线扫描面板 -->
+    <!-- 2. 在线扫描面板 (含实时视窗预览器) -->
     <div id="panel-scan" class="tab-panel-container">
-        <div class="card-box">
-            <div class="card-title">📷 硬件扫描</div>
-            <div class="form-item" style="margin-bottom:12px;">
-                <label>扫描通道</label>
-                <select id="scan-dev-select" class="form-ctrl"></select>
-            </div>
-            <div class="param-grid" style="margin-bottom:15px;">
-                <div class="form-item">
-                    <label>分辨率</label>
-                    <select id="scan-res" class="form-ctrl">
-                        <option value="150" selected>150 DPI (常规快速)</option>
-                        <option value="300">300 DPI (高清文档)</option>
-                    </select>
+        <div class="main-layout" style="padding:0; background:transparent;">
+            <div class="col-left">
+                <div class="card-box">
+                    <div class="card-title">📷 硬件扫描控制</div>
+                    <div class="form-item" style="margin-bottom:12px;">
+                        <label>扫描通道</label>
+                        <select id="scan-dev-select" class="form-ctrl"></select>
+                    </div>
+                    <div class="param-grid" style="margin-bottom:15px;">
+                        <div class="form-item">
+                            <label>分辨率</label>
+                            <select id="scan-res" class="form-ctrl">
+                                <option value="150" selected>150 DPI (常规快速)</option>
+                                <option value="300">300 DPI (高清文档)</option>
+                            </select>
+                        </div>
+                        <div class="form-item">
+                            <label>色彩模式</label>
+                            <select id="scan-mode" class="form-ctrl">
+                                <option value="Color" selected>彩色 (Color)</option>
+                                <option value="Gray">灰度 (Gray)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-submit-print" id="btn-start-scan" onclick="startScan()">📷 启动硬件扫描并自动漂白加黑</button>
+                    <div id="scan-alert" class="status-alert"></div>
                 </div>
-                <div class="form-item">
-                    <label>色彩模式</label>
-                    <select id="scan-mode" class="form-ctrl">
-                        <option value="Color" selected>彩色 (Color)</option>
-                        <option value="Gray">灰度 (Gray)</option>
-                    </select>
-                </div>
             </div>
-            <button type="button" class="btn-submit-print" onclick="startScan()">📷 启动硬件扫描并自动漂白加黑</button>
-            <div id="scan-alert" class="status-alert"></div>
-            <div id="scan-res-box" style="display:none; text-align:center; margin-top:15px;">
-                <img id="scan-img-elem" style="max-width:100%; border:1px solid #cbd5e1; border-radius:6px;" alt="扫描图">
-                <div style="margin-top:10px;">
-                    <a id="scan-dl-btn" href="#" class="btn-submit-print" style="text-decoration:none; display:inline-block; width:auto; padding:8px 20px;">💾 下载扫描原件</a>
+
+            <!-- 右侧专属扫描视窗预览 -->
+            <div class="col-right">
+                <div class="preview-container">
+                    <div class="preview-toolbar">
+                        <span style="font-size:14px; font-weight:700;">👁️ 扫描实时预览视窗</span>
+                        <a id="scan-download-anchor" href="#" download style="display:none; font-size:12px; color:var(--primary); font-weight:700; text-decoration:none;">💾 下载原件</a>
+                    </div>
+                    <div class="sheet-a4-viewport" id="scan-a4-viewport" style="background:#fff;">
+                        <span class="sheet-placeholder-text" id="scan-empty-tip">点击左侧启动扫描后在此预览</span>
+                        <img id="scan-live-img" class="sheet-img-render" style="display:none;" alt="扫描图">
+                    </div>
                 </div>
             </div>
         </div>
@@ -417,7 +441,11 @@ let idBackFile = null;
 let globalPrintersData = [];
 let isPollingActive = false;
 
-// 通用安全消息提取器
+// PDF 预览全局状态
+let currentPdfDoc = null;
+let currentPdfPage = 1;
+let totalPdfPages = 1;
+
 function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失败') {
     if (!d) return defaultFail;
     return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
@@ -498,22 +526,28 @@ function selectPreviewFile(idx) {
     renderCurrentFilePreview(fileQueue[idx]);
 }
 
+// ---------------- 多页 PDF 与图片渲染器 ----------------
 function renderCurrentFilePreview(file) {
     const tip = document.getElementById('viewport-empty-tip');
     const img = document.getElementById('viewport-img');
     const canvas = document.getElementById('pdf-canvas-render');
+    const pager = document.getElementById('pdf-pager-ctrl');
 
     if (!file) {
         tip.style.display = 'block';
         img.style.display = 'none';
         canvas.style.display = 'none';
+        pager.style.display = 'none';
+        currentPdfDoc = null;
         return;
     }
 
     tip.style.display = 'none';
     if (file.type.startsWith('image/')) {
+        pager.style.display = 'none';
         canvas.style.display = 'none';
         img.style.display = 'block';
+        currentPdfDoc = null;
         const reader = new FileReader();
         reader.onload = e => { img.src = e.target.result; };
         reader.readAsDataURL(file);
@@ -524,16 +558,44 @@ function renderCurrentFilePreview(file) {
         reader.onload = function(e) {
             const typedarray = new Uint8Array(e.target.result);
             pdfjsLib.getDocument(typedarray).promise.then(pdf => {
-                pdf.getPage(1).then(page => {
-                    const viewport = page.getViewport({ scale: 0.8 });
-                    const context = canvas.getContext('2d');
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-                    page.render({ canvasContext: context, viewport: viewport });
-                });
+                currentPdfDoc = pdf;
+                totalPdfPages = pdf.numPages;
+                currentPdfPage = 1;
+                pager.style.display = totalPdfPages > 1 ? 'flex' : 'none';
+                renderPdfPage(currentPdfPage);
             });
         };
         reader.readAsArrayBuffer(file);
+    }
+}
+
+function renderPdfPage(pageIdx) {
+    if (!currentPdfDoc) return;
+    currentPdfDoc.getPage(pageIdx).then(page => {
+        const canvas = document.getElementById('pdf-canvas-render');
+        const viewport = page.getViewport({ scale: 0.8 });
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        page.render({ canvasContext: context, viewport: viewport });
+
+        document.getElementById('pdf-page-num-desc').innerText = `${pageIdx} / ${totalPdfPages}`;
+        document.getElementById('pdf-prev-btn').disabled = (pageIdx <= 1);
+        document.getElementById('pdf-next-btn').disabled = (pageIdx >= totalPdfPages);
+    });
+}
+
+function prevPdfPage() {
+    if (currentPdfDoc && currentPdfPage > 1) {
+        currentPdfPage--;
+        renderPdfPage(currentPdfPage);
+    }
+}
+
+function nextPdfPage() {
+    if (currentPdfDoc && currentPdfPage < totalPdfPages) {
+        currentPdfPage++;
+        renderPdfPage(currentPdfPage);
     }
 }
 
@@ -565,6 +627,7 @@ function switchPrintType(t) {
         document.getElementById('viewport-empty-tip').style.display = 'none';
         document.getElementById('viewport-img').style.display = 'none';
         document.getElementById('pdf-canvas-render').style.display = 'none';
+        document.getElementById('pdf-pager-ctrl').style.display = 'none';
     } else {
         secNormal.style.display = 'block';
         secID.style.display = 'none';
@@ -618,7 +681,7 @@ function onIDCardFile(input, side) {
     }
 }
 
-// ---------------- 链式防雪崩轮询核心调度 ----------------
+// ---------------- 链式防雪崩轮询 ----------------
 function scheduleNextPoll() {
     setTimeout(() => {
         if (currentNav === 'print' || currentNav === 'devices') {
@@ -631,7 +694,7 @@ function scheduleNextPoll() {
     }, 4000);
 }
 
-// ---------------- 加载打印机与 E1~E4 硬件代号解析 ----------------
+// ---------------- 加载打印机与 E1~E4 硬件故障展示 ----------------
 function loadPrinters(renderTable, callback) {
     if (isPollingActive) {
         if (callback) callback();
@@ -703,7 +766,7 @@ function loadPrinters(renderTable, callback) {
                 diagBox.style.display = 'none';
             }
 
-            // 渲染设备列表卡片 (带硬件代号 E1~E4 及恢复出纸操作按钮)
+            // 渲染设备列表卡片 (带硬件代号 E1~E4 及恢复按键)
             const cardList = document.getElementById('device-card-list');
             cardList.innerHTML = '';
             if (data.printers.length === 0) {
@@ -787,7 +850,6 @@ function updateSelectedPrinterStatus() {
     }
 }
 
-// ---------------- 远程恢复打印（免按实体键） ----------------
 function resumeCurrentPrinter() {
     const sel = document.getElementById('printer-select');
     if (!sel || !sel.value) return;
@@ -871,7 +933,7 @@ function selectDriverToBind(drvId, drvName) {
         .catch(err => alert('安装绑定失败: ' + err));
 }
 
-// ---------------- 提交打印与常规操作 ----------------
+// ---------------- 提交打印 ----------------
 function submitPrintJob() {
     const btn = document.getElementById('btn-submit');
     const alertBox = document.getElementById('print-alert');
@@ -1054,6 +1116,7 @@ function cleanSpoolJobs() {
         .catch(err => alert('清空队列异常: ' + err));
 }
 
+// ---------------- 扫描仪探测与视窗渲染 ----------------
 function loadScanDevices() {
     fetch('/api/scan/devices')
         .then(r => r.json())
@@ -1081,15 +1144,18 @@ function startScan() {
     const res = document.getElementById('scan-res').value;
     const mode = document.getElementById('scan-mode').value;
     const alertBox = document.getElementById('scan-alert');
+    const btn = document.getElementById('btn-start-scan');
 
     if (!dev) {
         alert('未检测到可用扫描仪，请先在上方选择扫描设备！');
         return;
     }
 
+    btn.disabled = true;
+    btn.innerText = '⏳ 正在硬件扫描与白底增强中...';
     alertBox.style.display = 'block';
     alertBox.className = 'status-alert status-success';
-    alertBox.innerText = '正在驱动硬件扫描并拉平去灰底，请稍候...';
+    alertBox.innerText = '已解绑内核锁并启动扫描硬件，请稍候...';
 
     const fd = new FormData();
     fd.append('device', dev);
@@ -1099,17 +1165,28 @@ function startScan() {
     fetch('/api/scan', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(d => {
+            btn.disabled = false;
+            btn.innerText = '📷 启动硬件扫描并自动漂白加黑';
             if (d.success) {
                 alertBox.innerText = getRespMsg(d, '扫描成功！已完成白底增强');
-                document.getElementById('scan-img-elem').src = d.data.url + '?t=' + new Date().getTime();
-                document.getElementById('scan-dl-btn').href = '/api/scan/download?file=' + d.data.filename;
-                document.getElementById('scan-res-box').style.display = 'block';
+                const liveImg = document.getElementById('scan-live-img');
+                const emptyTip = document.getElementById('scan-empty-tip');
+                const dlBtn = document.getElementById('scan-download-anchor');
+
+                emptyTip.style.display = 'none';
+                liveImg.src = d.data.url + '?t=' + new Date().getTime();
+                liveImg.style.display = 'block';
+
+                dlBtn.href = '/api/scan/download?file=' + d.data.filename;
+                dlBtn.style.display = 'inline-block';
             } else {
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '扫描中断: ' + getRespMsg(d, '', '硬件通信超时或未就绪');
             }
         })
         .catch(err => {
+            btn.disabled = false;
+            btn.innerText = '📷 启动硬件扫描并自动漂白加黑';
             alertBox.className = 'status-alert status-error';
             alertBox.innerText = '扫描请求发生异常: ' + err;
         });
@@ -1179,7 +1256,7 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
-// 页面初始化时执行一次渲染，并启动链式防雪崩轮询调度
+// 页面初始化与启动链式防雪崩轮询调度
 loadPrinters(false);
 scheduleNextPoll();
 </script>
