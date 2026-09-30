@@ -87,7 +87,7 @@ def push_wechat_notice(token, title, content):
             "template": "html"
         }).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=8)
+        urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
 
@@ -120,67 +120,95 @@ def decode_str(s):
     except Exception:
         return str(s)
 
-def print_attachment_file(file_path, printer_name="", skip_filter=False, token=""):
-    printer = get_target_printer(printer_name)
-    if not printer:
-        print("[MailWorker] 未发现可用打印机，跳过打印", flush=True)
-        return False
+def async_print_attachment_task(file_path, printer_name="", skip_filter=False, token=""):
+    """异步打印工作线程，不阻塞邮件轮询"""
+    try:
+        printer = get_target_printer(printer_name)
+        if not printer:
+            print("[MailWorker] 未发现可用打印机，跳过打印", flush=True)
+            return
 
-    target_file = file_path
-    ext = os.path.splitext(file_path)[-1].lower()
+        target_file = file_path
+        ext = os.path.splitext(file_path)[-1].lower()
 
-    if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
-        enhanced_path = file_path + f"_{time.time_ns()}_enhanced.jpg"
-        try:
-            if process_image_for_print(file_path, enhanced_path):
-                target_file = enhanced_path
-        except Exception as e:
-            print(f"[MailWorker] 图像增强失败，使用原图: {e}", flush=True)
+        if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
+            enhanced_path = file_path + f"_{time.time_ns()}_enhanced.jpg"
+            try:
+                if process_image_for_print(file_path, enhanced_path):
+                    target_file = enhanced_path
+            except Exception as e:
+                print(f"[MailWorker] 图像增强失败，使用原图: {e}", flush=True)
 
-    env = os.environ.copy()
-    env["CUPS_SERVER"] = "/run/cups/cups.sock"
-    env["LANG"] = "C"
+        env = os.environ.copy()
+        env["CUPS_SERVER"] = "/run/cups/cups.sock"
+        env["LANG"] = "C"
 
-    cmd = [
-        "lp",
-        "-d", printer,
-        "-n", "1",
-        "-o", "media=A4",
-        "-o", "PageSize=A4",
-        "-o", "fit-to-page",
-        "-o", "position=center",
-        target_file
-    ]
+        cmd = [
+            "lp",
+            "-d", printer,
+            "-n", "1",
+            "-o", "media=A4",
+            "-o", "PageSize=A4",
+            "-o", "fit-to-page",
+            "-o", "scaling=100",
+            "-o", "natural-scaling=100",
+            "-o", "position=center",
+            target_file
+        ]
 
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    filename = os.path.basename(file_path)
-    
-    # 打印完成后立即执行垃圾清理，防闪存爆盘
-    clean_old_tmp_files(UPLOAD_DIR)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        filename = os.path.basename(file_path)
+        clean_old_tmp_files(UPLOAD_DIR)
 
-    if res.returncode == 0:
-        print(f"[MailWorker] 邮件附件成功送达打印: {target_file}", flush=True)
-        push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机！")
-        return True
-    else:
-        err = res.stderr.strip()
-        print(f"[MailWorker] CUPS拒绝邮件打印任务: {err}", flush=True)
-        push_wechat_notice(token, "⚠️ 打印任务异常告警", f"文件 <b>{filename}</b> 打印失败: {err}")
-        return False
+        if res.returncode == 0:
+            print(f"[MailWorker] 邮件附件已即刻送达打印: {target_file}", flush=True)
+            push_wechat_notice(token, "🖨️ 打印出纸成功", f"文件 <b>{filename}</b> 已成功送达打印机！")
+        else:
+            err = res.stderr.strip()
+            print(f"[MailWorker] CUPS拒绝打印任务: {err}", flush=True)
+            push_wechat_notice(token, "⚠️ 打印任务异常告警", f"文件 <b>{filename}</b> 打印失败: {err}")
+    except Exception as e:
+        print(f"[MailWorker] 异步打印任务异常: {e}", flush=True)
 
 def mail_polling_worker():
-    print("[MailWorker] 云邮件守护线程运行中...", flush=True)
+    """高性能常驻轮询（长连接保活与极速探测）"""
+    print("[MailWorker] 云邮件极速守护线程已启动...", flush=True)
+    conn = None
+    last_user = ""
+    last_pwd = ""
+
     while True:
         try:
             cfg = load_mail_config()
             if cfg.get("enable", False) and cfg.get("user") and cfg.get("password"):
-                conn = imaplib.IMAP4_SSL(cfg.get("server", "imap.qq.com"), int(cfg.get("port", 993)), timeout=20)
-                conn.login(cfg["user"], cfg["password"])
-                conn.select("INBOX")
+                cur_user = cfg["user"]
+                cur_pwd = cfg["password"]
+
+                if conn is None or cur_user != last_user or cur_pwd != last_pwd:
+                    try:
+                        if conn:
+                            try: conn.logout()
+                            except Exception: pass
+                        conn = imaplib.IMAP4_SSL(cfg.get("server", "imap.qq.com"), int(cfg.get("port", 993)), timeout=12)
+                        conn.login(cur_user, cur_pwd)
+                        last_user = cur_user
+                        last_pwd = cur_pwd
+                    except Exception as e:
+                        print(f"[MailWorker] 邮箱登录异常: {e}", flush=True)
+                        conn = None
+                        time.sleep(5)
+                        continue
+
+                try:
+                    conn.select("INBOX")
+                except Exception:
+                    conn = None
+                    continue
 
                 typ, data = conn.search(None, "UNSEEN")
-                if typ == "OK":
-                    for num in data[0].split():
+                if typ == "OK" and data[0]:
+                    msg_ids = data[0].split()
+                    for num in msg_ids:
                         typ_m, msg_data = conn.fetch(num, "(RFC822)")
                         if typ_m != "OK":
                             continue
@@ -194,13 +222,13 @@ def mail_polling_worker():
                         if whitelist:
                             allowed_list = [w.strip().lower() for w in whitelist.split(",") if w.strip()]
                             if allowed_list and not any(clean_from_addr == w or clean_from_addr.endswith("@" + w) for w in allowed_list):
-                                print(f"[MailWorker] 发件人 {clean_from_addr} 不在白名单允许范围内，跳过处理")
+                                print(f"[MailWorker] 发件人 {clean_from_addr} 不在白名单中，跳过")
                                 continue
 
                         subject = decode_str(msg.get("Subject", ""))
                         keyword = cfg.get("keyword", "").strip()
                         if keyword and keyword not in subject:
-                            print(f"[MailWorker] 邮件主题 {subject} 未命中暗号 {keyword}，跳过处理")
+                            print(f"[MailWorker] 邮件主题 {subject} 未命中暗号 {keyword}，跳过")
                             continue
 
                         skip_filter = "原图" in subject
@@ -214,19 +242,29 @@ def mail_polling_worker():
                                 clean_fname = re.sub(r'[\r\n\t]', '', clean_fname)
                                 ext = os.path.splitext(clean_fname)[-1].lower()
                                 if ext in [".jpg", ".jpeg", ".png", ".pdf", ".bmp", ".webp"]:
+                                    os.makedirs(UPLOAD_DIR, exist_ok=True)
                                     safe_name = f"mail_{int(time.time())}_{uuid.uuid4().hex[:6]}_{clean_fname}"
                                     save_path = os.path.join(UPLOAD_DIR, safe_name)
                                     with open(save_path, "wb") as f:
                                         f.write(part.get_payload(decode=True))
-                                    print_attachment_file(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
+                                    t = threading.Thread(
+                                        target=async_print_attachment_task,
+                                        args=(save_path, cfg.get("default_printer", ""), skip_filter, cfg.get("pushplus_token", ""))
+                                    )
+                                    t.daemon = True
+                                    t.start()
                         conn.store(num, "+FLAGS", "\\Seen")
 
-                conn.close()
-                conn.logout()
-        except Exception:
-            pass
+            else:
+                if conn:
+                    try: conn.logout()
+                    except Exception: pass
+                    conn = None
 
-        mail_wake_event.wait(timeout=5)
+        except Exception as e:
+            conn = None
+
+        mail_wake_event.wait(timeout=3)
         mail_wake_event.clear()
 
 mail_thread = threading.Thread(target=mail_polling_worker, daemon=True)
