@@ -3,13 +3,18 @@
 
 import os
 import re
+import glob
 import time
+import fcntl
 import subprocess
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import process_image_for_print
 
 SCANS_DIR = "/scans"
 os.makedirs(SCANS_DIR, exist_ok=True)
+
+# Linux USB 总线复位 ioctl 常量 (解决 Error during device I/O)
+USBDEVFS_RESET = ord('U') << (4*2) | 20
 
 def run_cmd(cmd, timeout=15):
     try:
@@ -18,20 +23,38 @@ def run_cmd(cmd, timeout=15):
     except Exception as e:
         return False, "", str(e)
 
-def release_usb_printer_lock():
-    """解除因打印机缺纸/报错导致的 USB 端口死锁，将总线交还给扫描仪"""
+def reset_physical_usb_bus():
+    """
+    硬件级 USB 总线复位：
+    直接向 /dev/bus/usb 发送 USBDEVFS_RESET 指令，
+    瞬间踢掉死占 USB 接口的打印子进程，解决 hpaio 握手时 Error during device I/O
+    """
     try:
-        # 暂停可能正在死等进纸的 CUPS 打印队列
+        # 1. 临时暂停可能处于死锁的打印队列
         subprocess.run(["cupsdisable", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # 确保权限全开
+
+        # 2. 遍历宿主机映射进来的 USB 设备节点并执行硬件 reset
+        for dev_path in glob.glob("/dev/bus/usb/*/*"):
+            try:
+                fd = os.open(dev_path, os.O_WRONLY)
+                try:
+                    fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+                except Exception:
+                    pass
+                finally:
+                    os.close(fd)
+            except Exception:
+                pass
+
+        # 3. 重新校正权限
         if os.path.exists("/dev/bus/usb"):
             subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.5)
-    except Exception:
-        pass
+        time.sleep(0.6)
+    except Exception as e:
+        print(f"[ScanHandler] USB硬件复位异常: {e}", flush=True)
 
 def restore_cups_queue():
-    """扫描完毕后唤醒打印队列"""
+    """扫描操作完成后唤醒打印队列"""
     try:
         subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
@@ -39,9 +62,7 @@ def restore_cups_queue():
 
 class ScanProbeHandler(BaseHandler):
     def get(self):
-        """探测可用扫描仪（自动适配通用 SANE 与 HP 复合机）"""
         devices = []
-        # 1. 尝试 scanimage 探测
         ok, out, _ = run_cmd(["scanimage", "-L"], timeout=8)
         if ok and out:
             for line in out.splitlines():
@@ -53,7 +74,6 @@ class ScanProbeHandler(BaseHandler):
                             "name": match.group(2).strip()
                         })
 
-        # 2. 如果没抓到，尝试通过 hp-probe 探测复合设备
         if not devices:
             ok_hp, out_hp, _ = run_cmd(["hp-probe", "-busb"], timeout=8)
             if ok_hp and out_hp:
@@ -66,11 +86,10 @@ class ScanProbeHandler(BaseHandler):
                             "name": "HP LaserJet Pro MFP 复合扫描仪"
                         })
 
-        # 3. 兜底默认通道
         if not devices:
             devices.append({
-                "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=default",
-                "name": "HP LaserJet Pro MFP M126a (自动推荐)"
+                "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=CNBKK873D4",
+                "name": "HP LaserJet Pro MFP M126a (自动捕获)"
             })
 
         self.write_json(True, "扫描设备探测完成", data={"devices": devices})
@@ -81,12 +100,11 @@ class ScanHandler(BaseHandler):
         resolution = self.get_argument("resolution", "150").strip()
         mode = self.get_argument("mode", "Color").strip()
 
-        # 安全防注入
         if device and (device.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:/=?&]+$', device)):
             device = ""
 
-        # 预先解除可能的打印端点锁
-        release_usb_printer_lock()
+        # 核心步骤：预先执行硬件级 USB 复位，强制接管总线
+        reset_physical_usb_bus()
 
         timestamp = int(time.time())
         raw_pnm = os.path.join(SCANS_DIR, f"scan_raw_{timestamp}.pnm")
@@ -97,7 +115,7 @@ class ScanHandler(BaseHandler):
             cmd.extend(["-d", device])
         cmd.extend(["--format=pnm", f"--output-path={raw_pnm}"])
 
-        print(f"[ScanHandler] 执行硬件扫描命令: {' '.join(cmd)}", flush=True)
+        print(f"[ScanHandler] 执行硬件扫描: {' '.join(cmd)}", flush=True)
         ok, stdout, stderr = run_cmd(cmd, timeout=45)
 
         # 恢复打印队列
@@ -105,20 +123,19 @@ class ScanHandler(BaseHandler):
 
         if not ok or not os.path.exists(raw_pnm):
             err_msg = stderr.strip() if stderr else stdout.strip()
-            if "busy" in err_msg.lower() or "device busy" in err_msg.lower():
-                self.write_json(False, "扫描仪硬件正忙（通常因打印机正处于 E1 缺纸或卡纸阻塞状态），请先补充纸张或点击【复位USB通信】！")
-            elif "no devices" in err_msg.lower():
-                self.write_json(False, "未找到扫描仪硬件，请确认 USB 连接良好且赋予了 --privileged 权限。")
+            # 针对 HP 典型报错提供极其精准的引导
+            if "i/o" in err_msg.lower() or "device i/o" in err_msg.lower():
+                self.write_json(False, "扫描仪硬件通信受阻(Device I/O)。打印机当前正处于 E1 缺纸或卡纸锁定状态，请放入纸张并在首页点击【恢复打印】或点击【复位USB通信】！")
+            elif "busy" in err_msg.lower():
+                self.write_json(False, "扫描仪通道正忙，请稍候再试。")
             else:
-                self.write_json(False, f"扫描硬件拒绝: {err_msg or '通信超时'}")
+                self.write_json(False, f"扫描硬件拒绝: {err_msg or '设备握手超时'}")
             return
 
-        # 自动执行图像漂白与去噪
         enhanced_jpg = os.path.join(SCANS_DIR, f"scan_opt_{timestamp}.jpg")
         if process_image_for_print(raw_pnm, enhanced_jpg):
             out_filename = f"scan_opt_{timestamp}.jpg"
         else:
-            # 降级直接转码为 JPG
             subprocess.run(["convert", raw_pnm, final_jpg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             out_filename = f"scan_{timestamp}.jpg"
 
