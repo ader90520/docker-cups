@@ -13,8 +13,8 @@ from handlers.print_handler import process_image_for_print
 SCANS_DIR = "/scans"
 os.makedirs(SCANS_DIR, exist_ok=True)
 
-# Linux USB 总线复位 ioctl 常量 (解决 Error during device I/O)
 USBDEVFS_RESET = ord('U') << (4*2) | 20
+USBDEVFS_DISCONNECT = ord('U') << (4*2) | 22
 
 def run_cmd(cmd, timeout=15):
     try:
@@ -23,17 +23,20 @@ def run_cmd(cmd, timeout=15):
     except Exception as e:
         return False, "", str(e)
 
-def reset_physical_usb_bus():
+def force_release_usblp_lock():
     """
-    硬件级 USB 总线复位：
-    直接向 /dev/bus/usb 发送 USBDEVFS_RESET 指令，
-    瞬间踢掉死占 USB 接口的打印子进程，解决 hpaio 握手时 Error during device I/O
+    终极解绑：
+    HP M126a 复合机的核心冲突是 Linux 内核 usblp 驱动霸占了扫描端点。
+    通过卸载 usblp 模块并复位 USB，彻底消除 Error during device I/O！
     """
     try:
-        # 1. 临时暂停可能处于死锁的打印队列
+        # 1. 暂停可能死锁的 CUPS 打印队列
         subprocess.run(["cupsdisable", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 2. 遍历宿主机映射进来的 USB 设备节点并执行硬件 reset
+        # 2. 卸载抢占端口的内核打印机驱动 usblp
+        subprocess.run(["rmmod", "usblp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 3. 硬件级 USB 端口复位
         for dev_path in glob.glob("/dev/bus/usb/*/*"):
             try:
                 fd = os.open(dev_path, os.O_WRONLY)
@@ -46,16 +49,18 @@ def reset_physical_usb_bus():
             except Exception:
                 pass
 
-        # 3. 重新校正权限
         if os.path.exists("/dev/bus/usb"):
             subprocess.run(["chmod", "-R", "666", "/dev/bus/usb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.6)
+        time.sleep(0.8)
     except Exception as e:
-        print(f"[ScanHandler] USB硬件复位异常: {e}", flush=True)
+        print(f"[ScanHandler] USB解绑异常: {e}", flush=True)
 
-def restore_cups_queue():
-    """扫描操作完成后唤醒打印队列"""
+def restore_cups_environment():
+    """扫描完成之后恢复环境"""
     try:
+        # 重新按需加载 usblp 供常规打印使用
+        subprocess.run(["modprobe", "usblp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 唤醒打印队列
         subprocess.run(["cupsenable"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
@@ -89,7 +94,7 @@ class ScanProbeHandler(BaseHandler):
         if not devices:
             devices.append({
                 "id": "hpaio:/usb/HP_LaserJet_Pro_MFP_M126a?serial=CNBKK873D4",
-                "name": "HP LaserJet Pro MFP M126a (自动捕获)"
+                "name": "HP LaserJet Pro MFP M126a (自动捕获通道)"
             })
 
         self.write_json(True, "扫描设备探测完成", data={"devices": devices})
@@ -103,8 +108,8 @@ class ScanHandler(BaseHandler):
         if device and (device.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:/=?&]+$', device)):
             device = ""
 
-        # 核心步骤：预先执行硬件级 USB 复位，强制接管总线
-        reset_physical_usb_bus()
+        # 执行终极解绑，踢掉 usblp 独占锁
+        force_release_usblp_lock()
 
         timestamp = int(time.time())
         raw_pnm = os.path.join(SCANS_DIR, f"scan_raw_{timestamp}.pnm")
@@ -116,18 +121,17 @@ class ScanHandler(BaseHandler):
         cmd.extend(["--format=pnm", f"--output-path={raw_pnm}"])
 
         print(f"[ScanHandler] 执行硬件扫描: {' '.join(cmd)}", flush=True)
-        ok, stdout, stderr = run_cmd(cmd, timeout=45)
+        ok, stdout, stderr = run_cmd(cmd, timeout=50)
 
-        # 恢复打印队列
-        restore_cups_queue()
+        # 恢复环境
+        restore_cups_environment()
 
         if not ok or not os.path.exists(raw_pnm):
             err_msg = stderr.strip() if stderr else stdout.strip()
-            # 针对 HP 典型报错提供极其精准的引导
             if "i/o" in err_msg.lower() or "device i/o" in err_msg.lower():
-                self.write_json(False, "扫描仪硬件通信受阻(Device I/O)。打印机当前正处于 E1 缺纸或卡纸锁定状态，请放入纸张并在首页点击【恢复打印】或点击【复位USB通信】！")
+                self.write_json(False, "扫描仪硬件通信受阻 (Device I/O)。请检查 USB 插头是否插紧，或先在首页点击【恢复打印】清空阻塞任务！")
             elif "busy" in err_msg.lower():
-                self.write_json(False, "扫描仪通道正忙，请稍候再试。")
+                self.write_json(False, "扫描仪硬件繁忙，请稍候 3 秒后再试。")
             else:
                 self.write_json(False, f"扫描硬件拒绝: {err_msg or '设备握手超时'}")
             return
