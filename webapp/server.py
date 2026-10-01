@@ -51,6 +51,7 @@ def make_app():
 
 if __name__ == "__main__":
     app = make_app()
+    # 增加至 100MB 缓冲区，支持高清试卷与多页 PDF 预览上传
     server = tornado.httpserver.HTTPServer(app, max_buffer_size=104857600)
     server.listen(8088, address="0.0.0.0")
     print(">>> CUPS 智能工作台已在 8088 端口正常启动", flush=True)
