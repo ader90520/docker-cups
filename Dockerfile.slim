@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础环境、CUPS、SANE扫描引擎与轻量运行依赖 (无 OpenCV，纯 PIL+NumPy)
+# 基础系统环境、驱动与轻量 Python 运行库 (无 OpenCV，纯 PIL + NumPy 加速)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -40,22 +40,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
 
-# 2. 拷贝代码与配置脚本
+# 拷贝代码与静态文件
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 3. 换行符清洗与赋权
+# 清洗 Windows 换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 执行驱动微码安装与主题补丁
+# 执行驱动微码安装与主题补丁
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 5. 注入全中文模板与国际化字典
+# 注入 CUPS 中文语言包与模板
 RUN mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
@@ -73,7 +73,7 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 6. 初始化运行目录与持久化权限
+# 初始化各持久化与锁目录
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
