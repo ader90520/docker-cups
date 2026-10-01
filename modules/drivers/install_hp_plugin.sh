@@ -1,21 +1,28 @@
 #!/bin/bash
 set -e
 
-RAW_VER=$(dpkg -s hplip | grep '^Version:' | awk '{print $2}')
+RAW_VER=$(dpkg -s hplip 2>/dev/null | grep '^Version:' | awk '{print $2}')
 HPLIP_VER=$(echo "$RAW_VER" | sed -E 's/[~+].*//; s/-.*//')
+[ -z "$HPLIP_VER" ] && HPLIP_VER="3.22.10"
 ARCH=$(uname -m)
 
-echo ">>> [HP-Plugin] 正在跨架构匹配部署专有闭源插件: 版本 ${HPLIP_VER}, 架构 ${ARCH}"
+echo ">>> [HP-Plugin] 匹配部署专有闭源插件: 版本 ${HPLIP_VER}, 架构 ${ARCH}"
 
-mkdir -p /tmp/hp-plugin /usr/share/hplip/data/plugins /usr/share/hplip/data/models /var/lib/hp /etc/hp /root/.hplip
+mkdir -p /tmp/hp-plugin \
+         /usr/share/hplip/data/plugins \
+         /usr/share/hplip/scan/plugins \
+         /usr/share/hplip/data/models \
+         /usr/lib/sane \
+         /usr/lib/arm-linux-gnueabihf/sane \
+         /usr/lib/aarch64-linux-gnu/sane \
+         /var/lib/hp /etc/hp /root/.hplip
+
 cd /tmp/hp-plugin
-
 URL_MIRROR="https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins"
 
-# 增加多镜像源下载尝试，防止官方单点网络波动
 if ! curl -fsSL -A "Mozilla/5.0" "${URL_MIRROR}/hplip-${HPLIP_VER}-plugin.run" -o plugin.run; then
     echo ">>> 主源下载失败，尝试备用地址..."
-    curl -fsSL -A "Mozilla/5.0" "https://sourceforge.net/projects/hplip/files/hplip/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run/download" -o plugin.run || true
+    curl -fsSL -A "Mozilla/5.0" "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" -o plugin.run || true
 fi
 
 if [ -f plugin.run ]; then
@@ -33,9 +40,13 @@ if [ -f plugin.run ]; then
             if echo "$f" | grep -q -- "-${TARGET_SUFFIX}\.so"; then
                 base_name=$(echo "$f" | sed "s/-${TARGET_SUFFIX}\.so/\.so/")
                 cp -f "$f" "/usr/share/hplip/${base_name}"
+                cp -f "$f" "/usr/share/hplip/scan/plugins/${base_name}"
+                cp -f "$f" "/usr/lib/sane/${base_name}"
                 cp -f "$f" "/usr/lib/${base_name}" 2>/dev/null || true
-                cp -f "$f" "/usr/lib/aarch64-linux-gnu/${base_name}" 2>/dev/null || true
                 cp -f "$f" "/usr/lib/arm-linux-gnueabihf/${base_name}" 2>/dev/null || true
+                cp -f "$f" "/usr/lib/arm-linux-gnueabihf/sane/${base_name}" 2>/dev/null || true
+                cp -f "$f" "/usr/lib/aarch64-linux-gnu/${base_name}" 2>/dev/null || true
+                cp -f "$f" "/usr/lib/aarch64-linux-gnu/sane/${base_name}" 2>/dev/null || true
                 cp -f "$f" "/usr/lib/x86_64-linux-gnu/${base_name}" 2>/dev/null || true
             fi
         done
@@ -43,8 +54,8 @@ if [ -f plugin.run ]; then
     fi
 fi
 
-# 固化安装状态与配置文件
 printf "[installation]\nversion = %s\nplugin = 1\nplugin_version = %s\n" "${HPLIP_VER}" "${HPLIP_VER}" > /var/lib/hp/hplip-install.state
+printf "[plugin]\ninstalled = 1\neula = 1\nversion = %s\n" "${HPLIP_VER}" > /var/lib/hp/hplip.state
 
 printf "[hplip]\nversion=%s\n\n[dirs]\nhome=/usr/share/hplip\nrun=/var/run\nppd=/usr/share/ppd/HP\nppdbase=/usr/share/ppd\ndoc=/usr/share/doc/hplip\nhtml=/usr/share/doc/hplip\nicon=/usr/share/applications\ncupsbackend=/usr/lib/cups/backend\ncupsfilter=/usr/lib/cups/filter\ndrv=/usr/share/cups/drv\ninternal_tag=%s\n\n[installation]\ndate_time=09/22/2026\ninstalled_version=%s\ncommand_line=\n" "${HPLIP_VER}" "${HPLIP_VER}" "${HPLIP_VER}" > /etc/hp/hplip.conf
 
