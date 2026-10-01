@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 1. 基础环境、CUPS、SANE扫描驱动及精简版 Headless OpenCV
+# 依赖安装：引入 python3-pip 以定向安装无 GUI/音视频冗余的 headless OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -46,17 +46,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
-# 2. 拷贝代码与静态资源 (保留完整目录结构)
+# 拷贝代码与静态文件 (保留完整 i18 结构)
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 3. 递归清洗换行符并赋权
+# 清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 构建期固化 HPLIP 专有扫描插件
+# 固化 HPLIP 专有扫描插件
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -64,12 +64,12 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动预装与主题补丁注入
+# 执行驱动安装与主题注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 6. 构建期注入中文语言包与模板
+# 注入中文模板与语言字典
 RUN mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
@@ -87,7 +87,7 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 准备运行目录及持久化目录
+# 初始化运行目录与持久化权限
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
