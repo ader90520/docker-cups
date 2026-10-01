@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 1. 大内存版依赖安装：基础环境、CUPS、SANE全品牌扫描驱动、OpenCV视觉处理全家桶
+# 1. 基础环境、CUPS、SANE扫描驱动及精简版 Headless OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,29 +33,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
+    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
     python3-numpy \
-    python3-opencv \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    && pip3 install --no-cache-dir --break-system-packages opencv-python-headless \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
-# 2. 拷贝代码与静态资源
+# 2. 拷贝代码与静态资源 (保留完整目录结构)
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
-COPY i18/zh_CN/ /opt/i18/
+COPY i18/ /opt/i18/
 
 # 3. 递归清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 构建期固化 HPLIP 专有扫描插件 (SourceForge 源防403，静默应答免交互)
+# 4. 构建期固化 HPLIP 专有扫描插件
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -80,21 +81,17 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
     && if [ -d /opt/i18/zh_CN ]; then \
            cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ && \
            cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh/; \
-       elif [ -d /opt/i18/templates ]; then \
-           cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh_CN/ && \
-           cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh/; \
        fi \
     && if [ -f /opt/i18/index.html ]; then \
            cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html; \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 准备运行目录及扫描临时输出目录（保留 /opt/webapp/data 专属持久化目录规范）
+# 7. 准备运行目录及持久化目录
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
-             /opt/webapp/static/scans \
-             /opt/webapp/static/uploads \
+             /opt/webapp/static \
              /tmp/cups_web_uploads \
              /tmp/mail_print_tasks \
              /etc/cups/ssl \
