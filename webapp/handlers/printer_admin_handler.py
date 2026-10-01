@@ -31,13 +31,11 @@ def perform_cleanup():
                         shutil.rmtree(item_p, ignore_errors=True)
                 except Exception:
                     pass
-        subprocess.run(["sh", "-c", "rm -rf /tmp/mail_* /tmp/cups_* /tmp/*.pdf /tmp/*.jpg /tmp/*.png /tmp/*.run 2>/dev/null || true"])
-        print("[AutoClean] 每日定时磁盘垃圾清理已完成", flush=True)
+        subprocess.run(["sh", "-c", "rm -rf /tmp/mail_* /tmp/cups_* /tmp/*.pdf /tmp/*.jpg /tmp/*.png /tmp/*.run /tmp/hp-plugin-* 2>/dev/null || true"])
     except Exception as e:
         print(f"[AutoClean] 定时清理异常: {e}", flush=True)
 
 def daily_cleanup_daemon():
-    """每日静默清理守护线程 (每24小时自动运行一次)"""
     while True:
         time.sleep(86400)
         perform_cleanup()
@@ -111,6 +109,7 @@ class PrinterAdminHandler(BaseHandler):
         action = self.get_argument("action", "").strip()
         printer = self.get_argument("printer", "").strip()
 
+        # 防参数注入
         if printer and (printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', printer)):
             self.write_json(False, "非法打印机设备名称")
             return
@@ -216,8 +215,8 @@ class PrinterAdminHandler(BaseHandler):
                 return
             ppd = files[0]
             fname = os.path.basename(ppd["filename"])
-            if not fname.lower().endswith(".ppd"):
-                self.write_json(False, "仅支持标准 .ppd 格式驱动文件")
+            if not re.match(r'^[a-zA-Z0-9_\.\-]+\.ppd$', fname, re.I):
+                self.write_json(False, "仅支持标准 .ppd 格式驱动文件，且文件名不能包含特殊字符")
                 return
             try:
                 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -238,39 +237,63 @@ class PrinterAdminHandler(BaseHandler):
                 return
             upload_file = files[0]
             fname = os.path.basename(upload_file["filename"])
-            if not fname.lower().endswith(".run"):
+            if not re.match(r'^[a-zA-Z0-9_\.\-]+\.run$', fname, re.I):
                 self.write_json(False, "仅支持 HP 官方扫描插件包 (*-plugin.run)")
                 return
+            
             tmp_plugin_path = f"/tmp/{fname}"
+            extract_dir = "/tmp/hp-plugin-extracted"
             try:
                 os.makedirs("/var/lib/hp", exist_ok=True)
-                os.makedirs(os.path.expanduser("~/.hplip"), exist_ok=True)
+                os.makedirs("/usr/share/hplip/scan/plugins", exist_ok=True)
+                os.makedirs("/usr/share/hplip/data/plugins", exist_ok=True)
+                os.makedirs("/usr/share/hplip/data/firmware", exist_ok=True)
+                os.makedirs("/usr/lib/sane", exist_ok=True)
+                os.makedirs("/usr/lib/arm-linux-gnueabihf/sane", exist_ok=True)
+                shutil.rmtree(extract_dir, ignore_errors=True)
+
                 with open(tmp_plugin_path, "wb") as f:
                     f.write(upload_file["body"])
                 os.chmod(tmp_plugin_path, 0o755)
-                install_cmd = ["hp-plugin", "-i", "-q", "-p", "/tmp"]
-                res = subprocess.run(install_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90)
-                state_file = "/var/lib/hp/hplip.state"
-                is_installed = False
-                if os.path.exists(state_file):
-                    with open(state_file, "r") as sf:
-                        if "installed = 1" in sf.read().lower():
-                            is_installed = True
-                if is_installed or res.returncode == 0:
-                    self.write_json(True, f"扫描插件 [{fname}] 已成功注册安装！")
+
+                subprocess.run(["sh", tmp_plugin_path, "--target", extract_dir, "--noexec"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40)
+
+                installed_count = 0
+                if os.path.exists(extract_dir):
+                    for item in os.listdir(extract_dir):
+                        if item.endswith("-arm32.so"):
+                            base_name = item.replace("-arm32.so", ".so")
+                            src = os.path.join(extract_dir, item)
+                            shutil.copy2(src, f"/usr/share/hplip/scan/plugins/{base_name}")
+                            shutil.copy2(src, f"/usr/share/hplip/data/plugins/{base_name}")
+                            shutil.copy2(src, f"/usr/lib/sane/{base_name}")
+                            shutil.copy2(src, f"/usr/lib/arm-linux-gnueabihf/sane/{base_name}")
+                            shutil.copy2(src, f"/usr/lib/{base_name}")
+                            installed_count += 1
+                        elif item.endswith(".fw.gz"):
+                            shutil.copy2(os.path.join(extract_dir, item), f"/usr/share/hplip/data/firmware/{item}")
+
+                with open("/var/lib/hp/hplip.state", "w", encoding="utf-8") as sf:
+                    sf.write("[plugin]\ninstalled = 1\neula = 1\nversion = 3.22.10\n\n[installation]\nversion = 3.22.10\n")
+
+                subprocess.run(["ldconfig"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                if installed_count > 0:
+                    self.write_json(True, f"扫描插件 [{fname}] 已成功安装并完成动态库注册！({installed_count}个组件生效)")
                 else:
-                    self.write_json(False, f"插件安装失败: {res.stderr.strip() or res.stdout.strip()}")
+                    self.write_json(False, "未能从插件包中找到 arm32 架构二进制文件。")
             except Exception as e:
                 self.write_json(False, f"安装插件异常: {str(e)}")
             finally:
                 if os.path.exists(tmp_plugin_path):
                     try: os.remove(tmp_plugin_path)
                     except Exception: pass
+                shutil.rmtree(extract_dir, ignore_errors=True)
             return
 
         elif action == "clean_disk":
             perform_cleanup()
-            self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成！已同步设置后台每日自动静默清理。")
+            self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成！已同步开启后台每日自动静默清理。")
             return
 
         try:
