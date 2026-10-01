@@ -22,51 +22,61 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f1f5f9; color: var(--text-main); line-height: 1.5; padding: 15px; }
         .wrapper { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid var(--border-color); }
         
+        /* 顶部导航 */
         .top-navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
         .nav-tabs { display: flex; gap: 6px; }
         .nav-btn { border: 1px solid var(--border-color); background: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-sub); transition: all 0.2s; }
         .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
+        /* 顶栏控制 */
         .print-header-bar { display: flex; align-items: center; gap: 15px; padding: 15px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .printer-select-wrap { display: flex; align-items: center; gap: 8px; flex: 1; }
         .select-ctrl { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
         .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: var(--primary); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 
+        /* 子分类切换 */
         .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
         .type-item { flex: 1; padding: 12px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .type-item.active { color: var(--primary); border-bottom-color: var(--primary); background: #f0f7ff; }
 
+        /* 双栏网格 */
         .main-layout { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; padding: 20px; background: #f8fafc; }
         @media (max-width: 900px) { .main-layout { grid-template-columns: 1fr; } }
 
         .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .card-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
         
+        /* 拖拽上传区 */
         .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; cursor: pointer; transition: all 0.2s; position: relative; }
         .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0f7ff; }
         .upload-icon { font-size: 32px; color: #94a3b8; margin-bottom: 6px; }
         .upload-text { font-size: 13px; color: var(--text-sub); }
 
+        /* 身份证框 */
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .idcard-box { border: 2px dashed #cbd5e1; border-radius: 8px; height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fff; overflow: hidden; }
         .idcard-box img { width: 100%; height: 100%; object-fit: cover; }
         .idcard-box .text-tip { font-size: 12px; color: var(--text-sub); }
 
+        /* 文件列表 */
         .file-list { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; background: #fff; }
         .file-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
         .file-row:last-child { border-bottom: none; }
         .file-row.active { background: #eff6ff; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
+        /* 表单网格 */
         .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
         .form-ctrl { width: 100%; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
 
+        /* 单选组 */
         .radio-btn-group { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
         .radio-btn { flex: 1; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
         .radio-btn.active { background: var(--primary); color: #fff; }
 
+        /* 预览视窗 */
         .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; }
         .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 14px; align-items: center; }
         .sheet-a4-viewport { width: 300px; height: 424px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
@@ -75,18 +85,22 @@
         .sheet-img-render { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
 
+        /* PDF 翻页控制器 */
         .pdf-pager-bar { display: none; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); }
         .pager-btn { padding: 3px 10px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
         .pager-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+        /* 身份证视窗 */
         .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 20px 0; }
         .idcard-a4-item { width: 180px; height: 114px; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fdfefe; }
         .idcard-a4-item img { width: 100%; height: 100%; object-fit: cover; }
 
+        /* 提交动作 */
         .action-bar { margin-top: 15px; }
         .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-submit-print:hover { background: var(--primary-hover); }
 
+        /* 状态与告警 */
         .status-alert { margin-top: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; display: none; }
         .status-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .status-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
@@ -98,6 +112,7 @@
 <body>
 
 <div class="wrapper">
+    <!-- 顶部导航 -->
     <div class="top-navbar">
         <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
         <div class="nav-tabs">
@@ -126,6 +141,7 @@
 
         <div class="main-layout">
             <div class="col-left">
+                <!-- 文件上传区 (原生拖拽监听) -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文件 (可直接拖拽文件进框)</span>
@@ -139,6 +155,7 @@
                     <div class="file-list" id="file-list-view" style="display:none;"></div>
                 </div>
 
+                <!-- 身份证专属上传区 -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">🪪 上传身份证照片</div>
                     <div class="idcard-grid">
@@ -155,6 +172,7 @@
                     <input type="file" id="id-b-file" accept="image/*" style="display:none;" onchange="onIDCardFile(this, 'b')">
                 </div>
 
+                <!-- 打印参数配置 -->
                 <div class="card-box">
                     <div class="card-title">⚙ 打印参数</div>
                     <div style="margin-bottom: 12px;">
@@ -232,6 +250,7 @@
                     </div>
                 </div>
 
+                <!-- 打印机健康状态与硬件代号卡片 (含一键网页恢复) -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span>⚡ 打印机硬件状态</span>
@@ -432,11 +451,26 @@ let currentPdfDoc = null;
 let currentPdfPage = 1;
 let totalPdfPages = 1;
 
+// ---------------- 内存泄漏防范：Blob ObjectURL 管理指针 ----------------
+let currentLiveScanUrl = null;
+let currentImgPreviewUrl = null;
+
+function safeRevokeUrl(url) {
+    if (url && typeof url === 'string' && url.startsWith('blob:')) {
+        try {
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.warn('Revoke ObjectURL error:', e);
+        }
+    }
+}
+
 function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失败') {
     if (!d) return defaultFail;
     return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
 }
 
+// ---------------- 拖拽事件监听流 ----------------
 const dropZone = document.getElementById('drag-drop-zone');
 const dropTip = document.getElementById('drag-drop-tip');
 
@@ -511,11 +545,18 @@ function selectPreviewFile(idx) {
     renderCurrentFilePreview(fileQueue[idx]);
 }
 
+// ---------------- 多页 PDF 与图片渲染器 (含对象内存释放) ----------------
 function renderCurrentFilePreview(file) {
     const tip = document.getElementById('viewport-empty-tip');
     const img = document.getElementById('viewport-img');
     const canvas = document.getElementById('pdf-canvas-render');
     const pager = document.getElementById('pdf-pager-ctrl');
+
+    // 释放旧图片预览内存
+    if (currentImgPreviewUrl) {
+        safeRevokeUrl(currentImgPreviewUrl);
+        currentImgPreviewUrl = null;
+    }
 
     if (!file) {
         tip.style.display = 'block';
@@ -530,11 +571,11 @@ function renderCurrentFilePreview(file) {
     if (file.type.startsWith('image/')) {
         pager.style.display = 'none';
         canvas.style.display = 'none';
-        img.style.display = 'block';
         currentPdfDoc = null;
-        const reader = new FileReader();
-        reader.onload = e => { img.src = e.target.result; };
-        reader.readAsDataURL(file);
+        
+        currentImgPreviewUrl = URL.createObjectURL(file);
+        img.src = currentImgPreviewUrl;
+        img.style.display = 'block';
     } else if (file.type === 'application/pdf') {
         img.style.display = 'none';
         canvas.style.display = 'block';
@@ -1177,7 +1218,7 @@ function loadScanDevices() {
         });
 }
 
-// ---------------- 扫描结果使用 Blob 原生二进制流直显 ----------------
+// ---------------- 核心：扫描 Blob 流式直出与旧内存即时释放 ----------------
 function startScan() {
     const dev = document.getElementById('scan-dev-select').value;
     const res = document.getElementById('scan-res').value;
@@ -1218,7 +1259,10 @@ function startScan() {
                 fetch(fetchUrl)
                     .then(res => res.blob())
                     .then(blob => {
-                        liveImg.src = URL.createObjectURL(blob);
+                        // 强制释放上一次扫描占用的 Blob URL 内存
+                        safeRevokeUrl(currentLiveScanUrl);
+                        currentLiveScanUrl = URL.createObjectURL(blob);
+                        liveImg.src = currentLiveScanUrl;
                         liveImg.style.display = 'block';
                     });
 
