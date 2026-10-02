@@ -63,7 +63,7 @@ def enumerate_all_scanners():
 
     # 3. 兜底通用 USB 识别
     if not devices:
-        ok_ls, out_ls, _ = run_cmd(["lsusb"])
+        ok_ls, out_ls = run_cmd(["lsusb"])
         if ok_ls and out_ls:
             for line in out_ls.splitlines():
                 if any(v in line.lower() for v in ["hewlett", "hp", "epson", "canon", "brother"]):
@@ -255,3 +255,70 @@ class DownloadScanHandler(BaseHandler):
                     break
                 self.write(chunk)
         self.finish()
+
+# ================= 业务扩展：扫描件一键直打处理器 =================
+class ScanPrintHandler(BaseHandler):
+    """无需重新下载，直接将指定扫描文件下发给 CUPS 队列出纸"""
+    def post(self):
+        try:
+            filename = self.get_argument("filename", "").strip()
+            printer = self.get_argument("printer", "").strip()
+            copies = self.get_argument("copies", "1").strip()
+
+            file_path = validate_safe_file_path(filename)
+            if not file_path:
+                self.write_json(False, "指定的扫描文件不存在或路径非法")
+                return
+
+            try:
+                copies_int = int(copies)
+                if not (1 <= copies_int <= 99):
+                    copies_int = 1
+            except ValueError:
+                copies_int = 1
+
+            env = os.environ.copy()
+            env["CUPS_SERVER"] = "/run/cups/cups.sock"
+            env["LANG"] = "C"
+
+            # 若未选定打印机，智能获取系统默认打印机
+            if not printer:
+                res_d = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+                for line in res_d.stdout.splitlines():
+                    if ":" in line or "：" in line:
+                        printer = line.replace("：", ":").split(":")[-1].strip()
+                        break
+
+            # 仍未获取到则抓取第一个可用打印队列
+            if not printer:
+                res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+                lines = res_a.stdout.splitlines()
+                if lines:
+                    printer = lines[0].split()[0].strip()
+
+            if not printer:
+                self.write_json(False, "系统内未发现可用打印机，请先添加打印机")
+                return
+
+            cmd = [
+                "lp",
+                "-d", printer,
+                "-n", str(copies_int),
+                "-o", "media=A4",
+                "-o", "PageSize=A4",
+                "-o", "fit-to-page",
+                "-o", "scaling=100",
+                "-o", "natural-scaling=100",
+                "-o", "position=center",
+                file_path
+            ]
+
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=30)
+            if res.returncode == 0:
+                self.write_json(True, f"扫描件已直接下发至【{printer}】！", job=res.stdout.strip())
+            else:
+                self.write_json(False, f"CUPS 拒绝打印: {res.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            self.write_json(False, "打印任务派发超时，请检查打印机连接状态")
+        except Exception as e:
+            self.write_json(False, f"直接打印异常: {str(e)}")
