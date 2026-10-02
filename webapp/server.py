@@ -11,12 +11,12 @@ import tornado.web
 import tornado.httpserver
 from tornado.web import StaticFileHandler
 
-# 强制将当前脚本所在目录注入 Python 寻包路径，防止 ModuleNotFoundError
+# 强制将当前脚本所在目录注入 Python 寻包路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 正常导入你仓库中现有的所有处理模块 (修正 mail_handler 模块名)
+# 正常导入你仓库现有的全部业务模块
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
@@ -54,7 +54,6 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
         try:
             data = json.loads(self.request.body.decode('utf-8'))
             fname = os.path.basename(data.get("filename", ""))
-            # 修正拼写错误：移除混入的汉字，恢复为 target
             target = os.path.join(SCANS_PATH, fname)
             if fname and os.path.exists(target):
                 os.remove(target)
@@ -68,13 +67,13 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
 
 def make_app():
     handlers = [
-        # 静态文件及历史扫描映射
+        # 1. 静态资源与首页映射 (修复 StaticFileHandler 路由参数缺失问题)
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
-        (r"/", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
+        (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 核心业务打印接口
+        # 2. 核心业务打印接口
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
@@ -82,7 +81,7 @@ def make_app():
         (r"/api/printer_admin", PrinterAdminHandler),
         (r"/api/mail_config", MailConfigHandler),
 
-        # 扫描仪接口
+        # 3. 扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
