@@ -86,8 +86,8 @@ def push_wechat_notice(token, title, content):
             "content": content,
             "template": "html"
         }).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=5)
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+        urllib.request.urlopen(req, timeout=8)
     except Exception as e:
         print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
 
@@ -97,13 +97,13 @@ def get_target_printer(preferred_printer=""):
     try:
         env = os.environ.copy()
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        res = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        res = subprocess.run(["lpstat", "-d"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env, timeout=5)
         for line in res.stdout.splitlines():
             if "：" in line:
                 return line.split("：")[-1].strip()
             elif ":" in line:
                 return line.split(":")[-1].strip()
-        res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        res_a = subprocess.run(["lpstat", "-a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env, timeout=5)
         lines = res_a.stdout.splitlines()
         if lines:
             return lines[0].split()[0].strip()
@@ -156,7 +156,8 @@ def async_print_attachment_task(file_path, printer_name="", skip_filter=False, t
             target_file
         ]
 
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        # 增加 45 秒超时，彻底防止堵塞工作线程
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=45)
         filename = os.path.basename(file_path)
         clean_old_tmp_files(UPLOAD_DIR)
 
@@ -167,6 +168,8 @@ def async_print_attachment_task(file_path, printer_name="", skip_filter=False, t
             err = res.stderr.strip()
             print(f"[MailWorker] CUPS拒绝打印任务: {err}", flush=True)
             push_wechat_notice(token, "⚠️ 打印任务异常告警", f"文件 <b>{filename}</b> 打印失败: {err}")
+    except subprocess.TimeoutExpired:
+        print("[MailWorker] 打印子进程超时，可能处于卡纸或硬件通信中断状态", flush=True)
     except Exception as e:
         print(f"[MailWorker] 异步打印任务异常: {e}", flush=True)
 
@@ -203,6 +206,7 @@ def mail_polling_worker():
                     conn.select("INBOX")
                 except Exception:
                     conn = None
+                    time.sleep(5)
                     continue
 
                 typ, data = conn.search(None, "UNSEEN")
@@ -263,6 +267,7 @@ def mail_polling_worker():
 
         except Exception as e:
             conn = None
+            time.sleep(5)
 
         mail_wake_event.wait(timeout=3)
         mail_wake_event.clear()
