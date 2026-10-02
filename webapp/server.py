@@ -16,13 +16,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 正常导入你仓库中现有的所有处理模块
+# 正常导入你仓库中现有的所有处理模块 (修正 mail_handler 模块名)
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
 from handlers.device_handler import DevicesHandler
 from handlers.printer_admin_handler import PrinterAdminHandler
-from handlers.mail_config_handler import MailConfigHandler
+from handlers.mail_handler import MailConfigHandler
 from handlers.scan_handler import ScanProbeHandler, ScanHandler, DownloadScanHandler, PreviewScanHandler
 
 STATIC_PATH = os.path.join(BASE_DIR, "static")
@@ -54,6 +54,7 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
         try:
             data = json.loads(self.request.body.decode('utf-8'))
             fname = os.path.basename(data.get("filename", ""))
+            # 修正拼写错误：移除混入的汉字，恢复为 target
             target = os.path.join(SCANS_PATH, fname)
             if fname and os.path.exists(target):
                 os.remove(target)
