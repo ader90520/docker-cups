@@ -258,7 +258,7 @@
                     </div>
 
                     <div id="quick-hw-alert-box" style="display:none; padding:12px; border-radius:6px; font-size:13px; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
-                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️ 检测到打印机故障</div>
+                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️️ 检测到打印机故障</div>
                         <div style="font-size:12px; line-height:1.5; margin-bottom:8px;" id="quick-hw-alert-desc">请确认纸盒内已放置充足 A4 纸张，并确认机盖合紧。</div>
                         <button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; width:100%; padding:8px 0; font-size:13px; font-weight:700;" onclick="resumeCurrentPrinter()">▶️ 解决后点击：网页端一键恢复打印 (免按机身键)</button>
                     </div>
@@ -273,7 +273,7 @@
         </div>
     </div>
 
-    <!-- 2. 在线扫描面板 (含 Blob 完美视窗直出) -->
+    <!-- 2. 在线扫描面板 (含 Blob 完美视窗直出与一键直打按键) -->
     <div id="panel-scan" class="tab-panel-container">
         <div class="main-layout" style="padding:0; background:transparent;">
             <div class="col-left">
@@ -304,12 +304,15 @@
                 </div>
             </div>
 
-            <!-- 右侧专属扫描视窗预览 -->
+            <!-- 右侧专属扫描视窗预览 (包含【🖨️ 打印该件】按钮) -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:14px; font-weight:700;">👁️ 扫描实时预览视窗</span>
-                        <a id="scan-download-anchor" href="#" download style="display:none; font-size:12px; color:var(--primary); font-weight:700; text-decoration:none;">💾 下载原件</a>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button type="button" id="btn-scan-direct-print" class="nav-btn" style="display:none; background:#059669; color:#fff; border:none; padding:4px 10px; font-size:12px;" onclick="printCurrentScannedFile()">🖨️️ 打印该件</button>
+                            <a id="scan-download-anchor" href="#" download style="display:none; font-size:12px; color:var(--primary); font-weight:700; text-decoration:none;">💾 下载原件</a>
+                        </div>
                     </div>
                     <div class="sheet-a4-viewport" id="scan-a4-viewport" style="background:#fff;">
                         <span class="sheet-placeholder-text" id="scan-empty-tip">点击左侧启动扫描后在此预览</span>
@@ -454,6 +457,7 @@ let totalPdfPages = 1;
 // ---------------- 内存泄漏防范：Blob ObjectURL 管理指针 ----------------
 let currentLiveScanUrl = null;
 let currentImgPreviewUrl = null;
+let currentScannedFilename = null; // 记录当前扫描成功生成的文件名
 
 function safeRevokeUrl(url) {
     if (url && typeof url === 'string' && url.startsWith('blob:')) {
@@ -552,7 +556,6 @@ function renderCurrentFilePreview(file) {
     const canvas = document.getElementById('pdf-canvas-render');
     const pager = document.getElementById('pdf-pager-ctrl');
 
-    // 释放旧图片预览内存
     if (currentImgPreviewUrl) {
         safeRevokeUrl(currentImgPreviewUrl);
         currentImgPreviewUrl = null;
@@ -1218,7 +1221,7 @@ function loadScanDevices() {
         });
 }
 
-// ---------------- 核心：扫描 Blob 流式直出与旧内存即时释放 ----------------
+// ---------------- 核心：扫描 Blob 流式直出与直接打印处理 ----------------
 function startScan() {
     const dev = document.getElementById('scan-dev-select').value;
     const res = document.getElementById('scan-res').value;
@@ -1252,14 +1255,17 @@ function startScan() {
                 const liveImg = document.getElementById('scan-live-img');
                 const emptyTip = document.getElementById('scan-empty-tip');
                 const dlBtn = document.getElementById('scan-download-anchor');
+                const directPrintBtn = document.getElementById('btn-scan-direct-print');
 
                 emptyTip.style.display = 'none';
+
+                // 记录当前扫描成功生成的文件名
+                currentScannedFilename = d.data.filename;
 
                 const fetchUrl = d.data.download_url || ('/api/scan/download?file=' + d.data.filename);
                 fetch(fetchUrl)
                     .then(res => res.blob())
                     .then(blob => {
-                        // 强制释放上一次扫描占用的 Blob URL 内存
                         safeRevokeUrl(currentLiveScanUrl);
                         currentLiveScanUrl = URL.createObjectURL(blob);
                         liveImg.src = currentLiveScanUrl;
@@ -1268,6 +1274,9 @@ function startScan() {
 
                 dlBtn.href = fetchUrl;
                 dlBtn.style.display = 'inline-block';
+                if (directPrintBtn) {
+                    directPrintBtn.style.display = 'inline-block';
+                }
             } else {
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '扫描中断: ' + getRespMsg(d, '', '硬件通信超时或未就绪');
@@ -1278,6 +1287,54 @@ function startScan() {
             btn.innerText = '📷 启动硬件扫描并呈现原图';
             alertBox.className = 'status-alert status-error';
             alertBox.innerText = '扫描请求发生异常: ' + err;
+        });
+}
+
+// ---------------- 扫描件一键直接打印处理函数 ----------------
+function printCurrentScannedFile() {
+    if (!currentScannedFilename) {
+        alert('请先完成一次扫描操作！');
+        return;
+    }
+
+    const sel = document.getElementById('printer-select');
+    const targetPrinter = sel ? sel.value : '';
+
+    const btn = document.getElementById('btn-scan-direct-print');
+    const alertBox = document.getElementById('scan-alert');
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ 正在派发打印...';
+    }
+
+    const fd = new FormData();
+    fd.append('filename', currentScannedFilename);
+    if (targetPrinter) {
+        fd.append('printer', targetPrinter);
+    }
+    fd.append('copies', '1');
+
+    fetch('/api/scan/print', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = '🖨️ 打印该件';
+            }
+            alertBox.style.display = 'block';
+            const isSuccess = d.success === true || d.status === true;
+            alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+            alertBox.innerText = getRespMsg(d, '扫描件已直接下发至打印机出纸！');
+        })
+        .catch(err => {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = '🖨️ 打印该件';
+            }
+            alertBox.style.display = 'block';
+            alertBox.className = 'status-alert status-error';
+            alertBox.innerText = '直接打印请求异常: ' + err;
         });
 }
 
