@@ -261,8 +261,8 @@ class PrinterAdminHandler(BaseHandler):
                 installed_count = 0
                 if os.path.exists(extract_dir):
                     for item in os.listdir(extract_dir):
-                        if item.endswith("-arm32.so"):
-                            base_name = item.replace("-arm32.so", ".so")
+                        if item.endswith("-arm32.so") or item.endswith("-arm64.so"):
+                            base_name = re.sub(r'-arm(32|64)\.so$', '.so', item)
                             src = os.path.join(extract_dir, item)
                             shutil.copy2(src, f"/usr/share/hplip/scan/plugins/{base_name}")
                             shutil.copy2(src, f"/usr/share/hplip/data/plugins/{base_name}")
@@ -281,7 +281,7 @@ class PrinterAdminHandler(BaseHandler):
                 if installed_count > 0:
                     self.write_json(True, f"扫描插件 [{fname}] 已成功安装并完成动态库注册！({installed_count}个组件生效)")
                 else:
-                    self.write_json(False, "未能从插件包中找到 arm32 架构二进制文件。")
+                    self.write_json(False, "未能从插件包中找到对应架构二进制文件。")
             except Exception as e:
                 self.write_json(False, f"安装插件异常: {str(e)}")
             finally:
@@ -296,16 +296,25 @@ class PrinterAdminHandler(BaseHandler):
             self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成！已同步开启后台每日自动静默清理。")
             return
 
+        # ================= 核心添加打印机逻辑（双向兼容全部前端传参） =================
         try:
-            uri = self.get_argument("uri", "").strip()
-            name = self.get_argument("name", "").strip()
-            driver = self.get_argument("driver", "").strip()
+            # 兼容 uri/device_uri 与 name/printer_name 传参
+            uri = self.get_argument("uri", "").strip() or self.get_argument("device_uri", "").strip()
+            name = self.get_argument("name", "").strip() or self.get_argument("printer_name", "").strip()
+            driver = self.get_argument("driver", "").strip() or self.get_argument("ppd_name", "").strip()
+            description = self.get_argument("description", "").strip()
             ppd_file = self.request.files.get("ppd_file", [])
+
             if not uri or not name:
                 self.write_json(False, "打印机物理端口与名称不能为空！")
                 return
+
             clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', urllib.parse.unquote(name)).strip('_') or "Printer_Device"
             cmd = ["lpadmin", "-p", clean_name, "-v", uri, "-E"]
+
+            if description:
+                cmd.extend(["-D", description])
+
             ppd_tmp = ""
             if ppd_file:
                 ppd_tmp = f"/tmp/{clean_name}.ppd"
@@ -316,16 +325,24 @@ class PrinterAdminHandler(BaseHandler):
                 cmd.extend(["-m", driver])
             else:
                 cmd.extend(["-m", "raw"])
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+            # 执行系统 lpadmin 调用
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=15)
             if ppd_tmp and os.path.exists(ppd_tmp):
                 try: os.remove(ppd_tmp)
                 except Exception: pass
+
             if res.returncode != 0:
                 self.write_json(False, f"CUPS 631 拒绝添加: {res.stderr.strip()}")
                 return
-            subprocess.run(["cupsenable", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["cupsaccept", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["lpadmin", "-d", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # 双向互通保障：立即激活打印机状态并通知 CUPS 接收作业
+            subprocess.run(["cupsenable", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["cupsaccept", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["lpadmin", "-d", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+
             self.write_json(True, f"✔ 打印机【{clean_name}】已成功安装并同步至 631！")
+        except subprocess.TimeoutExpired:
+            self.write_json(False, "CUPS 系统通信超时，请检查服务状态")
         except Exception as e:
             self.write_json(False, f"添加打印机异常: {str(e)}")
