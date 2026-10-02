@@ -1,112 +1,102 @@
-# 🖨️ CUPS Docker 打印服务器 (全中文增强版)
+# 🖨️ CUPS Docker 打印与扫描双模工作站 (全中文增强版)
 
-> **全中文现代化 Web 界面 ｜ 局域网 AirPrint 免驱直连 ｜ 微信/邮件远程云打印 ｜ USB 热插拔自愈**
+> **全中文现代化 Web 界面 ｜ 8088 极简控制台 ｜ 硬件扫描仪原图直出与即打 ｜ 试卷去黑底与证件 1:1 拼版 ｜ 邮件与微信云打印 ｜ 局域网 AirPrint 免驱直连 ｜ USB 热插拔自愈**
 
 ---
 
 ### 📦 架构与系统支持
 
-* **镜像标签**：`ader90520/cups:latest`（或指定版本 `ader90520/cups:2.4.2`）
-* **CPU 架构**：`linux/amd64` ｜ `linux/arm64` ｜ `linux/arm/v7`
-* **适用硬件**：海纳思 HiNAS (海思机顶盒)、斐讯 N1 (iStoreOS / OpenWrt / Armbian)、群晖 / 威联通 NAS、各类 x86 软路由及迷你主机。
+* **镜像标签**：`ader90520/cups:slim`（轻量精简版）｜ `ader90520/cups:latest`
+* **CPU 架构**：`linux/arm/v7` ｜ `linux/arm64` ｜ `linux/amd64`
+* **适用硬件**：海纳思 HiNAS (海思机顶盒 Hi3798MV100)、斐讯 N1 (iStoreOS / OpenWrt / Armbian)、群晖 / 威联通 / 飞牛 NAS、各类 x86 软路由及迷你主机。
+* **双端口服务**：
+  * **`8088`**：现代化智能工作台（日常打印、扫描直出、身份证/发票拼版、设备与云邮件配置）。
+  * **`631`**：CUPS 原生管理后台（深度参数调优、底层任务队列监控）。
 
 ---
 
 ### 🚀 快速部署
 
-#### 方法一：双模启动（推荐：局域网打印 + 微信/邮件远程云打印）
+在宿主机终端直接运行以下指令部署容器：
 
 ```bash
+# 1. 准备持久化与扫描目录
+mkdir -p /opt/cups_data /opt/cups_webapp_data /opt/cups_scans
+chmod -R 777 /opt/cups_data /opt/cups_webapp_data /opt/cups_scans 2>/dev/null || true
+
+# 2. 启动容器
 docker run -d \
   --name cups \
-  --restart unless-stopped \
-  --privileged \
+  --restart always \
   --net host \
+  --privileged \
   -v /dev/bus/usb:/dev/bus/usb \
   -v /opt/cups_data:/etc/cups \
-  -e ADMIN_PASSWORD=admin \
-  -e IMAP_SERVER=imap.qq.com \
-  -e EMAIL_USER=your_email@qq.com \
-  -e EMAIL_PASS=邮箱授权码 \
-  -e NOTIFY_URL=[http://www.pushplus.plus/send](http://www.pushplus.plus/send) \
-  -e PUSHPLUS_TOKEN=your_token_here \
-  ader90520/cups:latest
+  -v /opt/cups_webapp_data:/opt/webapp/data \
+  -v /opt/cups_scans:/scans \
+  -v /etc/modprobe.d:/host/etc/modprobe.d \
+  -v /etc/udev/rules.d:/host/etc/udev/rules.d \
+  -e CUPS_USER=admin \
+  -e CUPS_PASSWORD=admin \
+  ader90520/cups:slim
 ```
 
-#### 方法二：纯局域网模式（仅需手机/电脑局域网打印）
-
-```bash
-docker run -d \
-  --name cups \
-  --restart unless-stopped \
-  --privileged \
-  --net host \
-  -v /dev/bus/usb:/dev/bus/usb \
-  -v /opt/cups_data:/etc/cups \
-  -e ADMIN_PASSWORD=admin \
-  ader90520/cups:latest
-```
+> **挂载说明**：
+> * `/dev/bus/usb`：USB 打印机与扫描仪底层总线直通。
+> * `/opt/cups_data`：CUPS 配置文件持久化（打印机队列与 PPD 驱动）。
+> * `/opt/cups_webapp_data`：Web 工作台配置持久化（云邮箱与微信 PushPlus 凭据）。
+> * `/opt/cups_scans`：扫描生成的图像与 PDF 文件保存目录。
+> * `/host/etc/modprobe.d` 与 `/host/etc/udev/rules.d`：用于自动修补宿主机 `usblp` 内核冲突及放行 USB 权限。
 
 ---
 
-### ⚙️ 环境变量参数表
+### ✨ 核心功能与特色
 
-| 变量名称 | 是否必填 | 默认值 / 示例 | 功能说明 |
-| :--- | :---: | :--- | :--- |
-| `ADMIN_PASSWORD` | **必填** | `admin` | CUPS 后台登录密码（默认管理账号为 `admin`，同时兼容 `CUPS_PASSWORD`） |
-| `IMAP_SERVER` | 选填 | `imap.qq.com` | 接收打印任务的邮箱 IMAP 服务器（不填则自动休眠挂起） |
-| `EMAIL_USER` | 选填 | `your_email@qq.com` | 接收打印文件的专属邮箱账号 |
-| `EMAIL_PASS` | 选填 | `********` | 邮箱第三方客户端**独立授权码**（**注意：非网页登录密码**） |
-| `NOTIFY_URL` | 选填 | `http://www.pushplus.plus/send` | 出纸结果推送接口（支持 PushPlus / 企业微信 Webhook） |
-| `PUSHPLUS_TOKEN` | 选填 | `********` | PushPlus 推送平台的用户专属 Token |
-| `TRIGGER_KEYWORD` | 选填 | *内置预设学科及年级词汇* | 触发词白名单（包含：打印、作业、试卷、语文、数学、英语等） |
+#### 1. 8088 智能打印工作台
+* **多格式拖拽即打**：支持 PDF、JPG、PNG、BMP、WEBP 等常见文档与图片拖拽直传，支持 PDF.js 多页精准视窗翻页预览。
+* **智能试卷去黑底**：内置针对手机拍照试卷与文档的自适应光照闭运算与边缘高频强化算法，自动漂白灰暗阴影背景、加深字体笔划，并精确裁切外框黑边（A4 97% 黄金比例画幅居中，留白 3~5mm 防截断）。
+* **身份证 1:1 自动拼版**：独立人像面与国徽面上传视窗，自动按二代身份证真实物理规格（85.6mm × 54.0mm）排版在 A4 纸正中上下排列，无需手动修图拼接。
+* **发票快速打印**：支持标准电子发票版面自动居中下发。
 
----
+#### 2. 硬件扫描仪原图直出与即时出纸
+* **多协议一体机支持**：底层深度整合 SANE、`libsane-hpaio` 与专有扫描动态库，原生支持 HP LaserJet Pro MFP M126a、M125、M1005 等复合机及爱普生、佳能通用扫描仪。
+* **流式 JPEG 直出与安全并发**：支持 150/300 DPI 及彩色/灰度模式选择，采用流式管道极速出图与 PNM 双重兼容保障，内置硬件并发互斥锁防设备 I/O 锁死。
+* **扫描后直接打印**：网页实时预览呈现原件细节，支持一键【💾 下载原件】与【🖨️ 打印该件】（直接下发至默认打印机出纸，免去二次下载再上传）。
 
-### ✨ 特性与核心优化
+#### 3. 驱动管理与 631 原生双向互通
+* **端口真实枚举**：彻底屏蔽 `CUPS-BRF`（盲文）与 `HP Fax`（传真）虚假后端，在工作台界面直接列出识别到的真实物理端口（如 `hp:/usb/HP_LaserJet_Pro_MFP_M126a?...`）。
+* **驱动库快速检索**：输入型号（如 `M126`、`1020`、`HP`）即时检索底层 PPD，一键选取并绑定物理端口，自动向 631 注入配置并双向同步状态。
+* **一键故障复位**：面板内置 PJL 硬件模拟按键恢复、USB 总线复位及一键清空阻塞队列，缺纸卡纸排除后免按机身键。
 
-* **🇨🇳 全原生中文 Web 界面**：底层内置编译完整的 `cups.mo` 词典，默认强行锁定 UTF-8 中文环境，彻底告别后台半汉化或英文回退。
-* **🎨 现代化深蓝通栏与吸底排版**：全面优化 CUPS 默认竖向散乱的导航排版，顶部呈现深蓝通栏横向导航，底部版权自动吸底固定，移动端与 PC 端自适应对齐。
-* **⚡ 断电自愈与小存储保护**：
-  * **空目录自愈**：初次挂载宿主机目录时，自动从备份副本回填官方初始配置，彻底避免容器无限重启崩溃。
-  * **残余锁清理**：容器启动前自动清除残留的 PID 锁，杜绝海纳思、N1 等设备意外断电后的启动卡死。
-  * **轻量化限流**：关闭历史打印文件保留（`PreserveJobFiles No`），单日志限制 1MB，确保小容量 eMMC 设备长期稳定运行不爆盘。
-* **🔌 USB 设备热插拔自愈**：开启 `--privileged` 容器特权并直通 `/dev/bus/usb` 总线，打印机关机再开机、拔插 USB 线均能秒级识别重连。
-* **📱 局域网全终端免驱**：开启 `--net host` 模式，iPhone / iPad / Mac 通过原生 AirPrint 隔空打印秒级发现设备；Windows 与 Android（Mopria）直接添加网络打印机出纸。
-* **🛡️ 智能防废纸过滤**：
-  * 自动拦截小于 40KB 的邮件签名缩略图、表情及广告推销图片。
-  * 支持 PDF、Word、TXT、JPG、PNG 等常用办公与学习文档格式直接转换出纸。
+#### 4. 全局自然中文界面与排版修复
+* **全原生中文字典**：编译内置 `cups_zh_CN.mo`，覆盖 `/usr/share/cups/templates/` 全量根模板与全局 UTF-8 声明，根除白屏、英文回退与 403 Forbidden 拦截。
+* **自然宽屏自适应**：移除拘谨的宽度卡片限制，还原官方自然流式排版，深蓝顶部导航通栏展开，底部版权平整吸底。
 
----
+#### 5. 局域网全终端免驱 (AirPrint / Mopria)
+* **苹果设备（iOS / macOS）**：同一局域网下原生 AirPrint 免驱动秒级发现设备，支持微信、Safari、相册一键隔空打印。
+* **Windows / Android / Linux**：Windows 网络打印机自动发现或直接通过 Mopria 协议直连出纸。
 
-### 🛠️ 首次配置说明
-
-#### 1. 进入 Web 界面添加打印机
-1. 电脑或手机浏览器访问：`http://设备IP:631`。
-2. 点击顶部导航栏 **“管理”** ➔ **“添加打印机”**，在弹窗中输入账号 `admin` 与部署时设置的密码。
-3. 勾选在“本地打印机”中识别到的具体 USB 设备，点击继续。
-4. 选择对应的品牌与驱动型号，**务必勾选“共享此打印机”**，点击添加完成配置。
-
-#### 2. 绑定默认打印机（重要：确保云打印精准找到出纸目标）
-
-```bash
-# 步骤 1：查询系统成功识别并添加的打印机名称
-docker exec -it cups lpstat -p
-
-# 步骤 2：设为全局默认打印机（将下方 HP_LaserJet 替换为你实际查出来的名称）
-docker exec -it cups lpoptions -d HP_LaserJet_Pro_MFP_M126a
-
-# 步骤 3：验证默认设备绑定结果
-docker exec -it cups lpstat -d
-```
+#### 6. 微信 / 邮件远程云打印
+* **IMAP 极速守护**：后台低功耗常驻长连接检测，支持 QQ 邮箱、163 邮箱等，配合打印暗号（如“打印”、“作业”）与发件人白名单安全校验。
+* **微信出纸通知**：集成 PushPlus 推送，打印成功或硬件缺纸/故障时自动推送微信服务号卡片通知。
 
 ---
 
-### 📄 日常打印方式
+### 🛠️ 快速操作指引
 
-* **苹果设备（iOS / macOS）**：连接同一局域网 Wi-Fi，打开任意文档/图片，点击 **“分享 ➔ 打印”**，在列表中直接选择打印机即可。
-* **Windows 电脑**：进入“设置 ➔ 蓝牙和其他设备 ➔ 打印机和扫描仪 ➔ 添加设备 ➔ 我需要的打印机不在列表中 ➔ 按名称选择共享打印机”，地址填写：
-  ```text
-  http://你的设备IP:631/printers/你的打印机名称
-  ```
-* **微信 / 远程邮件打印**：在微信群或聊天框中打开文件，长按点击 **“用其他应用打开” ➔ 选择“邮件”** 发送至配置的打印邮箱。邮件主题或文件名中包含作业、试卷等任意学科关键词，后台 10 秒内自动调起出纸，并在出纸完成后向微信推送 PushPlus 打印成功结果。
+#### 1. 登录与添加打印机
+1. 浏览器访问 `http://设备IP:8088` 进入智能工作台。
+2. 切换至 **“🎛️ 设备管理”** 面板：
+   * 在 **“🔌 1. 已检测到的物理打印机端口”** 下拉列表中确认已检测到的真实设备；
+   * 在 **“🔎 2. 检索系统驱动库”** 输入关键词（如 `M126`），点击【🔍 搜索驱动】；
+   * 在匹配到的驱动项后点击【选取并绑定】，输入打印机名称即可完成安装并自动同步至 631。
+3. 亦可访问 `http://设备IP:631` 原生后台进行管理（默认账号 `admin`，密码 `admin`）。
+
+#### 2. 执行文档扫描
+1. 在 8088 工作台切换至 **“📷 在线扫描”** 面板。
+2. 选择扫描通道、分辨率（建议日常使用 150 DPI）与色彩模式，点击【📷 启动硬件扫描并呈现原图】。
+3. 扫描完毕后右侧视窗立即呈现原图，点击右上角【🖨 打印该件】即可直接呼叫打印机出纸。
+
+#### 3. 配置云邮件与微信通知
+1. 切换至 **“⚙ 云邮箱设置”** 面板，开启服务并填入邮箱服务器、账号与客户端授权码。
+2. 填入 PushPlus Token 与打印暗号，保存后立即热加载生效。
