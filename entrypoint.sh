@@ -51,9 +51,11 @@ rm -rf /var/run/dbus/* \
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data /opt/webapp/static
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data /opt/webapp/static 2>/dev/null || true
 
-# ================= 4. 静态页面防漏兜底 =================
-if [ -f /opt/webapp/index.html ] && [ ! -f /opt/webapp/static/index.html ]; then
-    cp -f /opt/webapp/index.html /opt/webapp/static/index.html
+# ================= 4. 前端网页位置自适应保证 =================
+if [ -f /opt/webapp/index.html ]; then
+    cp -f /opt/webapp/index.html /opt/webapp/static/index.html 2>/dev/null || true
+elif [ -f /opt/webapp/static/index.html ]; then
+    cp -f /opt/webapp/static/index.html /opt/webapp/index.html 2>/dev/null || true
 fi
 
 # ================= 5. Avahi mDNS 广播唤醒 =================
@@ -102,7 +104,6 @@ PageLogFormat
 MaxLogSize 1m
 ErrorPolicy retry-job
 
-# 明确绑定全网段 IPv4 与套接字
 Port 631
 Listen 0.0.0.0:631
 Listen /run/cups/cups.sock
@@ -113,6 +114,7 @@ DefaultAuthType Basic
 WebInterface Yes
 ServerAlias *
 DefaultLanguage zh_CN
+DefaultPaperSize A4
 DefaultEncryption IfRequested
 
 <Location />
@@ -154,12 +156,28 @@ DefaultEncryption IfRequested
 </Policy>
 EOF
 
-# ================= 9. 部署中文汉化 =================
-mkdir -p /usr/share/cups/templates/zh_CN /usr/share/cups/templates/zh
-if [ -d /opt/i18/zh_CN ]; then
-    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh/ 2>/dev/null || true
+# ================= 9. 还原原版汉化机制：全量覆盖法 (根治英文首页与白屏) =================
+echo ">>> [I18N] 恢复 CUPS 中文界面与原版汉化模板..."
+
+mkdir -p /usr/share/cups/templates/zh_CN \
+         /usr/share/cups/locale/zh_CN \
+         /usr/share/cups/locale/zh
+
+# 1. 编译并部署汉化字典
+if [ -f /opt/i18/cups_zh.po ]; then
+    msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
+    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
+    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
 fi
+
+# 2. 模板覆盖：既覆盖到根模板目录，又保留一份到 zh_CN
+if [ -d /opt/i18/zh_CN ]; then
+    # 直接将汉化模板覆盖进主模板库
+    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/ 2>/dev/null || true
+    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+fi
+
+# 3. 首页覆盖：将中文化首页强制覆盖到 doc-root 根目录
 if [ -f /opt/i18/index.html ]; then
     cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
 fi
