@@ -125,6 +125,12 @@ def process_image_for_print(input_path, output_path):
         t0 = time.time()
         log_debug(f"图像增强流水线启动: {input_path} (HAVE_OPENCV={HAVE_OPENCV})")
 
+        # 前置保护：极微小图片防切片崩溃校验
+        with Image.open(input_path) as check_img:
+            if check_img.width < 10 or check_img.height < 10:
+                log_debug(f"图像尺寸过小 ({check_img.width}x{check_img.height})，跳过增强直接打印")
+                return False
+
         if HAVE_OPENCV:
             cv_img = cv2.imread(input_path)
             if cv_img is None:
@@ -222,6 +228,7 @@ def process_image_for_print(input_path, output_path):
 
             red_excess = r_arr - np.maximum(g_arr, b_arr)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
+            # 修复变量笔误：使用 g_arr 代替原先未定义的 g_f
             color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
             all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
 
@@ -356,7 +363,8 @@ class PrintHandler(BaseHandler):
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
                 cmd.append(target_file)
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                # 增加 45 秒超时保护，彻底杜绝硬件卡死拖垮服务
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=45)
 
                 if res.returncode == 0:
                     jobs.append(res.stdout.strip())
@@ -366,6 +374,8 @@ class PrintHandler(BaseHandler):
 
             clean_old_tmp_files(UPLOAD_DIR)
             self.write_json(True, f"共 {len(files)} 个文件已送达打印队列", job=", ".join(jobs))
+        except subprocess.TimeoutExpired:
+            self.write_json(False, "打印任务派发超时，打印机可能处于离线、卡纸或通信受阻状态")
         except Exception as e:
             log_debug(f"打印服务异常: {e}")
             self.write_json(False, f"打印服务异常: {str(e)}")
