@@ -18,6 +18,9 @@ def run_cmd(cmd, env=None, timeout=12):
     if env is None:
         env = os.environ.copy()
         env["LANG"] = "C"
+        # 核心关键：显式注入 SANE 配置路径与动态库目录，让 scanimage 能够调用 hpaio
+        env["SANE_CONFIG_DIR"] = "/etc/sane.d"
+        env["LD_LIBRARY_PATH"] = f"/usr/lib/sane:/usr/lib/arm-linux-gnueabihf/sane:/usr/share/hplip/scan/plugins:{env.get('LD_LIBRARY_PATH', '')}"
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=timeout)
         return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
@@ -25,10 +28,11 @@ def run_cmd(cmd, env=None, timeout=12):
         return False, "", str(e)
 
 def enumerate_all_scanners():
-    """通用动态多机型嗅探：兼容 M125nw/M126a、M1005、佳能、爱普生等 SANE 设备"""
+    """通用动态多机型嗅探：优先嗅探 hpaio 专用一体机通道，再降级 scanimage 与通用 USB"""
     devices = []
     seen = set()
 
+    # 1. 优先使用注入了动态库路径的 scanimage -L
     ok, out, _ = run_cmd(["scanimage", "-L"], timeout=8)
     if ok and out:
         for line in out.splitlines():
@@ -42,8 +46,24 @@ def enumerate_all_scanners():
                         devices.append({"id": dev_id, "name": dev_name})
                         seen.add(dev_id)
 
+    # 2. 如果标准扫描未扫出（针对 HP M126a等一体机），直接执行 hp-probe 提取底层 hpaio URI
     if not devices:
-        ok_ls, out_ls = run_cmd(["lsusb"])
+        ok_hp, out_hp, _ = run_cmd(["hp-probe", "-busb"], timeout=8)
+        if ok_hp and out_hp:
+            for line in out_hp.splitlines():
+                if "hp:/" in line:
+                    match = re.search(r"(hp:/usb/[^\s]+)", line)
+                    if match:
+                        hp_uri = match.group(1).strip()
+                        # 将打印 URI 转换为 hpaio 扫描 URI
+                        hpaio_id = hp_uri.replace("hp:/usb/", "hpaio:/usb/")
+                        if hpaio_id not in seen:
+                            devices.append({"id": hpaio_id, "name": "HP 多功能体机 (HPLIP 扫描引擎)"})
+                            seen.add(hpaio_id)
+
+    # 3. 兜底通用 USB 识别
+    if not devices:
+        ok_ls, out_ls, _ = run_cmd(["lsusb"])
         if ok_ls and out_ls:
             for line in out_ls.splitlines():
                 if any(v in line.lower() for v in ["hewlett", "hp", "epson", "canon", "brother"]):
@@ -79,7 +99,7 @@ class ScanHandler(BaseHandler):
         if mode not in ["Color", "Gray", "Lineart"]:
             mode = "Color"
 
-        # 设备名称防注入校验（禁止任何以横杠开头的参数注入）
+        # 设备名称防注入校验
         if device.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:/=?&]+$', device):
             device = ""
 
@@ -104,6 +124,8 @@ class ScanHandler(BaseHandler):
 
             env = os.environ.copy()
             env["LANG"] = "C"
+            env["SANE_CONFIG_DIR"] = "/etc/sane.d"
+            env["LD_LIBRARY_PATH"] = f"/usr/lib/sane:/usr/lib/arm-linux-gnueabihf/sane:/usr/share/hplip/scan/plugins:{env.get('LD_LIBRARY_PATH', '')}"
 
             # 方案 A: 纯流式管道极速 JPEG 直出
             cmd_jpeg = [
@@ -187,12 +209,10 @@ def validate_safe_file_path(filename):
     """防路径遍历安全校验工具"""
     if not filename:
         return None
-    # 强制取基础文件名，且仅允许字母、数字、下划线、中划线和标准扩展名
     safe_name = os.path.basename(filename)
     if not re.match(r'^[a-zA-Z0-9_\-]+\.(jpg|jpeg|png|pnm|pdf)$', safe_name, re.I):
         return None
     full_path = os.path.abspath(os.path.join(SCANS_DIR, safe_name))
-    # 强制校验是否在允许的扫描目录范围内
     if not full_path.startswith(os.path.abspath(SCANS_DIR) + os.sep):
         return None
     if not os.path.exists(full_path):
