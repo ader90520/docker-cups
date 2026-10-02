@@ -2,15 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import glob
 import json
 import time
-import shutil
 import tornado.ioloop
 import tornado.web
 import tornado.httpserver
 from tornado.web import StaticFileHandler
 
+# 强制将当前脚本所在目录注入 Python 寻包路径，防止 ModuleNotFoundError
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# 正常导入你仓库中现有的所有处理模块
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
@@ -19,19 +25,11 @@ from handlers.printer_admin_handler import PrinterAdminHandler
 from handlers.mail_config_handler import MailConfigHandler
 from handlers.scan_handler import ScanProbeHandler, ScanHandler, DownloadScanHandler, PreviewScanHandler
 
-STATIC_PATH = "/opt/webapp/static"
-BASE_PATH = "/opt/webapp"
+STATIC_PATH = os.path.join(BASE_DIR, "static")
 SCANS_PATH = "/scans"
 
 os.makedirs(SCANS_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
-
-# 确保前端 index.html 即使在根目录也能被识别
-if os.path.exists(os.path.join(BASE_PATH, "index.html")) and not os.path.exists(os.path.join(STATIC_PATH, "index.html")):
-    try:
-        shutil.copy2(os.path.join(BASE_PATH, "index.html"), os.path.join(STATIC_PATH, "index.html"))
-    except Exception:
-        pass
 
 class ScanListHandler(tornado.web.RequestHandler):
     def get(self):
@@ -83,7 +81,7 @@ def make_app():
         (r"/api/printer_admin", PrinterAdminHandler),
         (r"/api/mail_config", MailConfigHandler),
 
-        # 完整扫描仪接口
+        # 扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
