@@ -20,11 +20,14 @@ if [ -f "$CSS_FILE" ]; then
     cat << 'EOF' >> "$CSS_FILE"
 
 /* ==================== 顶部导航与底栏深蓝主题 ==================== */
-body {
-    margin: 0;
-    padding: 0;
+html, body {
+    margin: 0 !important;
+    padding: 0 !important;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
     background-color: #f7f9fa;
+    min-height: 100vh !important;
+    display: flex !important;
+    flex-direction: column !important;
 }
 
 /* 顶部整体深蓝条 */
@@ -33,7 +36,7 @@ div.header {
     padding: 15px 25px !important;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     border-bottom: 2px solid #003d80;
-    margin: 0 0 20px 0 !important;
+    margin: 0 !important;
 }
 
 div.header h2 {
@@ -72,23 +75,28 @@ div.header ul li a:hover {
     color: #ffffff !important;
 }
 
+/* 主内容区：解除 1000px 宽度禁锢，自适应通栏平展铺满 */
 div.body {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 20px;
-    min-height: 520px;
+    flex: 1 0 auto !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 25px 35px !important;
+    min-height: auto !important;
     background: #ffffff;
-    border-radius: 8px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    box-sizing: border-box !important;
 }
 
-/* 底部整条深蓝条 */
+/* 底部整条深蓝条：强制贴底且通栏延展 */
 div.footer {
+    flex-shrink: 0 !important;
     background: #004080 !important;
     color: #dbe9f6 !important;
     text-align: center;
-    padding: 16px 10px !important;
-    margin-top: 40px !important;
+    padding: 14px 10px !important;
+    margin: 0 !important;
     font-size: 13px !important;
     border-top: 2px solid #002d59;
     box-shadow: 0 -2px 6px rgba(0,0,0,0.08);
