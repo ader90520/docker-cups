@@ -2,6 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import os
+import glob
+import json
+import time
+import shutil
 import tornado.ioloop
 import tornado.web
 import tornado.httpserver
@@ -16,18 +20,62 @@ from handlers.mail_config_handler import MailConfigHandler
 from handlers.scan_handler import ScanProbeHandler, ScanHandler, DownloadScanHandler, PreviewScanHandler
 
 STATIC_PATH = "/opt/webapp/static"
+BASE_PATH = "/opt/webapp"
 SCANS_PATH = "/scans"
+
 os.makedirs(SCANS_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
 
+# 确保前端 index.html 即使在根目录也能被识别
+if os.path.exists(os.path.join(BASE_PATH, "index.html")) and not os.path.exists(os.path.join(STATIC_PATH, "index.html")):
+    try:
+        shutil.copy2(os.path.join(BASE_PATH, "index.html"), os.path.join(STATIC_PATH, "index.html"))
+    except Exception:
+        pass
+
+class ScanListHandler(tornado.web.RequestHandler):
+    def get(self):
+        files = []
+        scan_files = sorted(glob.glob(os.path.join(SCANS_PATH, "*.*")), key=os.path.getmtime, reverse=True)
+        for f in scan_files:
+            fname = os.path.basename(f)
+            files.append({
+                "filename": fname,
+                "url": f"/scans/{fname}",
+                "download_url": f"/api/scan/download?file={fname}",
+                "size": f"{round(os.path.getsize(f) / 1024, 1)} KB",
+                "is_pdf": fname.lower().endswith(".pdf"),
+                "mtime": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(f)))
+            })
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        self.write(json.dumps({"success": True, "files": files}))
+
+class ScanDeleteHandler(tornado.web.RequestHandler):
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        try:
+            data = json.loads(self.request.body.decode('utf-8'))
+            fname = os.path.basename(data.get("filename", ""))
+            target = os.path.join(SCANS_PATH, fname)
+            if fname and os.path.exists(target):
+                os.remove(target)
+                self.write(json.dumps({"success": True, "msg": f"文件 {fname} 已删除"}))
+            else:
+                self.set_status(404)
+                self.write(json.dumps({"success": False, "msg": "文件不存在"}))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
 def make_app():
     handlers = [
-        # 静态资源与扫描输出
+        # 静态文件及历史扫描映射
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
+        (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 核心业务接口
+        # 核心业务打印接口
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
@@ -35,11 +83,13 @@ def make_app():
         (r"/api/printer_admin", PrinterAdminHandler),
         (r"/api/mail_config", MailConfigHandler),
 
-        # 扫描仪接口
+        # 完整扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
         (r"/api/scan/preview", PreviewScanHandler),
+        (r"/api/scan/list", ScanListHandler),
+        (r"/api/scan/delete", ScanDeleteHandler),
     ]
 
     settings = {
@@ -51,8 +101,7 @@ def make_app():
 
 if __name__ == "__main__":
     app = make_app()
-    # 增加至 100MB 缓冲区，支持高清试卷与多页 PDF 预览上传
     server = tornado.httpserver.HTTPServer(app, max_buffer_size=104857600)
     server.listen(8088, address="0.0.0.0")
-    print(">>> CUPS 智能工作台已在 8088 端口正常启动", flush=True)
+    print(">>> CUPS 智能工作台已在 8088 端口正常启动 (Listen: 0.0.0.0:8088)", flush=True)
     tornado.ioloop.IOLoop.current().start()
