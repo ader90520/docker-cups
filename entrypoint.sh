@@ -30,16 +30,26 @@ if [ -d "/dev/bus/usb" ]; then
     chmod -R 666 /dev/bus/usb 2>/dev/null || true
 fi
 
-# ================= 2. 基础账户初始化 =================
+# ================= 2. 基础账户初始化与权限补全 =================
 CUPS_USER=${CUPS_USER:-admin}
 CUPS_PASSWORD=${CUPS_PASSWORD:-admin}
 if ! id "$CUPS_USER" &>/dev/null; then
     useradd -r -G lpadmin,scanner,lp -M -s /usr/sbin/nologin "$CUPS_USER"
 fi
 echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
-usermod -a -G lp,scanner root 2>/dev/null || true
+usermod -a -G lp,scanner,lpadmin root 2>/dev/null || true
 
-# ================= 3. 断电残留清理与目录自愈 =================
+# ================= 3. 根除虚拟假打印机与启用 SANE 扫描驱动 =================
+# 彻底移除/屏蔽虚拟盲文打印机和虚拟传真后端
+rm -f /usr/lib/cups/backend/cups-brf /usr/lib/cups/backend/hp-fax 2>/dev/null || true
+chmod 000 /usr/lib/cups/backend/cups-brf /usr/lib/cups/backend/hp-fax 2>/dev/null || true
+
+# 激活 SANE 对一体机 (HP M126a等) 的底层驱动协议
+if [ -f /etc/sane.d/dll.conf ]; then
+    grep -q "^hpaio" /etc/sane.d/dll.conf || echo "hpaio" >> /etc/sane.d/dll.conf
+fi
+
+# ================= 4. 断电残留清理与目录自愈 =================
 rm -rf /var/run/dbus/* \
        /var/run/avahi-daemon/* \
        /var/lock/sane/* \
@@ -51,11 +61,9 @@ rm -rf /var/run/dbus/* \
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data /opt/webapp/static
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data /opt/webapp/static 2>/dev/null || true
 
-# ================= 4. 前端网页位置自适应保证 =================
-if [ -f /opt/webapp/index.html ]; then
+# 前端防漏同步
+if [ -f /opt/webapp/index.html ] && [ ! -f /opt/webapp/static/index.html ]; then
     cp -f /opt/webapp/index.html /opt/webapp/static/index.html 2>/dev/null || true
-elif [ -f /opt/webapp/static/index.html ]; then
-    cp -f /opt/webapp/static/index.html /opt/webapp/index.html 2>/dev/null || true
 fi
 
 # ================= 5. Avahi mDNS 广播唤醒 =================
@@ -74,7 +82,7 @@ sleep 1
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 sleep 1
 
-# ================= 6. 常驻后台守护进程 =================
+# ================= 6. 常驻后台守护进程 (防断电丢打印机) =================
 auto_usb_daemon() {
     echo ">>> [Hotplug] 自动热插拔与设备恢复守护已上线..."
     while true; do
@@ -97,7 +105,7 @@ SystemGroup root lpadmin
 FileDevice Yes
 EOF
 
-# ================= 8. 生成彻底放行外部访问的 cupsd.conf =================
+# ================= 8. 生成全放行且允许 HTTP 管理的 cupsd.conf =================
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -115,7 +123,7 @@ WebInterface Yes
 ServerAlias *
 DefaultLanguage zh_CN
 DefaultPaperSize A4
-DefaultEncryption IfRequested
+DefaultEncryption Never
 
 <Location />
   Order allow,deny
@@ -156,30 +164,41 @@ DefaultEncryption IfRequested
 </Policy>
 EOF
 
-# ================= 9. 还原原版汉化机制：全量覆盖法 (根治英文首页与白屏) =================
+# ================= 9. 汉化全量注入与重叠排版修复 =================
 echo ">>> [I18N] 恢复 CUPS 中文界面与原版汉化模板..."
 
 mkdir -p /usr/share/cups/templates/zh_CN \
          /usr/share/cups/locale/zh_CN \
          /usr/share/cups/locale/zh
 
-# 1. 编译并部署汉化字典
 if [ -f /opt/i18/cups_zh.po ]; then
     msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
-    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
 fi
 
-# 2. 模板覆盖：既覆盖到根模板目录，又保留一份到 zh_CN
 if [ -d /opt/i18/zh_CN ]; then
-    # 直接将汉化模板覆盖进主模板库
     cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
 fi
 
-# 3. 首页覆盖：将中文化首页强制覆盖到 doc-root 根目录
 if [ -f /opt/i18/index.html ]; then
     cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
+fi
+
+# 核心样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
+CSS_FILE="/usr/share/cups/doc-root/cups.css"
+if [ -f "$CSS_FILE" ]; then
+    cat << 'EOF' >> "$CSS_FILE"
+/* 修复双重标题堆叠 */
+div.body > h2:first-of-type + h2 {
+    display: none !important;
+}
+div.body > h2 {
+    margin-top: 15px !important;
+    margin-bottom: 12px !important;
+    font-size: 18px !important;
+}
+EOF
 fi
 
 # ================= 10. 启动服务 =================
