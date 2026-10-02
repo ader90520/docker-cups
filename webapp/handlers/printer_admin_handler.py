@@ -52,30 +52,60 @@ class PrinterAdminHandler(BaseHandler):
                 env["CUPS_SERVER"] = "/run/cups/cups.sock"
                 env["LANG"] = "C"
 
-                res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, env=env)
+                res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, env=env)
                 devices = []
+                seen_uris = set()
+
                 for line in res.stdout.splitlines():
                     line = line.strip()
-                    if not line or " " not in line:
+                    if not line:
                         continue
-                    parts = line.split(" ", 1)
-                    uri = parts[1].strip()
+
+                    # lpinfo -v 标准格式: direct uri "MAKE MODEL" "INFO"
+                    # 正则捕获类别、完整 URI 以及双引号中的厂商型号信息
+                    m = re.match(r'^([a-zA-Z0-9_\-]+)\s+(\S+)(?:\s+"([^"]+)")?(?:\s+"([^"]+)")?', line)
+                    if not m:
+                        continue
+
+                    dev_type = m.group(1).lower()
+                    uri = m.group(2).strip()
+                    desc_model = m.group(3) or ""
+                    desc_info = m.group(4) or ""
+
+                    # 严格过滤虚拟设备与非物理协议
                     scheme = uri.split("://")[0].split(":")[0].lower()
                     if scheme in IGNORED_BACKENDS or uri.endswith("://") or uri.endswith(":/"):
                         continue
-                    decoded_uri = urllib.parse.unquote(uri)
-                    friendly_name = ""
-                    if "://" in decoded_uri:
-                        path_part = decoded_uri.split("://")[-1].split("?")[0]
-                        friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
-                    elif ":/" in decoded_uri:
-                        path_part = decoded_uri.split(":/")[-1].split("?")[0]
-                        friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
-                    if not friendly_name:
-                        friendly_name = decoded_uri
-                    if friendly_name.lower() in IGNORED_BACKENDS:
+                    if any(uri.startswith(bad) for bad in ["cups-brf:", "hp-fax:", "beh:", "implicitclass:"]):
                         continue
-                    devices.append({"uri": uri, "name": friendly_name})
+
+                    # 锁定真实 USB 或 HP 通信端口
+                    if uri.startswith("hp:/usb/") or uri.startswith("usb://") or dev_type in ["direct"]:
+                        friendly_name = desc_info or desc_model
+                        if not friendly_name:
+                            decoded_uri = urllib.parse.unquote(uri)
+                            if "model=" in decoded_uri:
+                                friendly_name = decoded_uri.split("model=")[-1].split("&")[0].replace("+", " ")
+                            elif decoded_uri.startswith("hp:/usb/"):
+                                path_part = decoded_uri.split("hp:/usb/")[-1].split("?")[0]
+                                friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
+                            elif "://" in decoded_uri:
+                                path_part = decoded_uri.split("://")[-1].split("?")[0]
+                                friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
+                            elif ":/" in decoded_uri:
+                                path_part = decoded_uri.split(":/")[-1].split("?")[0]
+                                friendly_name = path_part.replace("/", " ").replace("_", " ").strip()
+
+                        if not friendly_name:
+                            friendly_name = urllib.parse.unquote(uri)
+
+                        friendly_name = friendly_name.strip()
+
+                        # 过滤掉协议短词 "hp", "usb", "direct" 假值
+                        if uri not in seen_uris and uri not in ["hp", "usb", "direct"]:
+                            devices.append({"uri": uri, "name": friendly_name})
+                            seen_uris.add(uri)
+
                 self.write_json(True, "扫描物理端口成功", data=devices)
             except Exception as e:
                 self.write_json(False, f"扫描物理端口异常: {str(e)}")
@@ -86,7 +116,8 @@ class PrinterAdminHandler(BaseHandler):
                 env = os.environ.copy()
                 env["CUPS_SERVER"] = "/run/cups/cups.sock"
                 env["LANG"] = "C"
-                res = subprocess.run(["lpinfo", "-m"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15, env=env)
+
+                res = subprocess.run(["lpinfo", "-m"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, env=env)
                 drivers = []
                 for line in res.stdout.splitlines():
                     line = line.strip()
@@ -95,10 +126,17 @@ class PrinterAdminHandler(BaseHandler):
                     parts = line.split(" ", 1)
                     drv_id = parts[0].strip()
                     drv_name = parts[1].strip() if len(parts) > 1 else drv_id
-                    if not q or (q in drv_id.lower() or q in drv_name.lower()):
-                        drivers.append({"id": drv_id, "name": drv_name})
-                        if len(drivers) >= 80:
-                            break
+
+                    if not q:
+                        if any(k in drv_id.lower() or k in drv_name.lower() for k in ["hplip", "foo2zjs", "laserjet", "series"]):
+                            drivers.append({"id": drv_id, "name": drv_name})
+                    else:
+                        if q in drv_id.lower() or q in drv_name.lower():
+                            drivers.append({"id": drv_id, "name": drv_name})
+
+                    if len(drivers) >= 80:
+                        break
+
                 self.write_json(True, "检索系统驱动成功", data=drivers)
             except Exception as e:
                 self.write_json(False, f"检索驱动异常: {str(e)}")
@@ -298,14 +336,18 @@ class PrinterAdminHandler(BaseHandler):
 
         # ================= 核心添加打印机逻辑（双向兼容全部前端传参） =================
         try:
-            # 兼容 uri/device_uri 与 name/printer_name 传参
             uri = self.get_argument("uri", "").strip() or self.get_argument("device_uri", "").strip()
             name = self.get_argument("name", "").strip() or self.get_argument("printer_name", "").strip()
             driver = self.get_argument("driver", "").strip() or self.get_argument("ppd_name", "").strip()
             description = self.get_argument("description", "").strip()
             ppd_file = self.request.files.get("ppd_file", [])
 
-            if not uri or not name:
+            # 严格防止把截断的短词 "hp" 或 "usb" 传给系统
+            if not uri or uri in ["hp", "usb", "direct"]:
+                self.write_json(False, "无效的设备 URI！请确认物理打印机已插紧并开机。")
+                return
+
+            if not name:
                 self.write_json(False, "打印机物理端口与名称不能为空！")
                 return
 
@@ -332,6 +374,7 @@ class PrinterAdminHandler(BaseHandler):
                 try: os.remove(ppd_tmp)
                 except Exception: pass
 
+            # 关键修复：过滤 CUPS 2.4+ 弃用警告。只有 returncode != 0 时才真正判定为失败
             if res.returncode != 0:
                 self.write_json(False, f"CUPS 631 拒绝添加: {res.stderr.strip()}")
                 return
