@@ -258,7 +258,7 @@
                     </div>
 
                     <div id="quick-hw-alert-box" style="display:none; padding:12px; border-radius:6px; font-size:13px; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
-                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️️ 检测到打印机故障</div>
+                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠ 检测到打印机故障</div>
                         <div style="font-size:12px; line-height:1.5; margin-bottom:8px;" id="quick-hw-alert-desc">请确认纸盒内已放置充足 A4 纸张，并确认机盖合紧。</div>
                         <button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; width:100%; padding:8px 0; font-size:13px; font-weight:700;" onclick="resumeCurrentPrinter()">▶️ 解决后点击：网页端一键恢复打印 (免按机身键)</button>
                     </div>
@@ -310,7 +310,7 @@
                     <div class="preview-toolbar">
                         <span style="font-size:14px; font-weight:700;">👁️ 扫描实时预览视窗</span>
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <button type="button" id="btn-scan-direct-print" class="nav-btn" style="display:none; background:#059669; color:#fff; border:none; padding:4px 10px; font-size:12px;" onclick="printCurrentScannedFile()">🖨️️ 打印该件</button>
+                            <button type="button" id="btn-scan-direct-print" class="nav-btn" style="display:none; background:#059669; color:#fff; border:none; padding:4px 10px; font-size:12px;" onclick="printCurrentScannedFile()">🖨 打印该件</button>
                             <a id="scan-download-anchor" href="#" download style="display:none; font-size:12px; color:var(--primary); font-weight:700; text-decoration:none;">💾 下载原件</a>
                         </div>
                     </div>
@@ -360,7 +360,16 @@
         </div>
 
         <div class="card-box">
-            <div class="card-title">🔎 检索系统驱动库（同步 631 驱动池）</div>
+            <!-- 核心优化：显式展示已检测到的物理硬件端口，对齐 631 后台 -->
+            <div class="card-title" style="margin-top:10px;">🔌 1. 已检测到的物理打印机端口</div>
+            <div style="display:flex; gap:10px; align-items:center; margin-bottom:15px;">
+                <select id="discovered-device-select" class="form-ctrl" style="flex:1;">
+                    <option value="">正在检测物理硬件端口...</option>
+                </select>
+                <button type="button" class="nav-btn" style="background:var(--primary); color:#fff; border:none;" onclick="loadDiscoveredDevices()">🔄 重新扫描</button>
+            </div>
+
+            <div class="card-title">🔎 2. 检索系统驱动库（同步 631 驱动池）</div>
             <p style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">输入打印机型号关键词（如: <code>HP</code>, <code>1020</code>, <code>M126</code>, <code>Generic</code> 等），无需进入 631 即可直接检索并绑定安装驱动。</p>
             <div style="display:flex; gap:10px; margin-bottom:10px;">
                 <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="输入驱动关键词，例如: HP LaserJet 或 1020" style="flex:1;">
@@ -635,7 +644,10 @@ function switchNavTab(tab) {
     document.getElementById('panel-' + tab).classList.add('active');
 
     if (tab === 'scan') loadScanDevices();
-    if (tab === 'devices') loadPrinters(true);
+    if (tab === 'devices') {
+        loadPrinters(true);
+        loadDiscoveredDevices(); // 切换至设备管理面板时，同步嗅探物理打印机端口
+    }
     if (tab === 'mail') loadMailConfig();
 }
 
@@ -924,6 +936,35 @@ function resumePrinterByName(printerName) {
         .catch(err => alert('恢复请求失败: ' + err));
 }
 
+// ---------------- 枚举物理硬件端口（对齐 631 核心机制） ----------------
+function loadDiscoveredDevices() {
+    const sel = document.getElementById('discovered-device-select');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">正在检测物理硬件端口...</option>';
+
+    fetch('/api/printer_admin?action=discovered_devices')
+        .then(r => r.json())
+        .then(d => {
+            sel.innerHTML = '';
+            if (d.success && d.data && d.data.length > 0) {
+                d.data.forEach(item => {
+                    const opt = document.createElement('option');
+                    opt.value = item.uri;
+                    opt.innerText = `${item.name} (${item.uri})`;
+                    sel.appendChild(opt);
+                });
+            } else {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.innerText = '未检测到可用物理打印机 (请检查 USB 数据线与电源)';
+                sel.appendChild(opt);
+            }
+        })
+        .catch(err => {
+            sel.innerHTML = '<option value="">扫描硬件端口失败: ' + err + '</option>';
+        });
+}
+
 function searchCupsDrivers() {
     const kw = document.getElementById('driver-search-kw').value.trim();
     const resBox = document.getElementById('driver-search-results');
@@ -960,24 +1001,29 @@ function searchCupsDrivers() {
         });
 }
 
+// ---------------- 绑定驱动：直接读取上方所选的完整有效端口，拒绝短词截断 ----------------
 function selectDriverToBind(drvId, drvName) {
-    const pName = prompt(`确定使用驱动【${drvName}】创建或绑定打印机吗？\n请输入打印机名称:`, "My_Printer");
+    const selDev = document.getElementById('discovered-device-select');
+    const selectedUri = selDev ? selDev.value.trim() : '';
+
+    if (!selectedUri) {
+        alert('未检测到可用的物理打印机端口！请先确认打印机已开机并插紧 USB 数据线。');
+        return;
+    }
+
+    // 默认打印机名称由驱动名净化得出
+    let defaultName = drvName.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (defaultName.length > 25) defaultName = defaultName.substring(0, 25);
+
+    const pName = prompt(`确定使用驱动【${drvName}】安装打印机吗？\n请输入打印机名称:`, defaultName || "HP_Printer");
     if (!pName) return;
 
-    fetch('/api/printer_admin?action=discovered_devices')
-        .then(r => r.json())
-        .then(d => {
-            let uri = "usb://";
-            if (d.success && d.data && d.data.length > 0) {
-                uri = d.data[0].uri;
-            }
-            const fd = new FormData();
-            fd.append('name', pName);
-            fd.append('uri', uri);
-            fd.append('driver', drvId);
+    const fd = new FormData();
+    fd.append('name', pName);
+    fd.append('uri', selectedUri);
+    fd.append('driver', drvId);
 
-            return fetch('/api/printer_admin', { method: 'POST', body: fd });
-        })
+    fetch('/api/printer_admin', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(res => {
             alert(getRespMsg(res, '打印机已成功安装并同步至 631！'));
