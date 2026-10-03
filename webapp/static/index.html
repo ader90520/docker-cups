@@ -8,8 +8,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <style>
         :root {
-            --primary: #007bff;
-            --primary-hover: #0056b3;
+            --primary: #00c06d;
+            --primary-hover: #00a85f;
             --success: #28a745;
             --danger: #ef4444;
             --warning: #f59e0b;
@@ -27,18 +27,18 @@
         .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
         .nav-tabs { display: flex; gap: 6px; }
         .nav-btn { border: 1px solid var(--border-color); background: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--text-sub); transition: all 0.2s; }
-        .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .nav-btn.active { background: #007bff; color: #fff; border-color: #007bff; }
 
         /* 顶栏控制 */
         .print-header-bar { display: flex; align-items: center; gap: 15px; padding: 15px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .printer-select-wrap { display: flex; align-items: center; gap: 8px; flex: 1; }
         .select-ctrl { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
-        .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: var(--primary); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+        .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: #007bff; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 
         /* 子分类切换 */
         .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
         .type-item { flex: 1; padding: 12px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
-        .type-item.active { color: var(--primary); border-bottom-color: var(--primary); background: #f0f7ff; }
+        .type-item.active { color: #007bff; border-bottom-color: #007bff; background: #f0f7ff; }
 
         /* 双栏网格 */
         .main-layout { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; padding: 20px; background: #f8fafc; }
@@ -49,66 +49,64 @@
         
         /* 拖拽上传区 */
         .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; cursor: pointer; transition: all 0.2s; position: relative; }
-        .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0f7ff; }
+        .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0fdf4; }
         .upload-icon { font-size: 32px; color: #94a3b8; margin-bottom: 6px; }
         .upload-text { font-size: 13px; color: var(--text-sub); }
 
-        /* 身份证框网格 */
-        .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
-        .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .idcard-box { border: 2px dashed #cbd5e1; border-radius: 8px; height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fff; overflow: hidden; }
-        .idcard-box img { width: 100%; height: 100%; object-fit: cover; }
-        .idcard-box .text-tip { font-size: 12px; color: var(--text-sub); }
+        /* 身份证人员卡片与 85.6 : 54 标准套框 */
+        .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fff; position: relative; }
+        .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .idcard-box-wrapper { display: flex; flex-direction: column; gap: 6px; }
+        .idcard-box { border: 2px dashed #cbd5e1; border-radius: 6px; aspect-ratio: 85.6 / 54; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fafafa; overflow: hidden; }
+        .idcard-box img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s ease; }
+        .idcard-actions { display: flex; gap: 6px; }
+        .idcard-mini-btn { flex: 1; padding: 4px 0; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; font-size: 11px; cursor: pointer; text-align: center; color: var(--text-sub); }
+        .idcard-mini-btn:hover { background: #f1f5f9; color: var(--text-main); }
+        .idcard-mini-btn.del { color: var(--danger); border-color: #fecaca; }
+        .idcard-mini-btn.del:hover { background: #fee2e2; }
 
         /* 文件列表 */
         .file-list { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 6px; max-height: 160px; overflow-y: auto; background: #fff; }
         .file-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
         .file-row:last-child { border-bottom: none; }
-        .file-row.active { background: #eff6ff; }
+        .file-row.active { background: #f0fdf4; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
         /* 表单网格 */
         .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
-        .form-ctrl { width: 100%; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
+        .form-ctrl { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
 
-        /* 单选组 */
-        .radio-btn-group { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
-        .radio-btn { flex: 1; text-align: center; padding: 6px 10px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
-        .radio-btn.active { background: var(--primary); color: #fff; }
+        /* 扁平绿色单选组 (图2风格) */
+        .flat-radio-group { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; background: #fff; }
+        .flat-radio-btn { flex: 1; text-align: center; padding: 8px 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
+        .flat-radio-btn.active { background: var(--primary); color: #fff; }
 
-        /* 预览视窗 (支持 A4/A5/B5 动态缩放过渡) */
+        /* 预览视窗 */
         .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; }
         .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 14px; align-items: center; }
         .sheet-a4-viewport { width: 300px; height: 424px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; }
-        .sheet-a4-viewport.landscape { width: 424px; height: 300px; }
         .sheet-placeholder-text { font-size: 13px; color: #94a3b8; }
         .sheet-img-render { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
 
-        /* PDF 翻页控制器 */
-        .pdf-pager-bar { display: none; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 13px; font-weight: 600; color: var(--text-sub); }
-        .pager-btn { padding: 3px 10px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
-        .pager-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        /* 身份证拼版视窗 (支持最多 3 人正反面同页) */
+        /* 身份证拼版视窗 */
         .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 10px 0; }
         .idcard-row-pair { display: flex; gap: 8px; justify-content: center; width: 100%; }
-        .idcard-a4-item { width: 130px; height: 82px; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fdfefe; }
+        .idcard-a4-item { width: 130px; aspect-ratio: 85.6 / 54; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fff; }
         .idcard-a4-item img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* 图 4 风格监控看板指标条 */
+        /* 提交动作 (图2全绿扁平大按钮) */
+        .action-bar { margin-top: 15px; }
+        .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn-submit-print:hover { background: var(--primary-hover); }
+
+        /* 监控看板样式 (图2现代化简洁设计) */
         .status-metric-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f8fafc; border-radius: 8px; margin-bottom: 8px; font-size: 13px; border: 1px solid #f1f5f9; }
         .status-badge-pill { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d; }
         .status-badge-pill.busy { background: #dbeafe; color: #1d4ed8; }
         .status-badge-pill.stopped { background: #fee2e2; color: #b91c1c; }
 
-        /* 提交动作 */
-        .action-bar { margin-top: 15px; }
-        .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
-        .btn-submit-print:hover { background: var(--primary-hover); }
-
-        /* 状态与告警 */
         .status-alert { margin-top: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; display: none; }
         .status-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .status-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
@@ -120,7 +118,6 @@
 <body>
 
 <div class="wrapper">
-    <!-- 顶部导航 -->
     <div class="top-navbar">
         <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
         <div class="nav-tabs">
@@ -149,11 +146,11 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 标准打印上传区 -->
+                <!-- 1. 标准打印上传区 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文档/试卷</span>
-                        <button type="button" class="btn-del" onclick="clearNormalFiles()" style="font-weight:600;">清空列表</button>
+                        <button type="button" class="btn-del" onclick="clearNormalFiles()">清空列表</button>
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-normal" onclick="document.getElementById('file-input-normal').click()">
                         <div class="upload-icon">📂</div>
@@ -163,42 +160,58 @@
                     <div class="file-list" id="file-list-normal" style="display:none;"></div>
                 </div>
 
-                <!-- 发票专属上传区 (支持同页多张拼版) -->
+                <!-- 2. 发票专属上传区 -->
                 <div class="card-box" id="sec-upload-invoice" style="display:none;">
                     <div class="card-title">
                         <span>🧾 上传发票文件</span>
-                        <button type="button" class="btn-del" onclick="clearInvoiceFiles()" style="font-weight:600;">清空发票</button>
+                        <button type="button" class="btn-del" onclick="clearInvoiceFiles()">清空发票</button>
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-invoice" onclick="document.getElementById('file-input-invoice').click()">
                         <div class="upload-icon">🧾</div>
-                        <div class="upload-text"><b>点击选取</b> 或 <b>拖拽发票文件 (支持同时上传 2~4 张发票)</b></div>
+                        <div class="upload-text"><b>点击选取</b> 或 <b>拖拽发票文件 (支持同时上传多张发票)</b></div>
                         <input type="file" id="file-input-invoice" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="onInvoiceFilesSelected(this.files)">
                     </div>
                     <div class="file-list" id="file-list-invoice" style="display:none;"></div>
-                    <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+                    <div style="margin-top:10px;">
                         <label style="font-size:13px; font-weight:600; cursor:pointer;">
                             <input type="checkbox" id="chk-invoice-merge" checked> 多张发票合并在单张 A4 纸上输出 (N-up 拼版)
                         </label>
                     </div>
                 </div>
 
-                <!-- 身份证专属上传区 (支持 1~3 人合并打在单张 A4) -->
+                <!-- 3. 身份证专属上传区 (支持套框截取、旋转、独立删除与加减人) -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
-                        <button type="button" class="nav-btn" style="padding:3px 8px; font-size:12px;" onclick="addIdcardPerson()">➕ 增加一人</button>
+                        <button type="button" class="nav-btn" style="padding:4px 10px; font-size:12px;" onclick="addIdcardPerson()">➕ 增加一人</button>
                     </div>
                     <div id="idcard-person-container">
+                        <!-- 人员 1 槽位 -->
                         <div class="idcard-person-card" id="id-person-row-0">
-                            <div style="font-size:12px; font-weight:700; margin-bottom:6px; color:#1e293b;">人员 1 身份证照片:</div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                <b style="font-size:13px; color:#1e293b;">人员 1 身份证照片:</b>
+                                <button type="button" class="btn-del" style="font-size:12px;" onclick="clearPersonImages(0)">清空照片</button>
+                            </div>
                             <div class="idcard-grid">
-                                <div class="idcard-box" onclick="document.getElementById('id-f-0').click()">
-                                    <span class="text-tip" id="lbl-f-0">点击上传：正面 (人像)</span>
-                                    <img id="img-f-0" style="display:none;" alt="正面">
+                                <div class="idcard-box-wrapper">
+                                    <div class="idcard-box" onclick="triggerPickIdCard(0, 'f')">
+                                        <span class="text-tip" id="lbl-f-0">点击上传：正面 (人像)</span>
+                                        <img id="img-f-0" style="display:none;" alt="正面">
+                                    </div>
+                                    <div class="idcard-actions">
+                                        <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(0, 'f')">↺ 旋转</button>
+                                        <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(0, 'f')">❌ 删除</button>
+                                    </div>
                                 </div>
-                                <div class="idcard-box" onclick="document.getElementById('id-b-0').click()">
-                                    <span class="text-tip" id="lbl-b-0">点击上传：反面 (国徽)</span>
-                                    <img id="img-b-0" style="display:none;" alt="反面">
+                                <div class="idcard-box-wrapper">
+                                    <div class="idcard-box" onclick="triggerPickIdCard(0, 'b')">
+                                        <span class="text-tip" id="lbl-b-0">点击上传：反面 (国徽)</span>
+                                        <img id="img-b-0" style="display:none;" alt="反面">
+                                    </div>
+                                    <div class="idcard-actions">
+                                        <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(0, 'b')">↺ 旋转</button>
+                                        <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(0, 'b')">❌ 删除</button>
+                                    </div>
                                 </div>
                             </div>
                             <input type="file" id="id-f-0" accept="image/*" style="display:none;" onchange="onIDCardFile(0, 'f', this)">
@@ -207,36 +220,45 @@
                     </div>
                 </div>
 
-                <!-- 打印参数配置 -->
+                <!-- 打印参数配置 (对齐图2扁平现代风格) -->
                 <div class="card-box">
-                    <div class="card-title">⚙ 打印参数与即时效果</div>
-                    <div style="margin-bottom: 12px;">
-                        <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:5px;">色彩模式 (实时影响预览效果)</label>
-                        <div class="radio-btn-group">
-                            <button type="button" class="radio-btn active" id="btn-color-mono" onclick="setColorMode('monochrome')">⚫ 黑白模式 (去灰底加黑)</button>
-                            <button type="button" class="radio-btn" id="btn-color-rgb" onclick="setColorMode('color')">🎨 彩色保留 (保留红笔/印章/彩图)</button>
+                    <div class="card-title">⚙ 打印参数</div>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:6px;">颜色模式</label>
+                            <div class="flat-radio-group">
+                                <button type="button" class="flat-radio-btn active" id="btn-color-mono" onclick="setColorMode('monochrome')">⚫ 黑白打印</button>
+                                <button type="button" class="flat-radio-btn" id="btn-color-rgb" onclick="setColorMode('color')">🎨 彩色打印</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:6px;">打印方向</label>
+                            <div class="flat-radio-group">
+                                <button type="button" class="flat-radio-btn active" id="btn-orient-port" onclick="setOrientation('portrait')">▯ 纵向</button>
+                                <button type="button" class="flat-radio-btn" id="btn-orient-land" onclick="setOrientation('landscape')">▭ 横向</button>
+                            </div>
                         </div>
                     </div>
 
                     <div class="param-grid">
-                        <div class="form-item">
-                            <label>纸张大小</label>
-                            <select id="p-media" class="form-ctrl" onchange="onPaperSizeChange()">
-                                <option value="A4" selected>A4 (210×297mm)</option>
-                                <option value="A5">A5 (148×210mm)</option>
-                                <option value="B5">B5 (176×250mm)</option>
-                            </select>
-                        </div>
-                        <div class="form-item">
-                            <label>打印份数</label>
-                            <input type="number" id="p-copies" class="form-ctrl" value="1" min="1" max="99">
-                        </div>
                         <div class="form-item">
                             <label>双面打印</label>
                             <select id="p-duplex" class="form-ctrl">
                                 <option value="none" selected>单面打印</option>
                                 <option value="long">双面长边翻转 (书籍装订)</option>
                                 <option value="short">双面短边翻转 (日历装订)</option>
+                            </select>
+                        </div>
+                        <div class="form-item">
+                            <label>份数</label>
+                            <input type="number" id="p-copies" class="form-ctrl" value="1" min="1" max="99">
+                        </div>
+                        <div class="form-item">
+                            <label>纸张大小</label>
+                            <select id="p-media" class="form-ctrl" onchange="onPaperSizeChange()">
+                                <option value="A4" selected>A4 (210×297mm)</option>
+                                <option value="A5">A5 (148×210mm)</option>
+                                <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
                         <div class="form-item">
@@ -247,27 +269,23 @@
                             </select>
                         </div>
                         <div class="form-item" style="grid-column: span 2;">
-                            <label>打印页码 / 序号范围 (例如: 1-3 或 2,5，留空打全部)</label>
-                            <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="支持例如: 1-3 或 2,5 或 1">
+                            <label>页面范围 (如: 1-5 8，留空打全部)</label>
+                            <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
                         </div>
                     </div>
 
                     <div class="action-bar">
-                        <button type="button" class="btn-submit-print" id="btn-submit" onclick="submitPrintJob()">🚀 提交打印任务</button>
+                        <button type="button" class="btn-submit-print" id="btn-submit" onclick="submitPrintJob()">🖨️ 提交打印</button>
                     </div>
                     <div id="print-alert" class="status-alert"></div>
                 </div>
             </div>
 
-            <!-- 右侧视窗预览 -->
+            <!-- 右侧视窗预览与看齐图2的现代看板 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:14px; font-weight:700;">👁️ 实时预览 (所见即所打)</span>
-                        <div class="radio-btn-group" style="width:140px;">
-                            <button type="button" class="radio-btn active" id="btn-orient-port" onclick="setOrientation('portrait')">▯ 纵向</button>
-                            <button type="button" class="radio-btn" id="btn-orient-land" onclick="setOrientation('landscape')">▭ 横向</button>
-                        </div>
                     </div>
 
                     <div class="sheet-a4-viewport" id="a4-viewport">
@@ -275,7 +293,7 @@
                         <img id="viewport-img" class="sheet-img-render" style="display:none;" alt="预览图">
                         <canvas id="pdf-canvas-render"></canvas>
 
-                        <!-- 身份证拼版视窗 (支持最多 3 人正反面同页) -->
+                        <!-- 身份证拼版视窗 (85.6 : 54 黄金比例套框) -->
                         <div class="idcard-a4-holder" id="viewport-idcard-holder" style="display:none;">
                             <div class="idcard-row-pair" id="pv-pair-0">
                                 <div class="idcard-a4-item"><img id="pv-id-f-0" style="display:none;" alt="正面"></div>
@@ -291,20 +309,13 @@
                             </div>
                         </div>
                     </div>
-
-                    <!-- PDF 多页翻页控制器 -->
-                    <div class="pdf-pager-bar" id="pdf-pager-ctrl">
-                        <button type="button" class="pager-btn" id="pdf-prev-btn" onclick="prevPdfPage()">◀ 上一页</button>
-                        <span id="pdf-page-num-desc">1 / 1</span>
-                        <button type="button" class="pager-btn" id="pdf-next-btn" onclick="nextPdfPage()">下一页 ▶</button>
-                    </div>
                 </div>
 
-                <!-- 现代版打印机监控看板 (精准对齐三项指标) -->
+                <!-- 现代版打印机监控看板 (图2精准三项指标) -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span style="display:flex; align-items:center; gap:6px;">📈 打印机状态</span>
-                        <button type="button" class="btn-refresh-icon" style="width:26px; height:26px; font-size:12px;" onclick="loadPrinters(true)">🔄</button>
+                        <button type="button" class="btn-refresh-icon" style="width:26px; height:26px; font-size:12px; background:transparent; color:#64748b; border:1px solid #cbd5e1;" onclick="loadPrinters(true)">🔄</button>
                     </div>
 
                     <!-- 1. 打印机状态 -->
@@ -380,12 +391,12 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理与状态运维面板 -->
+    <!-- 3. 设备管理面板 -->
     <div id="panel-devices" class="tab-panel-container">
         <div class="card-box" id="sec-hw-status-panel">
             <div class="card-title">
                 <span id="hw-panel-title">🚨 设备运行与故障告警看板</span>
-                <button type="button" class="btn-del" onclick="triggerCleanDisk()" style="color:var(--text-sub); font-size:12px; font-weight:normal;" title="后台已设为每日自动静默清理，亦可手动清理">🧹 立即手动清理垃圾</button>
+                <button type="button" class="btn-del" onclick="triggerCleanDisk()" style="color:var(--text-sub); font-size:12px; font-weight:normal;">🧹 立即手动清理垃圾</button>
             </div>
             <div id="hw-panel-content" style="padding:12px; border-radius:6px; background:#f0fdf4; border:1px solid #bbf7d0; display:flex; justify-content:space-between; align-items:center;">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -422,14 +433,14 @@
                 <select id="discovered-device-select" class="form-ctrl" style="flex:1;">
                     <option value="">正在检测物理硬件端口...</option>
                 </select>
-                <button type="button" class="nav-btn" style="background:var(--primary); color:#fff; border:none;" onclick="loadDiscoveredDevices()">🔄 重新扫描</button>
+                <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="loadDiscoveredDevices()">🔄 重新扫描</button>
             </div>
 
             <div class="card-title">🔎 2. 检索系统驱动库（同步 631 驱动池）</div>
             <p style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">输入打印机型号关键词（如: <code>HP</code>, <code>1020</code>, <code>M126</code> 等），直接检索并绑定安装驱动。</p>
             <div style="display:flex; gap:10px; margin-bottom:10px;">
                 <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="输入驱动关键词" style="flex:1;">
-                <button type="button" class="nav-btn" style="background:var(--primary); color:#fff; border:none;" onclick="searchCupsDrivers()">🔍 搜索驱动</button>
+                <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="searchCupsDrivers()">🔍 搜索驱动</button>
             </div>
             <div id="driver-search-results" style="max-height:160px; overflow-y:auto; border:1px solid var(--border-color); border-radius:6px; display:none; margin-bottom:12px; font-size:12px;"></div>
 
@@ -481,8 +492,8 @@
                         <input type="password" id="mail_password" name="password" class="form-ctrl" placeholder="留空或保留默认表示不修改">
                     </div>
                 </div>
-                <div class="form-item" style="background:#f0f9ff; border:1px dashed var(--primary); padding:12px; border-radius:6px; margin-bottom:12px;">
-                    <label style="color:var(--primary);">💬 PushPlus 微信通知 Token</label>
+                <div class="form-item" style="background:#f0f9ff; border:1px dashed #007bff; padding:12px; border-radius:6px; margin-bottom:12px;">
+                    <label style="color:#007bff;">💬 PushPlus 微信通知 Token</label>
                     <input type="text" id="mail_pushplus_token" name="pushplus_token" class="form-ctrl" placeholder="填写 PushPlus 发送的 Token">
                 </div>
                 <div class="param-grid" style="margin-bottom:15px;">
@@ -511,12 +522,11 @@ let currentOrientation = 'portrait';
 // 数据源完全隔离，防止串台
 let normalFiles = [];
 let invoiceFiles = [];
+
+// 身份证多人员独立数据槽（包含各自旋转角度）
 let idcardPersons = [
-    { front: null, back: null },
-    { front: null, back: null },
-    { front: null, back: null }
+    { front: null, back: null, rot_f: 0, rot_b: 0 }
 ];
-let idcardCount = 1;
 
 let globalPrintersData = [];
 let isPollingActive = false;
@@ -540,7 +550,7 @@ function getRespMsg(d, defaultSuccess = '操作成功', defaultFail = '操作失
     return d.msg || d.message || (d.success ? defaultSuccess : defaultFail);
 }
 
-// ---------------- 纸张尺寸与右侧视窗长宽比动态自适应 ----------------
+// ---------------- 纸张尺寸自适应 ----------------
 function onPaperSizeChange() {
     const media = document.getElementById('p-media').value;
     const vp = document.getElementById('a4-viewport');
@@ -582,7 +592,7 @@ function updatePreviewFilters() {
     if (canvas) canvas.style.filter = filterRule;
 }
 
-// ---------------- 借用后端轻量算法生成高清去底预览 ----------------
+// ---------------- 后端轻量去黑底预览调用 ----------------
 function loadEnhancedPreviewFromBackend(file) {
     if (!file || !file.type.startsWith('image/')) return;
     const isEnhance = document.getElementById('p-enhance').value === 'true';
@@ -692,7 +702,7 @@ function switchPrintType(t) {
     }
 }
 
-// ---------------- 标准文档文件流 ----------------
+// ---------------- 标准文件流 ----------------
 function onNormalFilesSelected(files) {
     if (!files) return;
     for (let i = 0; i < files.length; i++) normalFiles.push(files[i]);
@@ -774,37 +784,9 @@ function selectInvoiceFile(idx) {
     renderCurrentFilePreview(invoiceFiles[idx]);
 }
 
-// ---------------- 身份证多人员动态管理 (最多 3 人同页) ----------------
-function addIdcardPerson() {
-    if (idcardCount >= 3) {
-        alert('单张 A4 纸最多排版 3 人的身份证！');
-        return;
-    }
-    const idx = idcardCount;
-    idcardCount++;
-
-    const container = document.getElementById('idcard-person-container');
-    const card = document.createElement('div');
-    card.className = 'idcard-person-card';
-    card.id = `id-person-row-${idx}`;
-    card.innerHTML = `
-        <div style="font-size:12px; font-weight:700; margin-bottom:6px; color:#1e293b;">人员 ${idx + 1} 身份证照片:</div>
-        <div class="idcard-grid">
-            <div class="idcard-box" onclick="document.getElementById('id-f-${idx}').click()">
-                <span class="text-tip" id="lbl-f-${idx}">点击上传：正面 (人像)</span>
-                <img id="img-f-${idx}" style="display:none;" alt="正面">
-            </div>
-            <div class="idcard-box" onclick="document.getElementById('id-b-${idx}').click()">
-                <span class="text-tip" id="lbl-b-${idx}">点击上传：反面 (国徽)</span>
-                <img id="img-b-${idx}" style="display:none;" alt="反面">
-            </div>
-        </div>
-        <input type="file" id="id-f-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'f', this)">
-        <input type="file" id="id-b-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'b', this)">
-    `;
-    container.appendChild(card);
-
-    document.getElementById(`pv-pair-${idx}`).style.display = 'flex';
+// ---------------- 身份证管理：套框、旋转、独立删除与人员增减 ----------------
+function triggerPickIdCard(idx, side) {
+    document.getElementById(`id-${side}-${idx}`).click();
 }
 
 function onIDCardFile(pIdx, side, input) {
@@ -820,18 +802,172 @@ function onIDCardFile(pIdx, side, input) {
             upImg.style.display = 'block';
             lbl.style.display = 'none';
 
+            // 渲染至右侧预览
             const pvImg = document.getElementById(`pv-id-${side}-${pIdx}`);
             pvImg.src = e.target.result;
             pvImg.style.display = 'block';
+            applyIdCardRotation(pIdx, side);
         };
         reader.readAsDataURL(file);
     }
 }
 
+// 旋转身份证图片 (90° 步进)
+function rotateIdCard(pIdx, side) {
+    const key = `rot_${side}`;
+    idcardPersons[pIdx][key] = (idcardPersons[pIdx][key] + 90) % 360;
+    applyIdCardRotation(pIdx, side);
+}
+
+function applyIdCardRotation(pIdx, side) {
+    const deg = idcardPersons[pIdx][`rot_${side}`];
+    const upImg = document.getElementById(`img-${side}-${pIdx}`);
+    const pvImg = document.getElementById(`pv-id-${side}-${pIdx}`);
+    if (upImg) upImg.style.transform = `rotate(${deg}deg)`;
+    if (pvImg) pvImg.style.transform = `rotate(${deg}deg)`;
+}
+
+// 删除单张身份证照片
+function deleteIdCardPhoto(pIdx, side) {
+    idcardPersons[pIdx][side] = null;
+    idcardPersons[pIdx][`rot_${side}`] = 0;
+    
+    const upImg = document.getElementById(`img-${side}-${pIdx}`);
+    const lbl = document.getElementById(`lbl-${side}-${pIdx}`);
+    const pvImg = document.getElementById(`pv-id-${side}-${pIdx}`);
+    const fileInput = document.getElementById(`id-${side}-${pIdx}`);
+
+    if (upImg) { upImg.src = ''; upImg.style.display = 'none'; upImg.style.transform = 'none'; }
+    if (lbl) { lbl.style.display = 'block'; }
+    if (pvImg) { pvImg.src = ''; pvImg.style.display = 'none'; pvImg.style.transform = 'none'; }
+    if (fileInput) { fileInput.value = ''; }
+}
+
+// 清空单个人员的所有照片
+function clearPersonImages(pIdx) {
+    deleteIdCardPhoto(pIdx, 'f');
+    deleteIdCardPhoto(pIdx, 'b');
+}
+
+// 动态增减人员
+function addIdcardPerson() {
+    if (idcardPersons.length >= 3) {
+        alert('单张 A4 纸最多排版 3 人的身份证！');
+        return;
+    }
+    const idx = idcardPersons.length;
+    idcardPersons.push({ front: null, back: null, rot_f: 0, rot_b: 0 });
+
+    const container = document.getElementById('idcard-person-container');
+    const card = document.createElement('div');
+    card.className = 'idcard-person-card';
+    card.id = `id-person-row-${idx}`;
+    card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <b style="font-size:13px; color:#1e293b;">人员 ${idx + 1} 身份证照片:</b>
+            <div>
+                <button type="button" class="btn-del" style="font-size:12px; margin-right:8px;" onclick="clearPersonImages(${idx})">清空</button>
+                <button type="button" class="btn-del" style="font-size:12px; font-weight:700;" onclick="removeIdcardPerson(${idx})">🗑️ 删除该人员</button>
+            </div>
+        </div>
+        <div class="idcard-grid">
+            <div class="idcard-box-wrapper">
+                <div class="idcard-box" onclick="triggerPickIdCard(${idx}, 'f')">
+                    <span class="text-tip" id="lbl-f-${idx}">点击上传：正面 (人像)</span>
+                    <img id="img-f-${idx}" style="display:none;" alt="正面">
+                </div>
+                <div class="idcard-actions">
+                    <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(${idx}, 'f')">↺ 旋转</button>
+                    <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(${idx}, 'f')">❌ 删除</button>
+                </div>
+            </div>
+            <div class="idcard-box-wrapper">
+                <div class="idcard-box" onclick="triggerPickIdCard(${idx}, 'b')">
+                    <span class="text-tip" id="lbl-b-${idx}">点击上传：反面 (国徽)</span>
+                    <img id="img-b-${idx}" style="display:none;" alt="反面">
+                </div>
+                <div class="idcard-actions">
+                    <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(${idx}, 'b')">↺ 旋转</button>
+                    <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(${idx}, 'b')">❌ 删除</button>
+                </div>
+            </div>
+        </div>
+        <input type="file" id="id-f-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'f', this)">
+        <input type="file" id="id-b-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'b', this)">
+    `;
+    container.appendChild(card);
+    renderIdcardPreviewGrid();
+}
+
+function removeIdcardPerson(pIdx) {
+    if (idcardPersons.length <= 1) {
+        clearPersonImages(0);
+        return;
+    }
+    // 清除该行图片并在 DOM 中移除
+    deleteIdCardPhoto(pIdx, 'f');
+    deleteIdCardPhoto(pIdx, 'b');
+    idcardPersons.splice(pIdx, 1);
+
+    // 重新渲染人员列表
+    rebuildIdcardDOM();
+    renderIdcardPreviewGrid();
+}
+
+function rebuildIdcardDOM() {
+    const container = document.getElementById('idcard-person-container');
+    container.innerHTML = '';
+    const currentData = [...idcardPersons];
+    idcardPersons = [];
+
+    currentData.forEach((item, idx) => {
+        idcardPersons.push({ front: item.front, back: item.back, rot_f: item.rot_f, rot_b: item.rot_b });
+        const card = document.createElement('div');
+        card.className = 'idcard-person-card';
+        card.id = `id-person-row-${idx}`;
+        card.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <b style="font-size:13px; color:#1e293b;">人员 ${idx + 1} 身份证照片:</b>
+                <div>
+                    <button type="button" class="btn-del" style="font-size:12px; margin-right:8px;" onclick="clearPersonImages(${idx})">清空</button>
+                    ${idx > 0 ? `<button type="button" class="btn-del" style="font-size:12px; font-weight:700;" onclick="removeIdcardPerson(${idx})">🗑️ 删除该人员</button>` : ''}
+                </div>
+            </div>
+            <div class="idcard-grid">
+                <div class="idcard-box-wrapper">
+                    <div class="idcard-box" onclick="triggerPickIdCard(${idx}, 'f')">
+                        <span class="text-tip" id="lbl-f-${idx}" style="${item.front ? 'display:none;' : ''}">点击上传：正面 (人像)</span>
+                        <img id="img-f-${idx}" src="${item.front ? URL.createObjectURL(item.front) : ''}" style="${item.front ? 'display:block;' : 'display:none;'}" alt="正面">
+                    </div>
+                    <div class="idcard-actions">
+                        <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(${idx}, 'f')">↺ 旋转</button>
+                        <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(${idx}, 'f')">❌ 删除</button>
+                    </div>
+                </div>
+                <div class="idcard-box-wrapper">
+                    <div class="idcard-box" onclick="triggerPickIdCard(${idx}, 'b')">
+                        <span class="text-tip" id="lbl-b-${idx}" style="${item.back ? 'display:none;' : ''}">点击上传：反面 (国徽)</span>
+                        <img id="img-b-${idx}" src="${item.back ? URL.createObjectURL(item.back) : ''}" style="${item.back ? 'display:block;' : 'display:none;'}" alt="反面">
+                    </div>
+                    <div class="idcard-actions">
+                        <button type="button" class="idcard-mini-btn" onclick="rotateIdCard(${idx}, 'b')">↺ 旋转</button>
+                        <button type="button" class="idcard-mini-btn del" onclick="deleteIdCardPhoto(${idx}, 'b')">❌ 删除</button>
+                    </div>
+                </div>
+            </div>
+            <input type="file" id="id-f-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'f', this)">
+            <input type="file" id="id-b-${idx}" accept="image/*" style="display:none;" onchange="onIDCardFile(${idx}, 'b', this)">
+        `;
+        container.appendChild(card);
+        applyIdCardRotation(idx, 'f');
+        applyIdCardRotation(idx, 'b');
+    });
+}
+
 function renderIdcardPreviewGrid() {
     for (let i = 0; i < 3; i++) {
         const pair = document.getElementById(`pv-pair-${i}`);
-        if (i < idcardCount) {
+        if (i < idcardPersons.length) {
             pair.style.display = 'flex';
         } else {
             pair.style.display = 'none';
@@ -844,20 +980,17 @@ function renderCurrentFilePreview(file) {
     const tip = document.getElementById('viewport-empty-tip');
     const img = document.getElementById('viewport-img');
     const canvas = document.getElementById('pdf-canvas-render');
-    const pager = document.getElementById('pdf-pager-ctrl');
 
     if (!file) {
         tip.style.display = 'block';
         img.style.display = 'none';
         canvas.style.display = 'none';
-        pager.style.display = 'none';
         currentPdfDoc = null;
         return;
     }
 
     tip.style.display = 'none';
     if (file.type.startsWith('image/')) {
-        pager.style.display = 'none';
         canvas.style.display = 'none';
         currentPdfDoc = null;
         loadEnhancedPreviewFromBackend(file);
@@ -871,7 +1004,6 @@ function renderCurrentFilePreview(file) {
                 currentPdfDoc = pdf;
                 totalPdfPages = pdf.numPages;
                 currentPdfPage = 1;
-                pager.style.display = totalPdfPages > 1 ? 'flex' : 'none';
                 renderPdfPage(currentPdfPage);
             });
         };
@@ -890,39 +1022,21 @@ function renderPdfPage(pageIdx) {
         page.render({ canvasContext: context, viewport: viewport }).promise.then(() => {
             updatePreviewFilters();
         });
-
-        document.getElementById('pdf-page-num-desc').innerText = `${pageIdx} / ${totalPdfPages}`;
-        document.getElementById('pdf-prev-btn').disabled = (pageIdx <= 1);
-        document.getElementById('pdf-next-btn').disabled = (pageIdx >= totalPdfPages);
     });
-}
-
-function prevPdfPage() {
-    if (currentPdfDoc && currentPdfPage > 1) {
-        currentPdfPage--;
-        renderPdfPage(currentPdfPage);
-    }
-}
-
-function nextPdfPage() {
-    if (currentPdfDoc && currentPdfPage < totalPdfPages) {
-        currentPdfPage++;
-        renderPdfPage(currentPdfPage);
-    }
 }
 
 function setColorMode(mode) {
     currentColorMode = mode;
-    document.getElementById('btn-color-mono').className = 'radio-btn ' + (mode === 'monochrome' ? 'active' : '');
-    document.getElementById('btn-color-rgb').className = 'radio-btn ' + (mode === 'color' ? 'active' : '');
+    document.getElementById('btn-color-mono').className = 'flat-radio-btn ' + (mode === 'monochrome' ? 'active' : '');
+    document.getElementById('btn-color-rgb').className = 'flat-radio-btn ' + (mode === 'color' ? 'active' : '');
     onEnhanceOptionChanged();
 }
 
 function setOrientation(orient) {
     currentOrientation = orient;
     const vp = document.getElementById('a4-viewport');
-    document.getElementById('btn-orient-port').className = 'radio-btn ' + (orient === 'portrait' ? 'active' : '');
-    document.getElementById('btn-orient-land').className = 'radio-btn ' + (orient === 'landscape' ? 'active' : '');
+    document.getElementById('btn-orient-port').className = 'flat-radio-btn ' + (orient === 'portrait' ? 'active' : '');
+    document.getElementById('btn-orient-land').className = 'flat-radio-btn ' + (orient === 'landscape' ? 'active' : '');
     if (orient === 'landscape') {
         vp.classList.add('landscape');
     } else {
@@ -946,17 +1060,22 @@ function submitPrintJob() {
         return;
     }
 
-    // 1. 身份证打印分支 (支持最多 3 人)
+    // 1. 身份证打印分支 (支持多人和旋转角度传递)
     if (currentPrintType === 'idcard') {
         let validPairs = 0;
         const fd = new FormData();
         fd.append('printer', printer);
         fd.append('copies', copies);
 
-        for (let i = 0; i < idcardCount; i++) {
+        const rotFArr = [];
+        const rotBArr = [];
+
+        for (let i = 0; i < idcardPersons.length; i++) {
             if (idcardPersons[i].front && idcardPersons[i].back) {
                 fd.append('front', idcardPersons[i].front);
                 fd.append('back', idcardPersons[i].back);
+                rotFArr.push(idcardPersons[i].rot_f);
+                rotBArr.push(idcardPersons[i].rot_b);
                 validPairs++;
             }
         }
@@ -966,6 +1085,9 @@ function submitPrintJob() {
             return;
         }
 
+        fd.append('rot_f', rotFArr.join(','));
+        fd.append('rot_b', rotBArr.join(','));
+
         btn.disabled = true;
         btn.innerText = `正在拼版 ${validPairs} 人的身份证...`;
 
@@ -973,7 +1095,7 @@ function submitPrintJob() {
             .then(r => r.json())
             .then(res => {
                 btn.disabled = false;
-                btn.innerText = '🚀 提交打印任务';
+                btn.innerText = '🖨️ 提交打印';
                 alertBox.style.display = 'block';
                 const isSuccess = res.success === true;
                 alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
@@ -981,7 +1103,7 @@ function submitPrintJob() {
             })
             .catch(err => {
                 btn.disabled = false;
-                btn.innerText = '🚀 提交打印任务';
+                btn.innerText = '🖨️ 提交打印';
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '拼版请求异常: ' + err;
@@ -1008,7 +1130,6 @@ function submitPrintJob() {
     fd.append('enhance', enhance);
     if (pageRanges) fd.append('page_ranges', pageRanges);
 
-    // 发票同页拼版开关
     if (currentPrintType === 'invoice' && document.getElementById('chk-invoice-merge').checked) {
         fd.append('multi_merge', 'true');
     }
@@ -1019,7 +1140,7 @@ function submitPrintJob() {
         .then(r => r.json())
         .then(res => {
             btn.disabled = false;
-            btn.innerText = '🚀 提交打印任务';
+            btn.innerText = '🖨️ 提交打印';
             alertBox.style.display = 'block';
             const isSuccess = res.success === true;
             alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
@@ -1031,18 +1152,17 @@ function submitPrintJob() {
         })
         .catch(err => {
             btn.disabled = false;
-            btn.innerText = '🚀 提交打印任务';
+            btn.innerText = '🖨️ 提交打印';
             alertBox.style.display = 'block';
             alertBox.className = 'status-alert status-error';
             alertBox.innerText = '打印服务异常: ' + err;
         });
 }
 
-// ---------------- 看齐图 4 的现代化监控看板刷新 (精准三项指标) ----------------
+// ---------------- 看齐图2的现代化监控看板刷新 (精准三项指标) ----------------
 function updateHwDashboard(data) {
     if (!data) return;
 
-    // 1. 打印机状态徽章
     const pill = document.getElementById('dash-status-pill');
     let isBusy = (data.queue_count && data.queue_count > 0);
     let pObj = (data.printers && data.printers.length > 0) ? data.printers[0] : null;
@@ -1058,12 +1178,10 @@ function updateHwDashboard(data) {
         pill.innerText = '空闲';
     }
 
-    // 2. 队列待处理任务数
     if (data.queue_count !== undefined) {
         document.getElementById('dash-queue-count').innerText = data.queue_count;
     }
 
-    // 3. 最近完成打印作业记录列表
     if (data.completed_jobs && data.completed_jobs.length > 0) {
         const hist = document.getElementById('dash-completed-history');
         hist.innerHTML = '';
@@ -1079,7 +1197,6 @@ function updateHwDashboard(data) {
     }
 }
 
-// ---------------- 设备与打印机轮询 ----------------
 function scheduleNextPoll() {
     setTimeout(() => {
         if (currentNav === 'print' || currentNav === 'devices') {
@@ -1123,30 +1240,10 @@ function loadPrinters(renderTable, callback) {
 
             if (!renderTable) { if (callback) callback(); return; }
 
-            const diagBox = document.getElementById('sec-diagnostics');
-            const diagList = document.getElementById('diag-list');
-            diagList.innerHTML = '';
-            if (data.diagnostics && data.diagnostics.length > 0) {
-                diagBox.style.display = 'block';
-                data.diagnostics.forEach(item => {
-                    const div = document.createElement('div');
-                    div.style.padding = '8px 12px';
-                    div.style.borderRadius = '6px';
-                    div.style.fontSize = '12px';
-                    div.style.background = item.level === 'danger' ? '#fef2f2' : '#fffbeb';
-                    div.style.border = `1px solid ${item.level === 'danger' ? '#fecaca' : '#fef3c7'}`;
-                    div.style.color = item.level === 'danger' ? '#991b1b' : '#92400e';
-                    div.innerHTML = `<b>⚠️ ${item.title}:</b> ${item.detail}`;
-                    diagList.appendChild(div);
-                });
-            } else {
-                diagBox.style.display = 'none';
-            }
-
             const cardList = document.getElementById('device-card-list');
             cardList.innerHTML = '';
             if (data.printers.length === 0) {
-                cardList.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8;">暂未检测到打印机，请在下方搜索驱动添加或连接 USB 打印机</div>';
+                cardList.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8;">暂未检测到打印机，请在下方搜索驱动添加</div>';
                 if (callback) callback();
                 return;
             }
@@ -1177,7 +1274,7 @@ function loadPrinters(renderTable, callback) {
                     <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #f1f5f9; padding-top:10px;">
                         <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;">
                             <input type="checkbox" ${p.is_shared ? 'checked' : ''} onchange="togglePrinterShare('${p.name}', this.checked)">
-                            <b>共享此打印机 (解决苹果隔空打印搜不到)</b>
+                            <b>共享此打印机 (AirPrint)</b>
                         </label>
                         <div style="display:flex; gap:6px;">
                             ${resumeBtn}
@@ -1216,12 +1313,6 @@ function updateSelectedPrinterStatus() {
         pill.className = 'status-badge-pill';
         pill.innerText = '空闲';
     }
-}
-
-function resumeCurrentPrinter() {
-    const sel = document.getElementById('printer-select');
-    if (!sel || !sel.value) return;
-    resumePrinterByName(sel.value);
 }
 
 function resumePrinterByName(printerName) {
@@ -1402,7 +1493,7 @@ function uploadScannerPlugin() {
         .then(r => r.json())
         .then(d => {
             const isSuccess = d.success === true;
-            alertBox.className = 'status-alert status-success';
+            alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
             alertBox.innerText = getRespMsg(d, '扫描插件安装成功！');
             if (isSuccess) {
                 fileInput.value = '';
