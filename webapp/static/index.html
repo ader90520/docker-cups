@@ -114,7 +114,7 @@
 <div class="wrapper">
     <!-- 顶部导航 -->
     <div class="top-navbar">
-        <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
+        <div class="nav-brand">🖨️️ 在线打印 - CUPS 智能工作台</div>
         <div class="nav-tabs">
             <button class="nav-btn active" onclick="switchNavTab('print')">📄 智能打印</button>
             <button class="nav-btn" onclick="switchNavTab('scan')">📷 在线扫描</button>
@@ -174,12 +174,12 @@
 
                 <!-- 打印参数配置 -->
                 <div class="card-box">
-                    <div class="card-title">⚙ 打印参数</div>
+                    <div class="card-title">⚙ 打印参数与即时效果</div>
                     <div style="margin-bottom: 12px;">
-                        <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:5px;">色彩模式</label>
+                        <label style="font-size:12px; font-weight:600; color:var(--text-sub); display:block; margin-bottom:5px;">色彩模式 (实时影响预览效果)</label>
                         <div class="radio-btn-group">
                             <button type="button" class="radio-btn active" id="btn-color-mono" onclick="setColorMode('monochrome')">⚫ 黑白模式 (去灰底加黑)</button>
-                            <button type="button" class="radio-btn" id="btn-color-rgb" onclick="setColorMode('color')">🎨 彩色打印</button>
+                            <button type="button" class="radio-btn" id="btn-color-rgb" onclick="setColorMode('color')">🎨 彩色保留 (保留红笔/印章/彩图)</button>
                         </div>
                     </div>
 
@@ -205,11 +205,15 @@
                             </select>
                         </div>
                         <div class="form-item">
-                            <label>智能画质增强</label>
-                            <select id="p-enhance" class="form-ctrl">
-                                <option value="true" selected>开启 (试卷去黑底/防镂空)</option>
+                            <label>试卷去黑底增强 (全能王模式)</label>
+                            <select id="p-enhance" class="form-ctrl" onchange="onEnhanceOptionChanged()">
+                                <option value="true" selected>开启 (视窗实时呈现白底加黑效果)</option>
                                 <option value="false">关闭 (原图直接打印)</option>
                             </select>
+                        </div>
+                        <div class="form-item" style="grid-column: span 2;">
+                            <label>打印页码 / 序号范围 (针对多页 PDF 或多图，留空打全部)</label>
+                            <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="支持例如: 1-3 或 2,5 或 1">
                         </div>
                     </div>
 
@@ -224,7 +228,7 @@
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
-                        <span style="font-size:14px; font-weight:700;">👁️ 实时预览</span>
+                        <span style="font-size:14px; font-weight:700;">👁️ 实时预览 (所见即所打)</span>
                         <div class="radio-btn-group" style="width:140px;">
                             <button type="button" class="radio-btn active" id="btn-orient-port" onclick="setOrientation('portrait')">▯ 纵向</button>
                             <button type="button" class="radio-btn" id="btn-orient-land" onclick="setOrientation('landscape')">▭ 横向</button>
@@ -232,7 +236,7 @@
                     </div>
 
                     <div class="sheet-a4-viewport" id="a4-viewport">
-                        <span class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后显示预览</span>
+                        <span class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</span>
                         <img id="viewport-img" class="sheet-img-render" style="display:none;" alt="预览图">
                         <canvas id="pdf-canvas-render"></canvas>
 
@@ -258,7 +262,7 @@
                     </div>
 
                     <div id="quick-hw-alert-box" style="display:none; padding:12px; border-radius:6px; font-size:13px; margin-bottom:10px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;">
-                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠ 检测到打印机故障</div>
+                        <div style="font-weight:700; margin-bottom:4px;" id="quick-hw-alert-title">⚠️ 检测到打印机故障</div>
                         <div style="font-size:12px; line-height:1.5; margin-bottom:8px;" id="quick-hw-alert-desc">请确认纸盒内已放置充足 A4 纸张，并确认机盖合紧。</div>
                         <button type="button" class="nav-btn" style="background:#b91c1c; color:#fff; border:none; width:100%; padding:8px 0; font-size:13px; font-weight:700;" onclick="resumeCurrentPrinter()">▶️ 解决后点击：网页端一键恢复打印 (免按机身键)</button>
                     </div>
@@ -533,7 +537,7 @@ function renderFileList() {
         const div = document.createElement('div');
         div.className = 'file-row ' + (idx === 0 ? 'active' : '');
         div.innerHTML = `
-            <span style="cursor:pointer;" onclick="selectPreviewFile(${idx})">📄 ${file.name} (${(file.size/1024).toFixed(1)}KB)</span>
+            <span style="cursor:pointer;" onclick="selectPreviewFile(${idx})"><b>[${idx + 1}]</b> 📄 ${file.name} (${(file.size/1024).toFixed(1)}KB)</span>
             <button type="button" class="btn-del" onclick="removeQueueFile(${idx})">❌</button>
         `;
         listWrap.appendChild(div);
@@ -558,17 +562,60 @@ function selectPreviewFile(idx) {
     renderCurrentFilePreview(fileQueue[idx]);
 }
 
-// ---------------- 多页 PDF 与图片渲染器 (含对象内存释放) ----------------
+// ---------------- 核心：借用容器原有 PIL/NumPy 算法实时刷新预览视窗 ----------------
+function loadEnhancedPreviewFromBackend(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const isEnhance = document.getElementById('p-enhance').value === 'true';
+    const img = document.getElementById('viewport-img');
+    const tip = document.getElementById('viewport-empty-tip');
+
+    if (!isEnhance) {
+        // 未开启去黑底：直接显示原图
+        if (currentImgPreviewUrl) safeRevokeUrl(currentImgPreviewUrl);
+        currentImgPreviewUrl = URL.createObjectURL(file);
+        img.src = currentImgPreviewUrl;
+        img.style.display = 'block';
+        tip.style.display = 'none';
+        return;
+    }
+
+    tip.innerText = "⏳ 正在应用试卷去黑底与字迹加黑处理...";
+    tip.style.display = 'block';
+
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('color_mode', currentColorMode);
+
+    fetch('/api/preview_enhance', { method: 'POST', body: fd })
+        .then(r => r.blob())
+        .then(blob => {
+            tip.style.display = 'none';
+            if (currentImgPreviewUrl) safeRevokeUrl(currentImgPreviewUrl);
+            currentImgPreviewUrl = URL.createObjectURL(blob);
+            img.src = currentImgPreviewUrl;
+            img.style.display = 'block';
+        })
+        .catch(err => {
+            tip.style.display = 'none';
+            if (currentImgPreviewUrl) safeRevokeUrl(currentImgPreviewUrl);
+            currentImgPreviewUrl = URL.createObjectURL(file);
+            img.src = currentImgPreviewUrl;
+            img.style.display = 'block';
+        });
+}
+
+function onEnhanceOptionChanged() {
+    if (fileQueue.length > 0) {
+        loadEnhancedPreviewFromBackend(fileQueue[0]);
+    }
+}
+
+// ---------------- 多页 PDF 与图片渲染器 ----------------
 function renderCurrentFilePreview(file) {
     const tip = document.getElementById('viewport-empty-tip');
     const img = document.getElementById('viewport-img');
     const canvas = document.getElementById('pdf-canvas-render');
     const pager = document.getElementById('pdf-pager-ctrl');
-
-    if (currentImgPreviewUrl) {
-        safeRevokeUrl(currentImgPreviewUrl);
-        currentImgPreviewUrl = null;
-    }
 
     if (!file) {
         tip.style.display = 'block';
@@ -584,10 +631,7 @@ function renderCurrentFilePreview(file) {
         pager.style.display = 'none';
         canvas.style.display = 'none';
         currentPdfDoc = null;
-        
-        currentImgPreviewUrl = URL.createObjectURL(file);
-        img.src = currentImgPreviewUrl;
-        img.style.display = 'block';
+        loadEnhancedPreviewFromBackend(file);
     } else if (file.type === 'application/pdf') {
         img.style.display = 'none';
         canvas.style.display = 'block';
@@ -680,6 +724,7 @@ function setColorMode(mode) {
     currentColorMode = mode;
     document.getElementById('btn-color-mono').className = 'radio-btn ' + (mode === 'monochrome' ? 'active' : '');
     document.getElementById('btn-color-rgb').className = 'radio-btn ' + (mode === 'color' ? 'active' : '');
+    onEnhanceOptionChanged(); // 色彩模式改变时即刻重新触发预览算法
 }
 
 function setOrientation(orient) {
@@ -1011,7 +1056,6 @@ function selectDriverToBind(drvId, drvName) {
         return;
     }
 
-    // 默认打印机名称由驱动名净化得出
     let defaultName = drvName.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
     if (defaultName.length > 25) defaultName = defaultName.substring(0, 25);
 
@@ -1040,6 +1084,7 @@ function submitPrintJob() {
     const duplex = document.getElementById('p-duplex').value;
     const media = document.getElementById('p-media').value;
     const enhance = document.getElementById('p-enhance').value;
+    const pageRanges = document.getElementById('p-page-ranges').value.trim();
 
     if (!printer) {
         alert('请选择打印机！');
@@ -1086,7 +1131,7 @@ function submitPrintJob() {
     }
 
     btn.disabled = true;
-    btn.innerText = '正在优化图像并下发 CUPS 队列...';
+    btn.innerText = '正在送入打印队列...';
 
     const fd = new FormData();
     fd.append('printer', printer);
@@ -1095,8 +1140,34 @@ function submitPrintJob() {
     fd.append('color_mode', currentColorMode);
     fd.append('media', media);
     fd.append('enhance', enhance);
+    if (pageRanges) {
+        fd.append('page_ranges', pageRanges);
+    }
 
-    fileQueue.forEach(f => fd.append('file', f));
+    // 针对多张图片序列根据页码范围切片筛选
+    let submitFiles = fileQueue;
+    if (pageRanges && fileQueue.length > 1 && !fileQueue[0].name.toLowerCase().endsWith('.pdf')) {
+        try {
+            const selectedIndices = new Set();
+            pageRanges.split(',').forEach(part => {
+                part = part.trim();
+                if (part.includes('-')) {
+                    const [s, e] = part.split('-').map(Number);
+                    for (let i = s; i <= e; i++) selectedIndices.add(i - 1);
+                } else {
+                    selectedIndices.add(Number(part) - 1);
+                }
+            });
+            const filtered = fileQueue.filter((_, idx) => selectedIndices.has(idx));
+            if (filtered.length > 0) {
+                submitFiles = filtered;
+            }
+        } catch (e) {
+            console.warn('解析图片选页失败，降级全量打印:', e);
+        }
+    }
+
+    submitFiles.forEach(f => fd.append('file', f));
 
     fetch('/api/print', { method: 'POST', body: fd })
         .then(r => r.json())
@@ -1305,7 +1376,6 @@ function startScan() {
 
                 emptyTip.style.display = 'none';
 
-                // 记录当前扫描成功生成的文件名
                 currentScannedFilename = d.data.filename;
 
                 const fetchUrl = d.data.download_url || ('/api/scan/download?file=' + d.data.filename);
