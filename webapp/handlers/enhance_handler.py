@@ -8,11 +8,14 @@ from handlers.base_handler import BaseHandler
 
 def process_paper_lightweight(img_bytes, color_mode="monochrome"):
     """
-    复用容器原生内置轻量算法：
-    利用 PIL + 矢量 NumPy 进行背景估算、除灰漂白与彩色保留
-    0 额外依赖，0 OpenCV 开销，完美适配海纳思闪存与性能
+    轻量级去黑底与字迹加黑算法：
+    纯 PIL + NumPy 矩阵向量化加速，0 额外依赖，极低内存消耗
     """
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    except Exception:
+        return img_bytes
+
     w, h = img.size
 
     # 1. 降采样背景光照估算（消除不均匀光照与阴影）
@@ -20,9 +23,8 @@ def process_paper_lightweight(img_bytes, color_mode="monochrome"):
     small_w, small_h = max(1, int(w * scale)), max(1, int(h * scale))
     small = img.resize((small_w, small_h), Image.Resampling.BILINEAR)
 
-    # 提取亮度灰度图
+    # 提取亮度灰度图并用最大值滤波提取白场背景
     gray_small = ImageOps.grayscale(small)
-    # 用 PIL 最大值滤波估算局部背景白场（等效形态学闭运算）
     bg_small = gray_small.filter(Image.MaxFilter(size=19))
     bg_full = bg_small.resize((w, h), Image.Resampling.BILINEAR)
 
@@ -59,7 +61,7 @@ def process_paper_lightweight(img_bytes, color_mode="monochrome"):
         out_img = Image.fromarray(enhanced_luma)
 
     buf = io.BytesIO()
-    out_img.save(buf, format="JPEG", quality=92)
+    out_img.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
 
 class EnhancePreviewHandler(BaseHandler):
@@ -68,8 +70,10 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
+            
             if not files:
-                self.write_json(False, "未收到预览文件")
+                self.set_status(400)
+                self.write("未收到预览文件")
                 return
 
             raw_bytes = files[0]["body"]
