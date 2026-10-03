@@ -19,6 +19,14 @@ except Exception:
 
 ALLOWED_PRINT_EXTS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.webp', '.heic'}
 
+# 200 DPI 标准介质像素画幅规格
+CANVAS_SIZES_200DPI = {
+    "A4": (1654, 2338),
+    "A5": (1169, 1654),
+    "B5": (1385, 1968),
+    "A6": (827, 1169)
+}
+
 def log_debug(msg):
     try:
         with open("/tmp/dewarp_debug.log", "a", encoding="utf-8") as f:
@@ -27,9 +35,10 @@ def log_debug(msg):
         pass
     print(f"[PrintLog] {msg}", flush=True)
 
-def fit_to_a4_fast_frame(img, fill_ratio=0.97):
-    # 200 DPI 标准 A4: 1654 x 2338 (极速打印与高清晰度黄金比例)
-    target_w, target_h = 1654, 2338
+def fit_to_a4_fast_frame(img, fill_ratio=0.97, media="A4"):
+    """自适应介质纸张黄金居中画幅"""
+    media_key = media.upper() if media.upper() in CANVAS_SIZES_200DPI else "A4"
+    target_w, target_h = CANVAS_SIZES_200DPI[media_key]
     orig_w, orig_h = img.size
 
     ratio = min((target_w * fill_ratio) / orig_w, (target_h * fill_ratio) / orig_h)
@@ -42,6 +51,53 @@ def fit_to_a4_fast_frame(img, fill_ratio=0.97):
     pos_x = (target_w - new_w) // 2
     pos_y = (target_h - new_h) // 2
     canvas.paste(resized_img, (pos_x, pos_y))
+    return canvas
+
+def merge_images_n_up(image_paths, media="A4"):
+    """
+    多图/多发票同页拼版核心函数 (N-up 拼版引擎)
+    根据图片数量（2~8张）自动排布网格，同页高清输出
+    """
+    media_key = media.upper() if media.upper() in CANVAS_SIZES_200DPI else "A4"
+    page_w, page_h = CANVAS_SIZES_200DPI[media_key]
+    canvas = Image.new("RGB", (page_w, page_h), (255, 255, 255))
+
+    count = len(image_paths)
+    if count == 1:
+        with Image.open(image_paths[0]) as im:
+            return fit_to_a4_fast_frame(im.convert("RGB"), fill_ratio=0.97, media=media)
+
+    # 智能分栏排版拓扑
+    if count == 2:
+        cols, rows = 1, 2
+    elif count in (3, 4):
+        cols, rows = 2, 2
+    elif count in (5, 6):
+        cols, rows = 2, 3
+    else:
+        cols, rows = 2, 4
+
+    cell_w = page_w // cols
+    cell_h = page_h // rows
+    margin = 35
+
+    for idx, img_p in enumerate(image_paths[:cols * rows]):
+        try:
+            with Image.open(img_p) as raw_img:
+                img = ImageOps.exif_transpose(raw_img.convert("RGB"))
+                ratio = min((cell_w - margin * 2) / img.width, (cell_h - margin * 2) / img.height)
+                target_w = max(10, int(img.width * ratio))
+                target_h = max(10, int(img.height * ratio))
+                resized = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
+
+                col = idx % cols
+                row = idx // cols
+                pos_x = col * cell_w + (cell_w - target_w) // 2
+                pos_y = row * cell_h + (cell_h - target_h) // 2
+                canvas.paste(resized, (pos_x, pos_y))
+        except Exception as e:
+            log_debug(f"单图拼版失败: {e}")
+
     return canvas
 
 def clean_extreme_edges_only(arr, margin_ratio=0.010):
@@ -115,7 +171,7 @@ def auto_perspective_crop_cv(cv_img):
         log_debug(f"OpenCV 透视裁剪跳过: {e}")
     return cv_img
 
-def process_image_for_print(input_path, output_path):
+def process_image_for_print(input_path, output_path, media="A4"):
     """
     双引擎图像增强处理：
     - 大盒子环境自动启用 OpenCV 梯形矫正与精确通道分离
@@ -125,7 +181,6 @@ def process_image_for_print(input_path, output_path):
         t0 = time.time()
         log_debug(f"图像增强流水线启动: {input_path} (HAVE_OPENCV={HAVE_OPENCV})")
 
-        # 前置保护：极微小图片防切片崩溃校验
         with Image.open(input_path) as check_img:
             if check_img.width < 10 or check_img.height < 10:
                 log_debug(f"图像尺寸过小 ({check_img.width}x{check_img.height})，跳过增强直接打印")
@@ -163,7 +218,7 @@ def process_image_for_print(input_path, output_path):
             g_div = (g_f / bg_float) * 255.0
             b_div = (b_f / bg_float) * 255.0
 
-            # 彩色笔划召回（红笔批改、印章、彩图）
+            # 彩色笔划召回
             red_excess = r_f - np.maximum(g_f, b_f)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
             color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
@@ -199,11 +254,11 @@ def process_image_for_print(input_path, output_path):
             res_uint8 = np.clip(out_bgr, 0, 255).astype(np.uint8)
             res_rgb = cv2.cvtColor(res_uint8, cv2.COLOR_BGR2RGB)
             sharp_pil = Image.fromarray(res_rgb)
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97)
+            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97, media=media)
             final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         else:
-            # 小盒子 PIL 降维分支：纯 PIL+NumPy，无 OpenCV 依赖，极低内存消耗
+            # 小盒子纯 PIL+NumPy 降维分支 (极速 0 额外内存消耗)
             with Image.open(input_path) as disk_img:
                 img = ImageOps.exif_transpose(disk_img.convert("RGB"))
 
@@ -228,7 +283,6 @@ def process_image_for_print(input_path, output_path):
 
             red_excess = r_arr - np.maximum(g_arr, b_arr)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
-            # 正确使用 g_arr 参与矩阵运算
             color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
             all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
 
@@ -258,7 +312,7 @@ def process_image_for_print(input_path, output_path):
 
             res_uint8 = np.clip(rgb_stack, 0, 255).astype(np.uint8)
             sharp_pil = Image.fromarray(res_uint8, mode="RGB")
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97)
+            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97, media=media)
             final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         log_debug(f"图像增强耗时: {time.time() - t0:.2f}s -> {output_path}")
@@ -293,6 +347,7 @@ class PrintHandler(BaseHandler):
             media = self.get_argument("media", "A4").strip()
             enhance = self.get_argument("enhance", "true").strip().lower() == "true"
             page_ranges = self.get_argument("page_ranges", "").strip()
+            multi_merge = self.get_argument("multi_merge", "false").strip().lower() == "true"
             files = self.request.files.get("file", [])
 
             if not files:
@@ -313,13 +368,16 @@ class PrintHandler(BaseHandler):
             if media.startswith("-") or not re.match(r'^[a-zA-Z0-9_\-]+$', media):
                 media = "A4"
 
-            # 目录自愈
             os.makedirs(UPLOAD_DIR, exist_ok=True)
 
             jobs = []
             env = os.environ.copy()
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
             env["LANG"] = "C"
+
+            # 区分图片与非图片文件
+            image_raw_paths = []
+            non_image_files = []
 
             for f in files:
                 raw_ext = os.path.splitext(f["filename"])[-1].lower()
@@ -334,13 +392,45 @@ class PrintHandler(BaseHandler):
                 with open(src_path, "wb") as out:
                     out.write(f["body"])
 
-                target_file = src_path
-                if enhance and clean_ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
-                    enhanced_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
-                    if process_image_for_print(src_path, enhanced_path):
-                        target_file = enhanced_path
+                if clean_ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
+                    image_raw_paths.append(src_path)
+                else:
+                    non_image_files.append(src_path)
 
-                # 核心防切片参数：严格绑定 fit-to-page 与 scaling=100
+            target_files_to_print = []
+
+            # 1. 处理图片：判断是否需要多张发票/图片同页拼版
+            if image_raw_paths:
+                if multi_merge and len(image_raw_paths) > 1:
+                    # 开启同页拼版：合成为单张画幅
+                    merged_canvas = merge_images_n_up(image_raw_paths, media=media)
+                    merged_path = os.path.join(UPLOAD_DIR, f"merged_{uuid.uuid4().hex[:8]}.jpg")
+                    merged_canvas.save(merged_path, format="JPEG", quality=90, dpi=(200, 200))
+                    
+                    if enhance:
+                        opt_path = os.path.join(UPLOAD_DIR, f"opt_merged_{uuid.uuid4().hex[:8]}.jpg")
+                        if process_image_for_print(merged_path, opt_path, media=media):
+                            target_files_to_print.append(opt_path)
+                        else:
+                            target_files_to_print.append(merged_path)
+                    else:
+                        target_files_to_print.append(merged_path)
+                else:
+                    # 默认逐张处理
+                    for src_path in image_raw_paths:
+                        target_f = src_path
+                        if enhance:
+                            token = uuid.uuid4().hex[:8]
+                            opt_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
+                            if process_image_for_print(src_path, opt_path, media=media):
+                                target_f = opt_path
+                        target_files_to_print.append(target_f)
+
+            # 2. 加入 PDF 等文档
+            target_files_to_print.extend(non_image_files)
+
+            # 3. 循环派发任务至 CUPS 队列
+            for target_file in target_files_to_print:
                 cmd = [
                     "lp",
                     "-d", printer,
@@ -353,24 +443,20 @@ class PrintHandler(BaseHandler):
                     "-o", "position=center"
                 ]
 
-                # 色彩选项适配
                 if color_mode == "color":
                     cmd.extend(["-o", "ColorModel=RGB", "-o", "print-color-mode=color"])
                 else:
                     cmd.extend(["-o", "ColorModel=K", "-o", "ColorModel=Gray", "-o", "print-color-mode=monochrome"])
 
-                # 双面装订翻转选项
                 if duplex == "long":
                     cmd.extend(["-o", "sides=two-sided-long-edge"])
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
-                # 原生支持传入页码范围 (如: 1-3 或 2,5，对多页文档即时生效)
                 if page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
                 cmd.append(target_file)
-                # 增加 45 秒超时保护，彻底杜绝硬件卡死拖垮服务
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=45)
 
                 if res.returncode == 0:
@@ -380,7 +466,7 @@ class PrintHandler(BaseHandler):
                     return
 
             clean_old_tmp_files(UPLOAD_DIR)
-            self.write_json(True, f"共 {len(files)} 个文件已送达打印队列", job=", ".join(jobs))
+            self.write_json(True, f"共 {len(target_files_to_print)} 个版面文件已送达打印队列", job=", ".join(jobs))
         except subprocess.TimeoutExpired:
             self.write_json(False, "打印任务派发超时，打印机可能处于离线、卡纸或通信受阻状态")
         except Exception as e:
