@@ -33,35 +33,71 @@ class IDCardHandler(BaseHandler):
                 copies_int = 1
 
             token = uuid.uuid4().hex[:8]
-            f_src = os.path.join(UPLOAD_DIR, f"idf_raw_{token}.jpg")
-            b_src = os.path.join(UPLOAD_DIR, f"idb_raw_{token}.jpg")
-
-            with open(f_src, "wb") as f:
-                f.write(front_files[0]["body"])
-            with open(b_src, "wb") as f:
-                f.write(back_files[0]["body"])
-
-            f_opt = os.path.join(UPLOAD_DIR, f"idf_opt_{token}.jpg")
-            b_opt = os.path.join(UPLOAD_DIR, f"idb_opt_{token}.jpg")
-
-            # 双面执行去黑底、自然阶调加黑与去透墨
-            if not process_image_for_print(f_src, f_opt):
-                f_opt = f_src
-            if not process_image_for_print(b_src, b_opt):
-                b_opt = b_src
+            # 计算总人数，最多允许 3 人拼版在同一张 A4
+            total_persons = min(len(front_files), len(back_files), 3)
 
             # A4 300DPI 标准像素尺寸: 2480 x 3508
-            # 身份证标准规格: 85.6mm x 54mm -> 300DPI 下为 1010 x 638 像素
             canvas = Image.new("RGB", (2480, 3508), (255, 255, 255))
+            # 身份证标准 1:1 规格: 85.6mm x 54mm -> 300DPI 下为 1010 x 638 像素
             card_w, card_h = 1010, 638
 
-            with Image.open(f_opt) as img_f:
-                rf = img_f.resize((card_w, card_h), Image.Resampling.BICUBIC)
-                canvas.paste(rf, ((2480 - card_w) // 2, 700))
+            if total_persons == 1:
+                # ================= 1 人标准排版 (上下垂直居中) =================
+                f_src = os.path.join(UPLOAD_DIR, f"idf_raw_{token}_0.jpg")
+                b_src = os.path.join(UPLOAD_DIR, f"idb_raw_{token}_0.jpg")
+                with open(f_src, "wb") as f:
+                    f.write(front_files[0]["body"])
+                with open(b_src, "wb") as f:
+                    f.write(back_files[0]["body"])
 
-            with Image.open(b_opt) as img_b:
-                rb = img_b.resize((card_w, card_h), Image.Resampling.BICUBIC)
-                canvas.paste(rb, ((2480 - card_w) // 2, 1900))
+                f_opt = os.path.join(UPLOAD_DIR, f"idf_opt_{token}_0.jpg")
+                b_opt = os.path.join(UPLOAD_DIR, f"idb_opt_{token}_0.jpg")
+
+                if not process_image_for_print(f_src, f_opt):
+                    f_opt = f_src
+                if not process_image_for_print(b_src, b_opt):
+                    b_opt = b_src
+
+                with Image.open(f_opt) as img_f:
+                    rf = img_f.resize((card_w, card_h), Image.Resampling.BICUBIC)
+                    canvas.paste(rf, ((2480 - card_w) // 2, 700))
+
+                with Image.open(b_opt) as img_b:
+                    rb = img_b.resize((card_w, card_h), Image.Resampling.BICUBIC)
+                    canvas.paste(rb, ((2480 - card_w) // 2, 1900))
+
+            else:
+                # ================= 多人 (2~3人) 同页排版 (左列正面, 右列反面) =================
+                multi_w, multi_h = 960, 606  # 适应两列的等比标准尺寸
+                left_x = 180
+                right_x = 1340
+                gap_y = 3508 // (total_persons + 1)
+
+                for idx in range(total_persons):
+                    f_src = os.path.join(UPLOAD_DIR, f"idf_raw_{token}_{idx}.jpg")
+                    b_src = os.path.join(UPLOAD_DIR, f"idb_raw_{token}_{idx}.jpg")
+                    with open(f_src, "wb") as f:
+                        f.write(front_files[idx]["body"])
+                    with open(b_src, "wb") as f:
+                        f.write(back_files[idx]["body"])
+
+                    f_opt = os.path.join(UPLOAD_DIR, f"idf_opt_{token}_{idx}.jpg")
+                    b_opt = os.path.join(UPLOAD_DIR, f"idb_opt_{token}_{idx}.jpg")
+
+                    if not process_image_for_print(f_src, f_opt):
+                        f_opt = f_src
+                    if not process_image_for_print(b_src, b_opt):
+                        b_opt = b_src
+
+                    pos_y = int((idx + 0.5) * gap_y)
+
+                    with Image.open(f_opt) as img_f:
+                        rf = img_f.resize((multi_w, multi_h), Image.Resampling.BICUBIC)
+                        canvas.paste(rf, (left_x, pos_y))
+
+                    with Image.open(b_opt) as img_b:
+                        rb = img_b.resize((multi_w, multi_h), Image.Resampling.BICUBIC)
+                        canvas.paste(rb, (right_x, pos_y))
 
             merged_path = os.path.join(UPLOAD_DIR, f"idcard_final_{token}.jpg")
             canvas.save(merged_path, format="JPEG", quality=95, dpi=(300, 300))
@@ -86,7 +122,7 @@ class IDCardHandler(BaseHandler):
             clean_old_tmp_files(UPLOAD_DIR)
 
             if res.returncode == 0:
-                self.write_json(True, "身份证 1:1 标准拼版已成功送达打印机！", job=res.stdout.strip())
+                self.write_json(True, f"已成功将 {total_persons} 人的身份证拼版至单张 A4 纸下发打印！", job=res.stdout.strip())
             else:
                 self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
         except Exception as e:
