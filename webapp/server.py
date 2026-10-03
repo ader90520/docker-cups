@@ -23,7 +23,14 @@ from handlers.invoice_handler import InvoiceHandler
 from handlers.device_handler import DevicesHandler
 from handlers.printer_admin_handler import PrinterAdminHandler
 from handlers.mail_handler import MailConfigHandler
-from handlers.scan_handler import ScanProbeHandler, ScanHandler, DownloadScanHandler, PreviewScanHandler
+from handlers.scan_handler import (
+    ScanProbeHandler,
+    ScanHandler,
+    DownloadScanHandler,
+    PreviewScanHandler,
+    ScanPrintHandler
+)
+from handlers.enhance_handler import EnhancePreviewHandler
 
 STATIC_PATH = os.path.join(BASE_DIR, "static")
 SCANS_PATH = "/scans"
@@ -67,25 +74,27 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
 
 def make_app():
     handlers = [
-        # 1. 静态资源与首页映射 (修复 StaticFileHandler 路由参数缺失问题)
+        # 1. 静态资源与首页映射 (修复 StaticFileHandler 路由参数缺失导致的 500 报错)
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 2. 核心业务打印接口
+        # 2. 核心业务打印与图像实时算法接口
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
         (r"/api/devices", DevicesHandler),
         (r"/api/printer_admin", PrinterAdminHandler),
         (r"/api/mail_config", MailConfigHandler),
+        (r"/api/preview_enhance", EnhancePreviewHandler),
 
-        # 3. 扫描仪接口
+        # 3. 扫描仪接口 (支持一键直达 CUPS 打印出纸)
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
         (r"/api/scan/preview", PreviewScanHandler),
+        (r"/api/scan/print", ScanPrintHandler),
         (r"/api/scan/list", ScanListHandler),
         (r"/api/scan/delete", ScanDeleteHandler),
     ]
