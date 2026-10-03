@@ -119,7 +119,7 @@ def process_image_for_print(input_path, output_path):
     """
     双引擎图像增强处理：
     - 大盒子环境自动启用 OpenCV 梯形矫正与精确通道分离
-    - 小盒子环境自动降级使用 PIL 纯轻量化矩阵加速
+    - 小盒子环境自动降级使用 PIL 纯轻量化矩阵加速 (零 OpenCV 依赖)
     """
     try:
         t0 = time.time()
@@ -163,7 +163,7 @@ def process_image_for_print(input_path, output_path):
             g_div = (g_f / bg_float) * 255.0
             b_div = (b_f / bg_float) * 255.0
 
-            # 彩色笔划召回（迷宫折线、红色虚线框）
+            # 彩色笔划召回（红笔批改、印章、彩图）
             red_excess = r_f - np.maximum(g_f, b_f)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
             color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
@@ -228,7 +228,7 @@ def process_image_for_print(input_path, output_path):
 
             red_excess = r_arr - np.maximum(g_arr, b_arr)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
-            # 修复变量笔误：使用 g_arr 代替原先未定义的 g_f
+            # 正确使用 g_arr 参与矩阵运算
             color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
             all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
 
@@ -292,6 +292,7 @@ class PrintHandler(BaseHandler):
             color_mode = self.get_argument("color_mode", "monochrome").strip()
             media = self.get_argument("media", "A4").strip()
             enhance = self.get_argument("enhance", "true").strip().lower() == "true"
+            page_ranges = self.get_argument("page_ranges", "").strip()
             files = self.request.files.get("file", [])
 
             if not files:
@@ -352,15 +353,21 @@ class PrintHandler(BaseHandler):
                     "-o", "position=center"
                 ]
 
+                # 色彩选项适配
                 if color_mode == "color":
                     cmd.extend(["-o", "ColorModel=RGB", "-o", "print-color-mode=color"])
                 else:
                     cmd.extend(["-o", "ColorModel=K", "-o", "ColorModel=Gray", "-o", "print-color-mode=monochrome"])
 
+                # 双面装订翻转选项
                 if duplex == "long":
                     cmd.extend(["-o", "sides=two-sided-long-edge"])
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
+
+                # 原生支持传入页码范围 (如: 1-3 或 2,5，对多页文档即时生效)
+                if page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
+                    cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
                 cmd.append(target_file)
                 # 增加 45 秒超时保护，彻底杜绝硬件卡死拖垮服务
