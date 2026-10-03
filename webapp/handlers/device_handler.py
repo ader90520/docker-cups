@@ -11,25 +11,10 @@ from handlers.base_handler import BaseHandler
 
 CUPS_PPD_DIR = "/etc/cups/ppd"
 
-# 服务启动时间戳（用于计算服务连续运行持续时间，如：78天7小时）
-SERVICE_START_TIME = time.time()
-
 DIAG_CACHE = {
     "data": [],
     "last_time": 0
 }
-
-def get_uptime_str():
-    """计算状态持续时间字符串，完全对齐监控看板"""
-    elapsed = int(time.time() - SERVICE_START_TIME)
-    days = elapsed // 86400
-    hours = (elapsed % 86400) // 3600
-    if days > 0:
-        return f"{days}天{hours}小时"
-    mins = (elapsed % 3600) // 60
-    if hours > 0:
-        return f"{hours}小时{mins}分钟"
-    return f"{max(1, mins)}分钟"
 
 def run_cmd(cmd, env=None, timeout=2):
     if env is None:
@@ -173,7 +158,6 @@ class DevicesHandler(BaseHandler):
         default_printer = ""
         queue_count = 0
         completed_jobs = []
-        media_supported = ["iso_a4_210x297mm", "iso_a5_148x210mm", "iso_b5_176x250mm", "iso_a6_105x148mm"]
 
         try:
             env = os.environ.copy()
@@ -200,12 +184,12 @@ class DevicesHandler(BaseHandler):
             if not default_printer and printers_list:
                 default_printer = printers_list[0]
 
-            # 1. 统计队列待处理任务数
+            # 1. 统计当前等待队列任务数
             for line in out_jobs.splitlines():
                 if line.strip():
                     queue_count += 1
 
-            # 2. 获取最近已完成打印历史记录（截取最新 10 条）
+            # 2. 统计最近已完成打印历史记录（截取最新 10 条）
             _, out_comp, _ = run_cmd(["lpstat", "-W", "completed", "-o"], env=env, timeout=2)
             for line in reversed(out_comp.splitlines()[-10:]):
                 line_s = line.strip()
@@ -216,18 +200,6 @@ class DevicesHandler(BaseHandler):
                         "user": parts[1] if len(parts) > 1 else "local",
                         "time": " ".join(parts[3:6]) if len(parts) >= 6 else "已完成"
                     })
-
-            # 3. 获取目标打印机支持的纸盒规格选项
-            if default_printer:
-                _, out_opt, _ = run_cmd(["lpoptions", "-p", default_printer, "-l"], env=env, timeout=2)
-                for line in out_opt.splitlines():
-                    if line.startswith("PageSize") or line.startswith("media"):
-                        m_list = re.findall(r'([a-zA-Z0-9_\-]+)', line.split(":", 1)[-1])
-                        if m_list:
-                            parsed_media = [m.lower() for m in m_list if any(k in m.lower() for k in ["a4", "a5", "b5", "a6", "letter"])]
-                            if parsed_media:
-                                media_supported = parsed_media[:6]
-                        break
 
         except Exception as e:
             print(f"[DevicesHandler] 设备提取异常: {e}", flush=True)
@@ -254,14 +226,11 @@ class DevicesHandler(BaseHandler):
                 "has_error": bool(details["error_code"])
             })
 
-        # 完全保留原有数据字段，无缝扩充监控面板核心参数
+        # 精简响应数据，仅保留核心的三项指标及诊断信息
         self.write_json(True, "", data={
             "printers": devices,
             "default": default_printer,
             "diagnostics": perform_system_diagnostics(has_any_printer=bool(printers_list)),
-            # 图 4 监控看板专用参数
-            "status_duration": get_uptime_str(),
             "queue_count": queue_count,
-            "completed_jobs": completed_jobs,
-            "media_supported": media_supported
+            "completed_jobs": completed_jobs
         })
