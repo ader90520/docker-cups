@@ -11,7 +11,7 @@ from handlers.base_handler import BaseHandler, UPLOAD_DIR
 from handlers.print_handler import clean_old_tmp_files
 
 def crop_to_idcard_ratio(img):
-    """按二代身份证 85.6 : 54 物理长宽比安全居中裁切，剔除桌面背景"""
+    """按二代身份证 85.6 : 54 物理长宽比安全裁切"""
     w, h = img.size
     target_ratio = 85.6 / 54.0
     current_ratio = w / float(h)
@@ -56,7 +56,7 @@ class IDCardHandler(BaseHandler):
             card_w, card_h = 1010, 638
 
             if total_persons == 1:
-                # 1人标准排版：上下居中排布，互不遮挡
+                # 1人标准排版：在 A4 纸上上下居中排列
                 img_f = crop_to_idcard_ratio(Image.open(io.BytesIO(front_files[0]["body"])).convert("RGB"))
                 rf = img_f.resize((card_w, card_h), Image.Resampling.BICUBIC)
                 canvas.paste(rf, ((2480 - card_w) // 2, 700))
@@ -66,7 +66,7 @@ class IDCardHandler(BaseHandler):
                 canvas.paste(rb, ((2480 - card_w) // 2, 1900))
 
             else:
-                # 多人 (2~3人) 同页排版：左列正面，右列反面，等距垂直排布
+                # 2~3人排版：左右并排排列 (左列人像，右列国徽，自上而下)
                 multi_w, multi_h = 960, 606
                 left_x = 180
                 right_x = 1340
