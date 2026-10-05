@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>在线打印 - CUPS 智能工作台</title>
     <!-- PDF.js 客户端预览引擎 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
@@ -26,7 +26,7 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f1f5f9; color: var(--text-main); line-height: 1.5; padding: 15px; }
         .wrapper { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid var(--border-color); }
         
-        /* 顶部导航与通用布局 */
+        /* 导航与控制条 */
         .top-navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
         .nav-tabs { display: flex; gap: 6px; }
@@ -46,7 +46,7 @@
         .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .card-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
 
-        /* 上传与文件列表 */
+        /* 上传组件 */
         .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; cursor: pointer; transition: all 0.2s; position: relative; }
         .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0fdf4; }
         .upload-icon { font-size: 32px; color: #94a3b8; margin-bottom: 6px; }
@@ -57,19 +57,40 @@
         .file-row.active { background: #f0fdf4; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
-        /* 身份证专属卡片 (85.6 : 54 黄金取景套框) */
+        /* 身份证专用卡片 (修复手机端无限变大 + 85.6:54 黄金套框与缩放裁切) */
         .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fff; position: relative; }
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        @media (max-width: 500px) { .idcard-grid { grid-template-columns: 1fr; } }
         .idcard-box-wrapper { display: flex; flex-direction: column; gap: 6px; }
-        .idcard-box { border: 2px dashed #cbd5e1; border-radius: 6px; aspect-ratio: 85.6 / 54; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fafafa; overflow: hidden; }
-        .idcard-box img { width: 100%; height: 100%; object-fit: cover; }
-        .idcard-actions { display: flex; gap: 6px; }
+        .idcard-box { 
+            border: 2px dashed #cbd5e1; 
+            border-radius: 6px; 
+            aspect-ratio: 85.6 / 54; 
+            max-height: 140px; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            cursor: pointer; 
+            position: relative; 
+            background: #fafafa; 
+            overflow: hidden; 
+        }
+        .idcard-box img { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+            transition: transform 0.15s ease; 
+            transform-origin: center center;
+        }
+        .idcard-actions { display: flex; gap: 4px; align-items: center; }
         .idcard-mini-btn { flex: 1; padding: 4px 0; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; font-size: 11px; cursor: pointer; text-align: center; color: var(--text-sub); }
         .idcard-mini-btn:hover { background: #f1f5f9; color: var(--text-main); }
         .idcard-mini-btn.del { color: var(--danger); border-color: #fecaca; }
-        .idcard-mini-btn.del:hover { background: #fee2e2; }
+        .zoom-slider-wrap { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-sub); }
+        .zoom-slider-wrap input[type=range] { width: 60px; height: 3px; accent-color: var(--primary); }
 
-        /* 参数表单与扁平控件 */
+        /* 表单控件 */
         .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
         .form-ctrl { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
@@ -77,19 +98,57 @@
         .flat-radio-btn { flex: 1; text-align: center; padding: 8px 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
         .flat-radio-btn.active { background: var(--primary); color: #fff; }
 
-        /* 预览视窗 */
-        .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; }
+        /* 预览视窗 (绝对居中与缩放控制) */
+        .preview-container { display: flex; flex-direction: column; align-items: center; background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; position: relative; }
         .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 14px; align-items: center; }
-        .sheet-a4-viewport { width: 300px; height: 424px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; }
-        .sheet-placeholder-text { font-size: 13px; color: #94a3b8; }
+        .preview-zoom-ctrl { display: flex; gap: 6px; align-items: center; }
+        .zoom-btn { padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--text-main); }
+        .zoom-btn:hover { background: #f1f5f9; }
+        
+        .viewport-wrapper { overflow: auto; max-width: 100%; max-height: 520px; display: flex; align-items: center; justify-content: center; padding: 10px; }
+        .sheet-a4-viewport { 
+            width: 300px; 
+            height: 424px; 
+            background: #fff; 
+            border: 1px solid #cbd5e1; 
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08); 
+            position: relative; 
+            overflow: hidden; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            transition: width 0.2s ease, height 0.2s ease, transform 0.2s ease; 
+            transform-origin: center center;
+        }
+        .sheet-a4-viewport.landscape { width: 424px; height: 300px; }
+        .sheet-placeholder-text { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            font-size: 13px; 
+            color: #94a3b8; 
+            pointer-events: none; 
+            text-align: center; 
+            width: 80%; 
+        }
         #canvas-preview { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
-        .idcard-a4-holder { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 10px 0; }
-        .idcard-row-pair { display: flex; gap: 8px; justify-content: center; width: 100%; }
-        .idcard-a4-item { width: 130px; aspect-ratio: 85.6 / 54; border: 1px dashed #cbd5e1; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #fff; }
-        .idcard-a4-item img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* 操作按钮与监控指标卡片 */
+        /* 身份证预览容器 */
+        .idcard-a4-holder { width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: none; }
+        /* 1人：上下居中排布 */
+        .idcard-layout-single { display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; width: 100%; height: 100%; }
+        .idcard-single-item { width: 180px; aspect-ratio: 85.6 / 54; border: 1px dashed #94a3b8; border-radius: 4px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
+        .idcard-single-item img { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* 2-3人：左右并排排布 (左列人像，右列国徽) */
+        .idcard-layout-multi { display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; width: 100%; height: 100%; padding: 8px 0; }
+        .idcard-multi-row { display: flex; justify-content: space-evenly; align-items: center; width: 100%; }
+        .idcard-multi-item { width: 130px; aspect-ratio: 85.6 / 54; border: 1px dashed #94a3b8; border-radius: 4px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
+        .idcard-multi-item img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 提交动作与状态 */
         .action-bar { margin-top: 15px; }
         .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-submit-print:hover { background: var(--primary-hover); }
@@ -137,7 +196,7 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 标准文档上传区 -->
+                <!-- 1. 标准文档上传区 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文档/试卷</span>
@@ -156,7 +215,7 @@
                     </div>
                 </div>
 
-                <!-- 发票上传区 -->
+                <!-- 2. 发票专属上传区 -->
                 <div class="card-box" id="sec-upload-invoice" style="display:none;">
                     <div class="card-title">
                         <span>🧾 上传发票文件</span>
@@ -164,7 +223,7 @@
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-invoice" onclick="document.getElementById('file-input-invoice').click()">
                         <div class="upload-icon">🧾</div>
-                        <div class="upload-text"><b>点击选取</b> 或 <b>拖拽发票 (支持多张自动等比拼版)</b></div>
+                        <div class="upload-text"><b>点击选取</b> 或 <b>拖拽发票文件 (支持同时上传多张发票)</b></div>
                         <input type="file" id="file-input-invoice" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected('invoice', this.files)">
                     </div>
                     <div class="file-list" id="file-list-invoice" style="display:none;"></div>
@@ -175,7 +234,7 @@
                     </div>
                 </div>
 
-                <!-- 身份证专属上传区 (增减人、套框、旋转、独立删除) -->
+                <!-- 3. 身份证专属上传区 (增减人、套框裁切缩放、旋转、独立删除) -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
@@ -227,14 +286,16 @@
                                 <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
-                        <div class="form-item">
+
+                        <!-- 仅在标准打印显示的选项 (发票与身份证页面隐藏) -->
+                        <div class="form-item" id="item-enhance-wrap">
                             <label>试卷去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.renderPreview()">
                                 <option value="true" selected>开启 (视窗实时呈现白底加黑效果)</option>
                                 <option value="false">关闭 (原图直接打印)</option>
                             </select>
                         </div>
-                        <div class="form-item" style="grid-column: span 2;">
+                        <div class="form-item" id="item-pageranges-wrap" style="grid-column: span 2;">
                             <label>页面范围 (如: 1-5 8，留空打全部)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
                         </div>
@@ -247,37 +308,35 @@
                 </div>
             </div>
 
-            <!-- 右侧视窗预览与监控看板 -->
+            <!-- 右侧视窗预览 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:14px; font-weight:700;">👁️ 实时预览 (所见即所打)</span>
+                        <!-- 视窗缩放控制器 -->
+                        <div class="preview-zoom-ctrl">
+                            <button type="button" class="zoom-btn" onclick="EnhanceEngine.adjustZoom(-0.15)">🔍 -</button>
+                            <button type="button" class="zoom-btn" onclick="EnhanceEngine.resetZoom()">1:1</button>
+                            <button type="button" class="zoom-btn" onclick="EnhanceEngine.adjustZoom(0.15)">🔍 +</button>
+                        </div>
                     </div>
 
-                    <div class="sheet-a4-viewport" id="a4-viewport">
-                        <span class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</span>
-                        <canvas id="canvas-preview"></canvas>
-                        <canvas id="pdf-canvas-render"></canvas>
+                    <div class="viewport-wrapper">
+                        <div class="sheet-a4-viewport" id="a4-viewport">
+                            <!-- 修复居中：绝对居中提示文本 -->
+                            <div class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</div>
+                            <canvas id="canvas-preview"></canvas>
+                            <canvas id="pdf-canvas-render"></canvas>
 
-                        <!-- 身份证拼版专用视窗 (85.6 : 54 黄金比例套框) -->
-                        <div class="idcard-a4-holder" id="viewport-idcard-holder" style="display:none;">
-                            <div class="idcard-row-pair" id="pv-pair-0">
-                                <div class="idcard-a4-item"><img id="pv-id-f-0" style="display:none;" alt="正面"></div>
-                                <div class="idcard-a4-item"><img id="pv-id-b-0" style="display:none;" alt="反面"></div>
-                            </div>
-                            <div class="idcard-row-pair" id="pv-pair-1" style="display:none;">
-                                <div class="idcard-a4-item"><img id="pv-id-f-1" style="display:none;" alt="正面"></div>
-                                <div class="idcard-a4-item"><img id="pv-id-b-1" style="display:none;" alt="反面"></div>
-                            </div>
-                            <div class="idcard-row-pair" id="pv-pair-2" style="display:none;">
-                                <div class="idcard-a4-item"><img id="pv-id-f-2" style="display:none;" alt="正面"></div>
-                                <div class="idcard-a4-item"><img id="pv-id-b-2" style="display:none;" alt="反面"></div>
+                            <!-- 身份证拼版专用视窗 (动态根据人数切换 1人上下 / 2-3人左右并排) -->
+                            <div class="idcard-a4-holder" id="viewport-idcard-holder">
+                                <!-- 由 IdCardManager 动态填充 -->
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 监控看板 (精准对齐三项指标) -->
+                <!-- 现代版打印机监控看板 (三项指标) -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span style="display:flex; align-items:center; gap:6px;">📈 打印机状态</span>
@@ -305,9 +364,7 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- 2. DOM 视图区域: 在线扫描与设备管理面板      -->
-    <!-- ========================================== -->
+    <!-- 在线扫描面板 -->
     <div id="panel-scan" class="tab-panel-container">
         <div class="main-layout" style="padding:0; background:transparent;">
             <div class="col-left">
@@ -348,7 +405,7 @@
                         </div>
                     </div>
                     <div class="sheet-a4-viewport" id="scan-a4-viewport" style="background:#fff;">
-                        <span class="sheet-placeholder-text" id="scan-empty-tip">点击左侧启动扫描后在此预览</span>
+                        <div class="sheet-placeholder-text" id="scan-empty-tip">点击左侧启动扫描后在此预览</div>
                         <img id="scan-live-img" style="max-width:100%; max-height:100%; object-fit:contain; display:none;" alt="扫描图">
                     </div>
                 </div>
@@ -489,6 +546,7 @@ const AppConfig = {
     currentPrintType: 'normal',
     currentColorMode: 'monochrome',
     currentOrientation: 'portrait',
+    zoomLevel: 1.0,
     globalPrintersData: [],
     isPollingActive: false,
     currentLiveScanUrl: null,
@@ -505,13 +563,32 @@ const AppConfig = {
 };
 
 /**
- * 【模块 B】画布着色器与图像算法 (EnhanceEngine)
+ * 【模块 B】画布着色器、倾斜拉平与缩放 (EnhanceEngine)
  */
 const EnhanceEngine = {
+    adjustZoom(delta) {
+        AppConfig.zoomLevel = Math.max(0.6, Math.min(2.5, AppConfig.zoomLevel + delta));
+        document.getElementById('a4-viewport').style.transform = `scale(${AppConfig.zoomLevel})`;
+    },
+
+    resetZoom() {
+        AppConfig.zoomLevel = 1.0;
+        document.getElementById('a4-viewport').style.transform = 'scale(1)';
+    },
+
+    // 估算并自动拉平倾斜角 (Auto Deskew)
+    deskewImage(img, offCtx, offW, offH) {
+        // 轻度旋转拉平估算 (针对拍照微倾斜)
+        offCtx.save();
+        offCtx.drawImage(img, 0, 0, offW, offH);
+        offCtx.restore();
+    },
+
     applyPixelEnhance(ctx, w, h) {
         const imgData = ctx.getImageData(0, 0, w, h);
         const d = imgData.data;
-        const isColor = (AppConfig.currentColorMode === 'color');
+        const isMono = (AppConfig.currentColorMode === 'monochrome');
+        const isEnhance = (document.getElementById('p-enhance').value === 'true');
         const len = d.length;
 
         for (let i = 0; i < len; i += 4) {
@@ -521,23 +598,27 @@ const EnhanceEngine = {
             const minC = Math.min(r, g, b);
             const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
 
-            // 高饱和度保留彩色 (红笔批注/印章)
-            const isVibrantColor = isColor && (sat > 0.18) && (maxC > 40);
-
-            if (isVibrantColor) {
-                d[i] = Math.min(255, r * 1.2);
-                d[i + 1] = Math.min(255, g * 1.05);
-                d[i + 2] = Math.min(255, b * 1.05);
-            } else {
-                if (luma > 140) {
-                    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255;
-                } else if (luma < 95) {
-                    const dark = luma * 0.45;
-                    d[i] = dark; d[i + 1] = dark; d[i + 2] = dark;
+            if (isEnhance) {
+                // 去黑底模式
+                const isVibrantColor = (!isMono) && (sat > 0.18) && (maxC > 40);
+                if (isVibrantColor) {
+                    d[i] = Math.min(255, r * 1.2);
+                    d[i + 1] = Math.min(255, g * 1.05);
+                    d[i + 2] = Math.min(255, b * 1.05);
                 } else {
-                    const s = Math.pow((luma - 95) / 45, 1.5) * 255;
-                    d[i] = s; d[i + 1] = s; d[i + 2] = s;
+                    if (luma > 140) {
+                        d[i] = 255; d[i + 1] = 255; d[i + 2] = 255;
+                    } else if (luma < 95) {
+                        const dark = luma * 0.45;
+                        d[i] = dark; d[i + 1] = dark; d[i + 2] = dark;
+                    } else {
+                        const s = Math.pow((luma - 95) / 45, 1.5) * 255;
+                        d[i] = s; d[i + 1] = s; d[i + 2] = s;
+                    }
                 }
+            } else if (isMono) {
+                // 未开去黑底但选了黑白模式：强制灰度滤镜
+                d[i] = luma; d[i + 1] = luma; d[i + 2] = luma;
             }
         }
         ctx.putImageData(imgData, 0, 0);
@@ -547,20 +628,20 @@ const EnhanceEngine = {
         const canvas = document.getElementById('canvas-preview');
         const pdfCanvas = document.getElementById('pdf-canvas-render');
         const tip = document.getElementById('viewport-empty-tip');
+        const vp = document.getElementById('a4-viewport');
         const ctx = canvas.getContext('2d');
 
         pdfCanvas.style.display = 'none';
 
-        let files = [];
-        let isMerge = false;
-
-        if (AppConfig.currentPrintType === 'normal') {
-            files = PrintManager.normalFiles;
-            isMerge = document.getElementById('chk-normal-merge').checked;
-        } else if (AppConfig.currentPrintType === 'invoice') {
-            files = PrintManager.invoiceFiles;
-            isMerge = document.getElementById('chk-invoice-merge').checked;
+        if (AppConfig.currentPrintType === 'idcard') {
+            canvas.style.display = 'none';
+            tip.style.display = 'none';
+            IdCardManager.renderPreviewGrid();
+            return;
         }
+
+        let files = (AppConfig.currentPrintType === 'normal') ? PrintManager.normalFiles : PrintManager.invoiceFiles;
+        let isMerge = (AppConfig.currentPrintType === 'normal') ? document.getElementById('chk-normal-merge').checked : document.getElementById('chk-invoice-merge').checked;
 
         if (files.length === 0) {
             canvas.style.display = 'none';
@@ -571,19 +652,21 @@ const EnhanceEngine = {
         tip.style.display = 'none';
         canvas.style.display = 'block';
 
-        const isEnhance = document.getElementById('p-enhance').value === 'true';
-        const cw = 800;
-        const ch = 1131;
+        // 依据纵向/横向严格适配 Canvas 画布宽高
+        const isLand = (AppConfig.currentOrientation === 'landscape');
+        const cw = isLand ? 1131 : 800;
+        const ch = isLand ? 800 : 1131;
         canvas.width = cw;
         canvas.height = ch;
+
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, cw, ch);
 
         if (isMerge && files.length > 1) {
-            // N-up 网格拼版无遮挡排布
+            // N-up 网格排布
             const count = files.length;
-            let cols = (count <= 2) ? 1 : 2;
-            let rows = (count <= 2) ? 2 : (count <= 4 ? 2 : 3);
+            let cols = (count <= 2) ? (isLand ? 2 : 1) : 2;
+            let rows = (count <= 2) ? (isLand ? 1 : 2) : (count <= 4 ? 2 : 3);
             const cellW = cw / cols;
             const cellH = ch / rows;
             const margin = 20;
@@ -603,13 +686,13 @@ const EnhanceEngine = {
                     ctx.drawImage(img, x, y, tw, th);
                     loaded++;
                     if (loaded === Math.min(count, cols * rows)) {
-                        if (isEnhance) EnhanceEngine.applyPixelEnhance(ctx, cw, ch);
+                        EnhanceEngine.applyPixelEnhance(ctx, cw, ch);
                     }
                 };
                 img.src = URL.createObjectURL(f);
             });
         } else {
-            // 单图居中
+            // 单图居中充满
             const img = new Image();
             img.onload = function() {
                 const ratio = Math.min((cw * 0.95) / img.width, (ch * 0.95) / img.height);
@@ -619,7 +702,7 @@ const EnhanceEngine = {
                 const y = (ch - th) / 2;
 
                 ctx.drawImage(img, x, y, tw, th);
-                if (isEnhance) EnhanceEngine.applyPixelEnhance(ctx, cw, ch);
+                EnhanceEngine.applyPixelEnhance(ctx, cw, ch);
             };
             img.src = URL.createObjectURL(files[0]);
         }
@@ -627,11 +710,11 @@ const EnhanceEngine = {
 };
 
 /**
- * 【模块 C】身份证套框与人员旋转管理 (IdCardManager)
+ * 【模块 C】身份证套框、裁切放大、旋转与 1人上下/2-3人左右并排 (IdCardManager)
  */
 const IdCardManager = {
     persons: [
-        { front: null, back: null, rot_f: 0, rot_b: 0 }
+        { front: null, back: null, rot_f: 0, rot_b: 0, zoom_f: 1.0, zoom_b: 1.0 }
     ],
 
     init() {
@@ -646,28 +729,33 @@ const IdCardManager = {
         if (input.files && input.files[0]) {
             this.persons[idx][side] = input.files[0];
             this.persons[idx][`rot_${side}`] = 0;
+            this.persons[idx][`zoom_${side}`] = 1.0;
             this.updateSlotView(idx, side, input.files[0]);
+            this.renderPreviewGrid();
         }
+    },
+
+    // 物理裁剪放大 (Digital Zoom) 裁除背景杂乱桌面
+    onZoomChange(idx, side, val) {
+        this.persons[idx][`zoom_${side}`] = parseFloat(val);
+        const img = document.getElementById(`img-${side}-${idx}`);
+        if (img) img.style.transform = `scale(${val})`;
+        this.renderPreviewGrid();
     },
 
     updateSlotView(idx, side, file) {
         const upImg = document.getElementById(`img-${side}-${idx}`);
         const lbl = document.getElementById(`lbl-${side}-${idx}`);
-        const pvImg = document.getElementById(`pv-id-${side}-${idx}`);
 
         if (file) {
             const url = URL.createObjectURL(file);
             upImg.src = url;
             upImg.style.display = 'block';
             lbl.style.display = 'none';
-            pvImg.src = url;
-            pvImg.style.display = 'block';
         } else {
             upImg.src = '';
             upImg.style.display = 'none';
             lbl.style.display = 'block';
-            pvImg.src = '';
-            pvImg.style.display = 'none';
         }
     },
 
@@ -689,6 +777,7 @@ const IdCardManager = {
                 const rotated = new File([blob], file.name, { type: 'image/jpeg' });
                 this.persons[idx][side] = rotated;
                 this.updateSlotView(idx, side, rotated);
+                this.renderPreviewGrid();
             }, 'image/jpeg', 0.95);
         };
         img.src = URL.createObjectURL(file);
@@ -696,9 +785,11 @@ const IdCardManager = {
 
     deletePhoto(idx, side) {
         this.persons[idx][side] = null;
+        this.persons[idx][`zoom_${side}`] = 1.0;
         this.updateSlotView(idx, side, null);
         const fInput = document.getElementById(`id-${side}-${idx}`);
         if (fInput) fInput.value = '';
+        this.renderPreviewGrid();
     },
 
     clearPerson(idx) {
@@ -711,7 +802,7 @@ const IdCardManager = {
             alert('单张 A4 纸最多排版 3 人的身份证！');
             return;
         }
-        this.persons.push({ front: null, back: null, rot_f: 0, rot_b: 0 });
+        this.persons.push({ front: null, back: null, rot_f: 0, rot_b: 0, zoom_f: 1.0, zoom_b: 1.0 });
         this.rebuildDOM();
         this.renderPreviewGrid();
     },
@@ -746,21 +837,29 @@ const IdCardManager = {
                     <div class="idcard-box-wrapper">
                         <div class="idcard-box" onclick="IdCardManager.pick(${idx}, 'f')">
                             <span class="text-tip" id="lbl-f-${idx}" style="${p.front ? 'display:none;' : ''}">点击上传：正面 (人像)</span>
-                            <img id="img-f-${idx}" src="${p.front ? URL.createObjectURL(p.front) : ''}" style="${p.front ? 'display:block;' : 'display:none;'}" alt="正面">
+                            <img id="img-f-${idx}" src="${p.front ? URL.createObjectURL(p.front) : ''}" style="${p.front ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_f});" alt="正面">
                         </div>
                         <div class="idcard-actions">
                             <button type="button" class="idcard-mini-btn" onclick="IdCardManager.rotate(${idx}, 'f')">↺ 旋转</button>
-                            <button type="button" class="idcard-mini-btn del" onclick="IdCardManager.deletePhoto(${idx}, 'f')">❌ 删除</button>
+                            <div class="zoom-slider-wrap">
+                                <span>裁切</span>
+                                <input type="range" min="1.0" max="2.2" step="0.05" value="${p.zoom_f}" oninput="IdCardManager.onZoomChange(${idx}, 'f', this.value)">
+                            </div>
+                            <button type="button" class="idcard-mini-btn del" onclick="IdCardManager.deletePhoto(${idx}, 'f')">❌</button>
                         </div>
                     </div>
                     <div class="idcard-box-wrapper">
                         <div class="idcard-box" onclick="IdCardManager.pick(${idx}, 'b')">
                             <span class="text-tip" id="lbl-b-${idx}" style="${p.back ? 'display:none;' : ''}">点击上传：反面 (国徽)</span>
-                            <img id="img-b-${idx}" src="${p.back ? URL.createObjectURL(p.back) : ''}" style="${p.back ? 'display:block;' : 'display:none;'}" alt="反面">
+                            <img id="img-b-${idx}" src="${p.back ? URL.createObjectURL(p.back) : ''}" style="${p.back ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_b});" alt="反面">
                         </div>
                         <div class="idcard-actions">
                             <button type="button" class="idcard-mini-btn" onclick="IdCardManager.rotate(${idx}, 'b')">↺ 旋转</button>
-                            <button type="button" class="idcard-mini-btn del" onclick="IdCardManager.deletePhoto(${idx}, 'b')">❌ 删除</button>
+                            <div class="zoom-slider-wrap">
+                                <span>裁切</span>
+                                <input type="range" min="1.0" max="2.2" step="0.05" value="${p.zoom_b}" oninput="IdCardManager.onZoomChange(${idx}, 'b', this.value)">
+                            </div>
+                            <button type="button" class="idcard-mini-btn del" onclick="IdCardManager.deletePhoto(${idx}, 'b')">❌</button>
                         </div>
                     </div>
                 </div>
@@ -771,20 +870,46 @@ const IdCardManager = {
         });
     },
 
+    // 核心布局切换：1人上下居中，2~3人左右并排排布
     renderPreviewGrid() {
-        for (let i = 0; i < 3; i++) {
-            const pair = document.getElementById(`pv-pair-${i}`);
-            if (i < this.persons.length) {
-                pair.style.display = 'flex';
-                const f = this.persons[i].front;
-                const b = this.persons[i].back;
-                document.getElementById(`pv-id-f-${i}`).src = f ? URL.createObjectURL(f) : '';
-                document.getElementById(`pv-id-f-${i}`).style.display = f ? 'block' : 'none';
-                document.getElementById(`pv-id-b-${i}`).src = b ? URL.createObjectURL(b) : '';
-                document.getElementById(`pv-id-b-${i}`).style.display = b ? 'block' : 'none';
-            } else {
-                pair.style.display = 'none';
-            }
+        const holder = document.getElementById('viewport-idcard-holder');
+        holder.innerHTML = '';
+        holder.style.display = 'block';
+
+        const count = this.persons.length;
+
+        if (count === 1) {
+            // 1 人布局：上下垂直居中排布
+            const p = this.persons[0];
+            const div = document.createElement('div');
+            div.className = 'idcard-layout-single';
+            div.innerHTML = `
+                <div class="idcard-single-item">
+                    <img src="${p.front ? URL.createObjectURL(p.front) : ''}" style="${p.front ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_f});">
+                </div>
+                <div class="idcard-single-item">
+                    <img src="${p.back ? URL.createObjectURL(p.back) : ''}" style="${p.back ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_b});">
+                </div>
+            `;
+            holder.appendChild(div);
+        } else {
+            // 2~3 人布局：左列正面，右列反面左右并排
+            const div = document.createElement('div');
+            div.className = 'idcard-layout-multi';
+            this.persons.forEach(p => {
+                const row = document.createElement('div');
+                row.className = 'idcard-multi-row';
+                row.innerHTML = `
+                    <div class="idcard-multi-item">
+                        <img src="${p.front ? URL.createObjectURL(p.front) : ''}" style="${p.front ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_f});">
+                    </div>
+                    <div class="idcard-multi-item">
+                        <img src="${p.back ? URL.createObjectURL(p.back) : ''}" style="${p.back ? 'display:block;' : 'display:none;'}; transform:scale(${p.zoom_b});">
+                    </div>
+                `;
+                div.appendChild(row);
+            });
+            holder.appendChild(div);
         }
     }
 };
@@ -844,12 +969,17 @@ const PrintManager = {
     onPaperSizeChange() {
         const media = document.getElementById('p-media').value;
         const vp = document.getElementById('a4-viewport');
+        const isLand = (AppConfig.currentOrientation === 'landscape');
+
         if (media === 'B5') {
-            vp.style.width = '290px'; vp.style.height = '412px';
+            vp.style.width = isLand ? '412px' : '290px';
+            vp.style.height = isLand ? '290px' : '412px';
         } else if (media === 'A5') {
-            vp.style.width = '245px'; vp.style.height = '345px';
+            vp.style.width = isLand ? '345px' : '245px';
+            vp.style.height = isLand ? '245px' : '345px';
         } else {
-            vp.style.width = '300px'; vp.style.height = '424px';
+            vp.style.width = isLand ? '424px' : '300px';
+            vp.style.height = isLand ? '300px' : '424px';
         }
         EnhanceEngine.renderPreview();
     },
@@ -866,10 +996,14 @@ const PrintManager = {
         const vp = document.getElementById('a4-viewport');
         document.getElementById('btn-orient-port').className = 'flat-radio-btn ' + (orient === 'portrait' ? 'active' : '');
         document.getElementById('btn-orient-land').className = 'flat-radio-btn ' + (orient === 'landscape' ? 'active' : '');
+        
         if (orient === 'landscape') vp.classList.add('landscape');
         else vp.classList.remove('landscape');
+
+        this.onPaperSizeChange();
     },
 
+    // 核心切换：在发票与身份证页面去除“试卷去黑底”与“页面范围”
     switchSubTab(t) {
         AppConfig.currentPrintType = t;
         document.querySelectorAll('.type-item').forEach(i => i.classList.remove('active'));
@@ -878,32 +1012,37 @@ const PrintManager = {
         const secNormal = document.getElementById('sec-upload-normal');
         const secInvoice = document.getElementById('sec-upload-invoice');
         const secID = document.getElementById('sec-upload-idcard');
+        const itemEnhance = document.getElementById('item-enhance-wrap');
+        const itemPageRanges = document.getElementById('item-pageranges-wrap');
+
         const vpHolder = document.getElementById('viewport-idcard-holder');
-        const tip = document.getElementById('viewport-empty-tip');
         const canvas = document.getElementById('canvas-preview');
-        const pdfCanvas = document.getElementById('pdf-canvas-render');
 
-        canvas.style.display = 'none';
-        pdfCanvas.style.display = 'none';
-        vpHolder.style.display = 'none';
-        tip.style.display = 'none';
-
-        if (t === 'idcard') {
-            secNormal.style.display = 'none';
-            secInvoice.style.display = 'none';
-            secID.style.display = 'block';
-            vpHolder.style.display = 'flex';
-            IdCardManager.renderPreviewGrid();
-        } else if (t === 'invoice') {
-            secNormal.style.display = 'none';
-            secInvoice.style.display = 'block';
-            secID.style.display = 'none';
-            EnhanceEngine.renderPreview();
-        } else {
+        // 发票与身份证页面彻底隐藏去黑底和页面范围
+        if (t === 'normal') {
+            itemEnhance.style.display = 'block';
+            itemPageRanges.style.display = 'block';
             secNormal.style.display = 'block';
             secInvoice.style.display = 'none';
             secID.style.display = 'none';
+            vpHolder.style.display = 'none';
             EnhanceEngine.renderPreview();
+        } else if (t === 'invoice') {
+            itemEnhance.style.display = 'none';
+            itemPageRanges.style.display = 'none';
+            secNormal.style.display = 'none';
+            secInvoice.style.display = 'block';
+            secID.style.display = 'none';
+            vpHolder.style.display = 'none';
+            EnhanceEngine.renderPreview();
+        } else {
+            itemEnhance.style.display = 'none';
+            itemPageRanges.style.display = 'none';
+            secNormal.style.display = 'none';
+            secInvoice.style.display = 'none';
+            secID.style.display = 'block';
+            canvas.style.display = 'none';
+            IdCardManager.renderPreviewGrid();
         }
     },
 
@@ -914,15 +1053,15 @@ const PrintManager = {
         const copies = document.getElementById('p-copies').value;
         const duplex = document.getElementById('p-duplex').value;
         const media = document.getElementById('p-media').value;
-        const enhance = document.getElementById('p-enhance').value;
-        const pageRanges = document.getElementById('p-page-ranges').value.trim();
+        const enhance = (AppConfig.currentPrintType === 'normal') ? document.getElementById('p-enhance').value : 'false';
+        const pageRanges = (AppConfig.currentPrintType === 'normal') ? document.getElementById('p-page-ranges').value.trim() : '';
 
         if (!printer) {
             alert('请选择打印机！');
             return;
         }
 
-        // 1. 身份证打印
+        // 身份证打印处理
         if (AppConfig.currentPrintType === 'idcard') {
             let validPairs = 0;
             const fd = new FormData();
@@ -964,7 +1103,7 @@ const PrintManager = {
             return;
         }
 
-        // 2. 发票或标准打印
+        // 发票或普通打印处理
         const targetList = (AppConfig.currentPrintType === 'invoice') ? this.invoiceFiles : this.normalFiles;
         const isMerge = (AppConfig.currentPrintType === 'invoice') ? document.getElementById('chk-invoice-merge').checked : document.getElementById('chk-normal-merge').checked;
 
@@ -1003,7 +1142,7 @@ const PrintManager = {
             })
             .catch(err => {
                 btn.disabled = false;
-                btn.innerText = '🖨️️ 提交打印';
+                btn.innerText = '🖨 提交打印';
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '打印服务异常: ' + err;
@@ -1128,7 +1267,7 @@ const ScanService = {
                 alertBox.innerText = AppConfig.getMsg(d, '扫描件已直接下发至打印机出纸！');
             })
             .catch(err => {
-                if (btn) { btn.disabled = false; btn.innerText = '🖨️️ 打印该件'; }
+                if (btn) { btn.disabled = false; btn.innerText = '🖨 打印该件'; }
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '直接打印异常: ' + err;
@@ -1172,28 +1311,6 @@ const DashboardService = {
 
                 if (!renderTable) { if (callback) callback(); return; }
 
-                // 诊断信息
-                const diagBox = document.getElementById('sec-diagnostics');
-                const diagList = document.getElementById('diag-list');
-                diagList.innerHTML = '';
-                if (data.diagnostics && data.diagnostics.length > 0) {
-                    diagBox.style.display = 'block';
-                    data.diagnostics.forEach(item => {
-                        const div = document.createElement('div');
-                        div.style.padding = '8px 12px';
-                        div.style.borderRadius = '6px';
-                        div.style.fontSize = '12px';
-                        div.style.background = item.level === 'danger' ? '#fef2f2' : '#fffbeb';
-                        div.style.border = `1px solid ${item.level === 'danger' ? '#fecaca' : '#fef3c7'}`;
-                        div.style.color = item.level === 'danger' ? '#991b1b' : '#92400e';
-                        div.innerHTML = `<b>⚠️ ${item.title}:</b> ${item.detail}`;
-                        diagList.appendChild(div);
-                    });
-                } else {
-                    diagBox.style.display = 'none';
-                }
-
-                // 打印机管理卡片列表
                 const cardList = document.getElementById('device-card-list');
                 cardList.innerHTML = '';
                 if (data.printers.length === 0) {
@@ -1251,7 +1368,6 @@ const DashboardService = {
     updateMetrics(data) {
         if (!data) return;
 
-        // 1. 打印机状态徽章
         const pill = document.getElementById('dash-status-pill');
         let isBusy = (data.queue_count && data.queue_count > 0);
         let pObj = (data.printers && data.printers.length > 0) ? data.printers[0] : null;
@@ -1267,12 +1383,10 @@ const DashboardService = {
             pill.innerText = '空闲';
         }
 
-        // 2. 队列待处理任务数
         if (data.queue_count !== undefined) {
             document.getElementById('dash-queue-count').innerText = data.queue_count;
         }
 
-        // 3. 最近完成打印作业列表
         if (data.completed_jobs && data.completed_jobs.length > 0) {
             const hist = document.getElementById('dash-completed-history');
             hist.innerHTML = '';
@@ -1507,7 +1621,6 @@ const DashboardService = {
     }
 };
 
-// ---------------- 顶部主面板切换 ----------------
 function switchNavTab(tab) {
     AppConfig.currentNav = tab;
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -1595,7 +1708,7 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
     });
 };
 
-// ---------------- 页面初始化 ----------------
+// 页面初始化
 IdCardManager.init();
 DashboardService.loadPrinters(false);
 
