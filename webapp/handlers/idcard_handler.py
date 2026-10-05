@@ -6,23 +6,21 @@ import os
 import re
 import uuid
 import subprocess
-from PIL import Image, ImageOps
+from PIL import Image
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
-from handlers.print_handler import process_image_for_print, clean_old_tmp_files
+from handlers.print_handler import clean_old_tmp_files
 
 def crop_to_idcard_ratio(img):
-    """按二代身份证 85.6 : 54 物理长宽比安全裁切，去除拍照多余背景"""
+    """按二代身份证 85.6 : 54 物理长宽比安全居中裁切，剔除桌面背景"""
     w, h = img.size
     target_ratio = 85.6 / 54.0
     current_ratio = w / float(h)
 
     if current_ratio > target_ratio:
-        # 过宽，裁左右多余背景
         new_w = int(h * target_ratio)
         left = (w - new_w) // 2
         return img.crop((left, 0, left + new_w, h))
     else:
-        # 过长/过高，裁上下多余背景
         new_h = int(w / target_ratio)
         top = (h - new_h) // 2
         return img.crop((0, top, w, top + new_h))
@@ -34,10 +32,6 @@ class IDCardHandler(BaseHandler):
             copies = self.get_argument("copies", "1").strip()
             front_files = self.request.files.get("front", [])
             back_files = self.request.files.get("back", [])
-
-            # 获取前端传回的正反面旋转角度参数（以逗号分隔，如 "90,0,180"）
-            rot_f_list = [int(x) for x in self.get_argument("rot_f", "").split(",") if x.isdigit()]
-            rot_b_list = [int(x) for x in self.get_argument("rot_b", "").split(",") if x.isdigit()]
 
             if not front_files or not back_files:
                 self.write_json(False, "必须同时上传正面与反面照片")
@@ -62,47 +56,27 @@ class IDCardHandler(BaseHandler):
             card_w, card_h = 1010, 638
 
             if total_persons == 1:
-                # 1人标准排版：居中上下排布
-                f_rot = rot_f_list[0] if len(rot_f_list) > 0 else 0
-                b_rot = rot_b_list[0] if len(rot_b_list) > 0 else 0
-
-                # 正面处理
-                img_f = Image.open(io.BytesIO(front_files[0]["body"])).convert("RGB")
-                if f_rot != 0:
-                    img_f = img_f.rotate(-f_rot, expand=True)
-                img_f = crop_to_idcard_ratio(img_f)
+                # 1人标准排版：上下居中排布，互不遮挡
+                img_f = crop_to_idcard_ratio(Image.open(io.BytesIO(front_files[0]["body"])).convert("RGB"))
                 rf = img_f.resize((card_w, card_h), Image.Resampling.BICUBIC)
                 canvas.paste(rf, ((2480 - card_w) // 2, 700))
 
-                # 反面处理
-                img_b = Image.open(io.BytesIO(back_files[0]["body"])).convert("RGB")
-                if b_rot != 0:
-                    img_b = img_b.rotate(-b_rot, expand=True)
-                img_b = crop_to_idcard_ratio(img_b)
+                img_b = crop_to_idcard_ratio(Image.open(io.BytesIO(back_files[0]["body"])).convert("RGB"))
                 rb = img_b.resize((card_w, card_h), Image.Resampling.BICUBIC)
                 canvas.paste(rb, ((2480 - card_w) // 2, 1900))
 
             else:
-                # 多人 (2~3人) 同页排版：左列正面，右列反面
+                # 多人 (2~3人) 同页排版：左列正面，右列反面，等距垂直排布
                 multi_w, multi_h = 960, 606
                 left_x = 180
                 right_x = 1340
                 gap_y = 3508 // (total_persons + 1)
 
                 for idx in range(total_persons):
-                    f_rot = rot_f_list[idx] if idx < len(rot_f_list) else 0
-                    b_rot = rot_b_list[idx] if idx < len(rot_b_list) else 0
-
-                    img_f = Image.open(io.BytesIO(front_files[idx]["body"])).convert("RGB")
-                    if f_rot != 0:
-                        img_f = img_f.rotate(-f_rot, expand=True)
-                    img_f = crop_to_idcard_ratio(img_f)
+                    img_f = crop_to_idcard_ratio(Image.open(io.BytesIO(front_files[idx]["body"])).convert("RGB"))
                     rf = img_f.resize((multi_w, multi_h), Image.Resampling.BICUBIC)
 
-                    img_b = Image.open(io.BytesIO(back_files[idx]["body"])).convert("RGB")
-                    if b_rot != 0:
-                        img_b = img_b.rotate(-b_rot, expand=True)
-                    img_b = crop_to_idcard_ratio(img_b)
+                    img_b = crop_to_idcard_ratio(Image.open(io.BytesIO(back_files[idx]["body"])).convert("RGB"))
                     rb = img_b.resize((multi_w, multi_h), Image.Resampling.BICUBIC)
 
                     pos_y = int((idx + 0.5) * gap_y)
@@ -132,7 +106,7 @@ class IDCardHandler(BaseHandler):
             clean_old_tmp_files(UPLOAD_DIR)
 
             if res.returncode == 0:
-                self.write_json(True, f"已成功将 {total_persons} 人的身份证拼版至单张 A4 纸下发打印！")
+                self.write_json(True, f"已成功将 {total_persons} 人的身份证拼版至单张 A4 纸下发打印！", job=res.stdout.strip())
             else:
                 self.write_json(False, f"CUPS拒绝: {res.stderr.strip()}")
         except Exception as e:
