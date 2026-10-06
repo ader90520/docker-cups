@@ -57,7 +57,7 @@
         .file-row.active { background: #f0fdf4; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
-        /* 身份证专用卡片 (85.6:54 黄金套框与缩放裁切) */
+        /* 身份证卡片 (85.6:54 黄金套框与缩放裁切) */
         .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fff; position: relative; }
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         @media (max-width: 500px) { .idcard-grid { grid-template-columns: 1fr; } }
@@ -321,14 +321,12 @@
                             <div class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</div>
                             <canvas id="canvas-preview"></canvas>
                             <canvas id="pdf-canvas-render"></canvas>
-
-                            <!-- 身份证专用视窗 -->
                             <div class="idcard-a4-holder" id="viewport-idcard-holder"></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 监控看板 -->
+                <!-- 现代版打印机监控看板 -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span style="display:flex; align-items:center; gap:6px;">📈 打印机状态</span>
@@ -559,7 +557,7 @@ const AppConfig = {
  */
 const EnhanceEngine = {
     cachedEnhancedBlob: null,
-    cachedFileId: null,
+    cachedFileKey: null,
 
     adjustZoom(delta) {
         AppConfig.zoomLevel = Math.max(0.6, Math.min(2.5, AppConfig.zoomLevel + delta));
@@ -593,7 +591,7 @@ const EnhanceEngine = {
             canvas.style.display = 'none';
             tip.style.display = 'block';
             this.cachedEnhancedBlob = null;
-            this.cachedFileId = null;
+            this.cachedFileKey = null;
             return;
         }
 
@@ -613,12 +611,12 @@ const EnhanceEngine = {
 
         if (isEnhance && !isMerge) {
             const currentFile = files[0];
-            const fileSignature = `${currentFile.name}_${currentFile.size}_${AppConfig.currentColorMode}`;
+            const fileKey = `${currentFile.name}_${currentFile.size}_${AppConfig.currentColorMode}`;
 
-            if (this.cachedEnhancedBlob && this.cachedFileId === fileSignature) {
+            if (this.cachedEnhancedBlob && this.cachedFileKey === fileKey) {
                 this.drawImageToCanvas(ctx, this.cachedEnhancedBlob, cw, ch);
             } else {
-                tip.innerText = "⏳ 正在拉正文字倾斜并深度浓黑字迹...";
+                tip.innerText = "⏳ 正在拉正文字并深度加黑笔画...";
                 tip.style.display = 'block';
 
                 const fd = new FormData();
@@ -627,13 +625,13 @@ const EnhanceEngine = {
 
                 fetch('/api/preview_enhance', { method: 'POST', body: fd })
                     .then(r => {
-                        if (!r.ok) throw new Error('后端未就绪');
+                        if (!r.ok) throw new Error('后端处理未响应');
                         return r.blob();
                     })
                     .then(blob => {
                         tip.style.display = 'none';
                         this.cachedEnhancedBlob = blob;
-                        this.cachedFileId = fileSignature;
+                        this.cachedFileKey = fileKey;
                         this.drawImageToCanvas(ctx, blob, cw, ch);
                     })
                     .catch(err => {
@@ -973,7 +971,10 @@ const PrintManager = {
         AppConfig.currentColorMode = mode;
         document.getElementById('btn-color-mono').className = 'flat-radio-btn ' + (mode === 'monochrome' ? 'active' : '');
         document.getElementById('btn-color-rgb').className = 'flat-radio-btn ' + (mode === 'color' ? 'active' : '');
+        
+        // 关键：切换色彩强制清空缓存并重新触发渲染
         EnhanceEngine.cachedEnhancedBlob = null;
+        EnhanceEngine.cachedFileKey = null;
         EnhanceEngine.renderPreview();
     },
 
@@ -1071,7 +1072,7 @@ const PrintManager = {
                 .then(r => r.json())
                 .then(res => {
                     btn.disabled = false;
-                    btn.innerText = '🖨️ 提交打印';
+                    btn.innerText = '🖨️️ 提交打印';
                     alertBox.style.display = 'block';
                     alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
                     alertBox.innerText = AppConfig.getMsg(res, '身份证拼版已成功送达打印机！');
@@ -1543,10 +1544,9 @@ const DashboardService = {
             .then(r => r.json())
             .then(d => {
                 alertBox.style.display = 'block';
-                const isSuccess = d.success === true;
-                alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+                alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
                 alertBox.innerText = AppConfig.getMsg(d, '驱动安装成功！');
-                if (isSuccess) fileInput.value = '';
+                if (d.success) fileInput.value = '';
             });
     },
 
@@ -1568,10 +1568,9 @@ const DashboardService = {
         fetch('/api/printer_admin', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(d => {
-                const isSuccess = d.success === true;
-                alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
+                alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
                 alertBox.innerText = AppConfig.getMsg(d, '扫描插件安装成功！');
-                if (isSuccess) {
+                if (d.success) {
                     fileInput.value = '';
                     ScanService.loadDevices();
                 }
