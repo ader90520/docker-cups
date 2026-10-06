@@ -14,44 +14,64 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
-def detect_skew_angle_projection(gray_img):
+def detect_skew_angle_robust(gray_img):
     """
-    通过文本行水平投影方差法精确计算倾斜角度（精度达 0.1 度）
-    不依赖外框是否完整，完全由字迹与行间水平分布决定
+    鲁棒性文字行倾斜检测：
+    优先分析页面中段文字密集区的水平条状形态学连通块方向
     """
     try:
         h, w = gray_img.shape[:2]
-        calc_w = 600
-        calc_h = int(h * (calc_w / float(w)))
-        small = cv2.resize(gray_img, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
+        # 裁剪中段 70% 区域，避开书页边框与顶部留白干扰
+        y1, y2 = int(h * 0.15), int(h * 0.85)
+        x1, x2 = int(w * 0.05), int(w * 0.95)
+        crop = gray_img[y1:y2, x1:x2]
 
-        # 自适应提取字迹骨架
-        thresh = cv2.adaptiveThreshold(small, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 8)
+        calc_w = 800
+        calc_h = int(crop.shape[0] * (calc_w / float(crop.shape[1])))
+        small = cv2.resize(crop, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
 
-        # 在 -8 到 +8 度范围内以 0.2 度步长扫描最佳投影方差
-        best_angle = 0.0
-        max_variance = 0.0
-        angles = np.arange(-8.0, 8.2, 0.2)
+        # Otsu 自适应二值化提取字迹
+        blurred = cv2.GaussianBlur(small, (5, 5), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        for angle in angles:
-            M = cv2.getRotationMatrix2D((calc_w // 2, calc_h // 2), angle, 1.0)
-            rotated = cv2.warpAffine(thresh, M, (calc_w, calc_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            row_sums = np.sum(rotated, axis=1)
-            variance = np.var(row_sums)
-            if variance > max_variance:
-                max_variance = variance
-                best_angle = angle
+        # 形态学横向膨胀，把每个单词/汉字连成长水平条
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3))
+        dilated = cv2.dilate(thresh, kernel, iterations=2)
 
-        return best_angle
+        contours, _ = cv2.findContours(dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        angles = []
+
+        for c in contours:
+            if cv2.contourArea(c) < 300:
+                continue
+            rect = cv2.minAreaRect(c)
+            (cx, cy), (rw, rh), angle = rect
+            if rw < rh:
+                rw, rh = rh, rw
+                angle += 90.0
+            
+            # 过滤非横向条状物
+            if rw / float(rh + 0.001) > 2.5:
+                # 规范化角度到 [-45, 45]
+                while angle > 45.0: angle -= 90.0
+                while angle < -45.0: angle += 90.0
+                if abs(angle) < 15.0:
+                    angles.append(angle)
+
+        if len(angles) >= 5:
+            # 选用中位数，抗孤立噪点干扰
+            median_angle = float(np.median(angles))
+            return median_angle
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 def deskew_image_precise(cv_img):
-    """根据计算得出的精确角度将整幅画面反向旋转拉平至绝对水平"""
+    """精确反向拉平旋转图像"""
     try:
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        angle = detect_skew_angle_projection(gray)
-        if abs(angle) > 0.3:
+        angle = detect_skew_angle_robust(gray)
+        if abs(angle) > 0.4:
             h, w = cv_img.shape[:2]
             center = (w // 2, h // 2)
             M = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -63,11 +83,11 @@ def deskew_image_precise(cv_img):
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     """
-    网页端全能王级增强算法管道：
-    1. 文本行水平投影自动拉平（解决字句倾斜）
-    2. 局部背景闭运算光照场除法（彻底漂白不均阴影与杂色）
-    3. 细节高频锐化补偿（彻底解决田字格、拼音声调断线与模糊）
-    4. 软 S 曲线深墨压黑（浓黑细腻无毛刺）
+    全能王级深度清晰化引擎：
+    1. 文本行中段自动精确拉平
+    2. 多尺度局部白场除法（消除不均匀光照与阴影）
+    3. 笔画核心强力压黑，杜绝发虚发浅
+    4. 颜色模式全保真：彩色笔画鲜艳保留，绝不变灰
     """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
@@ -76,58 +96,55 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
         img = None
 
     if HAVE_OPENCV and img is not None:
-        # 1. 倾斜精准拉平
+        # 1. 水平拉正
         img = deskew_image_precise(img)
         h, w = img.shape[:2]
 
         b, g, r = cv2.split(img)
         b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-        # 2. 局部白场闭运算（消除不均匀光照与阴影）
+        # 2. 估计白场背景 (小核保留细文字反差，大核吸收背景光斑)
         gray = (0.299 * r_f + 0.587 * g_f + 0.114 * b_f).astype(np.uint8)
-        k_size = max(15, min(w, h) // 45)
-        if k_size % 2 == 0:
-            k_size += 1
+        
+        # 局部高斯滤波作为背景白场场强
+        bg_blur = cv2.GaussianBlur(gray, (0, 0), sigmaX=15, sigmaY=15).astype(np.float32) + 1.0
+        
+        # 背景除法归一化（白纸彻底推向 255）
+        norm = (gray.astype(np.float32) / bg_blur) * 255.0
+        norm = np.clip(norm, 0, 255)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
-        bg_morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-        bg_float = cv2.GaussianBlur(bg_morph, (k_size, k_size), 0).astype(np.float32) + 1.0
+        # 3. 增强深色墨迹沉降（解决字体虚、浅）
+        # < 175 的细节全部线性向下强力拉深，使文字浓郁黑亮
+        text_deep = np.where(norm < 175.0, (norm / 175.0) ** 1.6 * 85.0, norm)
+        # > 190 的背透灰影与底色彻底切除为纯白 255
+        text_deep = np.where(text_deep > 185.0, 255.0, text_deep)
+        text_uint8 = np.clip(text_deep, 0, 255).astype(np.uint8)
 
-        # 背景归一化（漂白全场阴影）
-        r_div = np.clip((r_f / bg_float) * 255.0, 0, 255)
-        g_div = np.clip((g_f / bg_float) * 255.0, 0, 255)
-        b_div = np.clip((b_f / bg_float) * 255.0, 0, 255)
-        gray_div = 0.299 * r_div + 0.587 * g_div + 0.114 * b_div
+        # 4. 判断色彩模式并合成输出
+        is_color_requested = (color_mode.lower() == "color")
 
-        # 3. 细节高频锐化补偿：拯救拼音、网格、薄弱笔锋断线
-        blur_soft = cv2.GaussianBlur(gray_div, (3, 3), 0)
-        detail = gray_div - blur_soft
-        sharpened = gray_div + detail * 1.6
-        sharpened = np.clip(sharpened, 0, 255)
+        if is_color_requested:
+            # 严格提取彩色区域（如红字、批改、彩图）
+            # 转 HSV 检测饱和度
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            sat = hsv[:, :, 1]
+            val = hsv[:, :, 2]
+            
+            # 只要饱和度大于 25，且亮度不是极端黑，认定为彩色笔迹
+            color_mask = (sat > 25) & (val > 35)
 
-        # 4. 软 S 曲线对比度延伸（渐变过渡彻底防断线）
-        x = sharpened / 255.0
-        # 针对浅透墨平滑抬升至纯白，针对文字核心迅速压暗沉底
-        enhanced = np.where(x > 0.72, 1.0, np.where(x < 0.40, x * 0.60, np.power(x, 1.85)))
-        enhanced_uint8 = np.clip(enhanced * 255.0, 0, 255).astype(np.uint8)
+            # 漂白后的底色通道
+            enhanced_3ch = cv2.merge([text_uint8, text_uint8, text_uint8])
+            
+            # 彩色区域提亮增艳，背景采用漂白加黑后的文本底色
+            color_boost = cv2.convertScaleAbs(img, alpha=1.15, beta=10)
+            out_img = np.where(color_mask[:, :, None], color_boost, enhanced_3ch)
 
-        if color_mode == "color":
-            # 提取彩色笔划掩膜（红笔批注、彩印）
-            max_c = np.maximum(np.maximum(r_f, g_f), b_f)
-            min_c = np.minimum(np.minimum(r_f, g_f), b_f)
-            sat = np.where(max_c > 0, (max_c - min_c) / (max_c + 0.001), 0)
-            red_excess = r_f - np.maximum(g_f, b_f)
-            color_mask = ((sat > 0.18) & (max_c > 50)) | (red_excess > 8.0)
-
-            out_b = np.where(color_mask, np.clip(b_div * 0.85, 0, 255).astype(np.uint8), enhanced_uint8)
-            out_g = np.where(color_mask, np.clip(g_div * 0.85, 0, 255).astype(np.uint8), enhanced_uint8)
-            out_r = np.where(color_mask, np.clip(r_div * 1.15, 0, 255).astype(np.uint8), enhanced_uint8)
-
-            merged = cv2.merge([out_b, out_g, out_r])
-            _, enc = cv2.imencode(".jpg", merged, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            _, enc = cv2.imencode(".jpg", out_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             return enc.tobytes()
         else:
-            _, enc = cv2.imencode(".jpg", enhanced_uint8, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            # 纯黑白模式：直接输出极度深黑单通道
+            _, enc = cv2.imencode(".jpg", text_uint8, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             return enc.tobytes()
 
     else:
@@ -137,17 +154,15 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
 
         w, h = img.size
         gray = ImageOps.grayscale(img)
-        gray_sharp = gray.filter(ImageFilter.SHARPEN)
-
-        small = gray_sharp.resize((max(1, w // 4), max(1, h // 4)), Image.Resampling.BILINEAR)
-        bg_small = small.filter(ImageFilter.BoxBlur(radius=15))
-        bg_full = bg_small.resize((w, h), Image.Resampling.BILINEAR)
-
-        gray_np = np.array(gray_sharp, dtype=np.float32)
-        bg_np = np.array(bg_full, dtype=np.float32) + 1.0
+        bg = gray.filter(ImageFilter.GaussianBlur(radius=15))
+        
+        gray_np = np.array(gray, dtype=np.float32)
+        bg_np = np.array(bg, dtype=np.float32) + 1.0
 
         diff = (gray_np / bg_np) * 255.0
-        diff = np.where(diff > 185.0, 255.0, np.where(diff < 110.0, diff * 0.55, diff))
+        # 强力压黑加深
+        diff = np.where(diff < 170.0, (diff / 170.0) ** 1.6 * 85.0, diff)
+        diff = np.where(diff > 185.0, 255.0, diff)
         res_np = np.clip(diff, 0, 255).astype(np.uint8)
 
         out_img = Image.fromarray(res_np)
@@ -156,7 +171,6 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
         return buf.getvalue()
 
 class EnhancePreviewHandler(BaseHandler):
-    """供前端网页实时拉取全能王级增强效果"""
     def post(self):
         try:
             files = self.request.files.get("file", [])
