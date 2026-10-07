@@ -21,7 +21,7 @@ def detect_skew_angle_robust(gray_img):
     """
     try:
         h, w = gray_img.shape[:2]
-        # 裁剪中段区域，避开书页外框黑边和页眉留白干扰
+        # 裁剪中段 70% 区域，避开书页边框黑边和页眉留白干扰
         y1, y2 = int(h * 0.15), int(h * 0.85)
         x1, x2 = int(w * 0.05), int(w * 0.95)
         crop = gray_img[y1:y2, x1:x2]
@@ -91,39 +91,40 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     except Exception:
         img = None
 
+    is_color = (str(color_mode).strip().lower() == "color")
+
     if HAVE_OPENCV and img is not None:
-        # 1. 倾斜水平拉平
+        # 1. 自动水平拉平（替换掉不可靠的四角透视）
         img = deskew_image_precise(img)
         h, w = img.shape[:2]
 
         b, g, r = cv2.split(img)
         b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-        # 2. 估计白场背景
+        # 2. 局部白场背景估计
         gray = (0.299 * r_f + 0.587 * g_f + 0.114 * b_f).astype(np.uint8)
         bg_blur = cv2.GaussianBlur(gray, (0, 0), sigmaX=15, sigmaY=15).astype(np.float32) + 1.0
         
-        # 背景除法归一化（白纸推向 255）
+        # 背景除法归一化（漂白）
         norm = np.clip((gray.astype(np.float32) / bg_blur) * 255.0, 0, 255)
 
-        # 3. 增强深色墨迹沉降（解决字体虚与浅）
+        # 3. 增强深色墨迹沉降（强力加黑文字与虚线）
         text_deep = np.where(norm < 175.0, (norm / 175.0) ** 1.6 * 85.0, norm)
         text_deep = np.where(text_deep > 185.0, 255.0, text_deep)
         text_uint8 = np.clip(text_deep, 0, 255).astype(np.uint8)
 
-        # 4. 判断色彩模式并合成输出
-        is_color_requested = (color_mode.lower() == "color")
+        # 4. 色彩处理
+        if is_color:
+            color_diff = np.maximum(np.maximum(np.abs(r_f - g_f), np.abs(g_f - b_f)), np.abs(b_f - r_f))
+            color_mask = (color_diff > 10.0) & (norm < 235.0)
 
-        if is_color_requested:
-            # 提取彩色区域（红字、批改、插图）
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            sat = hsv[:, :, 1]
-            val = hsv[:, :, 2]
-            color_mask = (sat > 25) & (val > 35)
+            r_norm = np.clip((r_f / bg_blur) * 255.0 * 1.25, 0, 255).astype(np.uint8)
+            g_norm = np.clip((g_f / bg_blur) * 255.0 * 1.15, 0, 255).astype(np.uint8)
+            b_norm = np.clip((b_f / bg_blur) * 255.0 * 1.15, 0, 255).astype(np.uint8)
+            color_clean = cv2.merge([b_norm, g_norm, r_norm])
 
-            enhanced_3ch = cv2.merge([text_uint8, text_uint8, text_uint8])
-            color_boost = cv2.convertScaleAbs(img, alpha=1.15, beta=10)
-            out_img = np.where(color_mask[:, :, None], color_boost, enhanced_3ch)
+            base_clean = cv2.merge([text_uint8, text_uint8, text_uint8])
+            out_img = np.where(color_mask[:, :, None], color_clean, base_clean)
 
             _, enc = cv2.imencode(".jpg", out_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             return enc.tobytes()
@@ -137,18 +138,36 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             img = ImageOps.exif_transpose(pil_img.convert("RGB"))
 
         w, h = img.size
+        r, g, b = img.split()
+        r_np, g_np, b_np = np.array(r, dtype=np.float32), np.array(g, dtype=np.float32), np.array(b, dtype=np.float32)
+
         gray = ImageOps.grayscale(img)
         bg = gray.filter(ImageFilter.GaussianBlur(radius=15))
-        
-        gray_np = np.array(gray, dtype=np.float32)
         bg_np = np.array(bg, dtype=np.float32) + 1.0
 
+        gray_np = np.array(gray, dtype=np.float32)
         diff = (gray_np / bg_np) * 255.0
         diff = np.where(diff < 170.0, (diff / 170.0) ** 1.6 * 85.0, diff)
         diff = np.where(diff > 185.0, 255.0, diff)
-        res_np = np.clip(diff, 0, 255).astype(np.uint8)
+        text_uint8 = np.clip(diff, 0, 255).astype(np.uint8)
 
-        out_img = Image.fromarray(res_np)
+        if is_color:
+            color_diff = np.maximum(np.maximum(np.abs(r_np - g_np), np.abs(g_np - b_np)), np.abs(b_np - r_np))
+            color_mask = (color_diff > 10.0) & (diff < 235.0)
+
+            r_out = np.clip((r_np / bg_np) * 255.0 * 1.25, 0, 255).astype(np.uint8)
+            g_out = np.clip((g_np / bg_np) * 255.0 * 1.15, 0, 255).astype(np.uint8)
+            b_out = np.clip((b_np / bg_np) * 255.0 * 1.15, 0, 255).astype(np.uint8)
+
+            r_final = np.where(color_mask, r_out, text_uint8)
+            g_final = np.where(color_mask, g_out, text_uint8)
+            b_final = np.where(color_mask, b_out, text_uint8)
+
+            rgb_stack = np.stack([r_final, g_final, b_final], axis=-1)
+            out_img = Image.fromarray(rgb_stack, mode="RGB")
+        else:
+            out_img = Image.fromarray(text_uint8)
+
         buf = io.BytesIO()
         out_img.save(buf, format="JPEG", quality=95)
         return buf.getvalue()
