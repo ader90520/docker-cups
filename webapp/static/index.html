@@ -57,7 +57,7 @@
         .file-row.active { background: #f0fdf4; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
-        /* 身份证卡片 (85.6:54 黄金套框与缩放裁切) */
+        /* 身份证专用卡片 (85.6:54 黄金套框与缩放裁切) */
         .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fff; position: relative; }
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         @media (max-width: 500px) { .idcard-grid { grid-template-columns: 1fr; } }
@@ -174,7 +174,9 @@
         </div>
     </div>
 
-    <!-- 1. 智能打印主面板 -->
+    <!-- ========================================== -->
+    <!-- 2. DOM 视图区域: 智能打印主面板             -->
+    <!-- ========================================== -->
     <div id="panel-print" class="tab-panel-container active" style="padding:0;">
         <div class="print-header-bar">
             <span style="font-weight:700; font-size:15px; color:#1e293b;">🖨 打印</span>
@@ -192,7 +194,7 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 标准文档上传区 -->
+                <!-- 1. 标准文档上传区 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文档/试卷</span>
@@ -211,7 +213,7 @@
                     </div>
                 </div>
 
-                <!-- 发票上传区 -->
+                <!-- 2. 发票上传区 -->
                 <div class="card-box" id="sec-upload-invoice" style="display:none;">
                     <div class="card-title">
                         <span>🧾 上传发票文件</span>
@@ -230,7 +232,7 @@
                     </div>
                 </div>
 
-                <!-- 身份证专属上传区 -->
+                <!-- 3. 身份证专属上传区 -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
@@ -283,7 +285,7 @@
                             </select>
                         </div>
 
-                        <!-- 仅在标准打印显示 -->
+                        <!-- 仅在标准打印显示 (发票与身份证页面干净隐藏) -->
                         <div class="form-item" id="item-enhance-wrap">
                             <label>试卷去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.renderPreview()">
@@ -611,6 +613,7 @@ const EnhanceEngine = {
 
         if (isEnhance && !isMerge) {
             const currentFile = files[0];
+            // 缓存 Key 绑定色彩模式，切换黑白/彩色时必然重新计算
             const fileKey = `${currentFile.name}_${currentFile.size}_${AppConfig.currentColorMode}`;
 
             if (this.cachedEnhancedBlob && this.cachedFileKey === fileKey) {
@@ -972,7 +975,10 @@ const PrintManager = {
         document.getElementById('btn-color-mono').className = 'flat-radio-btn ' + (mode === 'monochrome' ? 'active' : '');
         document.getElementById('btn-color-rgb').className = 'flat-radio-btn ' + (mode === 'color' ? 'active' : '');
         
-        // 关键：切换色彩强制清空缓存并重新触发渲染
+        // 关键修复：切换色彩必须强制清空旧的单色缓存 Blob 并重新请求
+        if (EnhanceEngine.cachedEnhancedBlob) {
+            URL.revokeObjectURL(EnhanceEngine.cachedEnhancedBlob);
+        }
         EnhanceEngine.cachedEnhancedBlob = null;
         EnhanceEngine.cachedFileKey = null;
         EnhanceEngine.renderPreview();
@@ -1072,7 +1078,7 @@ const PrintManager = {
                 .then(r => r.json())
                 .then(res => {
                     btn.disabled = false;
-                    btn.innerText = '🖨️️ 提交打印';
+                    btn.innerText = '🖨️ 提交打印';
                     alertBox.style.display = 'block';
                     alertBox.className = 'status-alert ' + (res.success ? 'status-success' : 'status-error');
                     alertBox.innerText = AppConfig.getMsg(res, '身份证拼版已成功送达打印机！');
