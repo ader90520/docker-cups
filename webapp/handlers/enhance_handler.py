@@ -27,7 +27,7 @@ def order_points(pts):
 
 def auto_perspective_transform(img):
     """
-    自动寻找纸张四边形边缘并做透视拉平，
+    全能王核心算子：自动寻找纸张四边形边缘并做透视拉平，
     裁掉桌面木纹、背景阴影。若未拍全纸张边缘，则自动安全回退。
     """
     try:
@@ -89,7 +89,7 @@ def detect_and_deskew_text(img):
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
-        # 裁剪页面中间 60% 区域计算倾角，杜绝顶部木纹影响
+        # 裁剪页面中间 60% 区域计算倾角，避开顶部木纹影响
         sub_gray = gray[int(h * 0.2):int(h * 0.8), int(w * 0.1):int(w * 0.9)]
         edges = cv2.Canny(sub_gray, 50, 200, apertureSize=3)
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 80, minLineLength=sub_gray.shape[1] // 8, maxLineGap=10)
@@ -130,14 +130,14 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     is_color = (str(color_mode).strip().lower() == "color")
 
     if HAVE_OPENCV and img is not None:
-        # 1. 自动寻找纸张轮廓进行透视拉正并去除背景
+        # 1. 自动寻找纸张轮廓进行透视拉正并去除背景木纹
         img = auto_perspective_transform(img)
 
         # 2. 文本行二次精细拉平
         img = detect_and_deskew_text(img)
         h, w = img.shape[:2]
 
-        # 3. 颜色模式：基于 Lab 空间分别处理“明度”与“色彩”，避免浅色被当作白底冲刷
+        # 3. 基于 Lab 空间分别处理“明度”与“色彩”，避免浅色被当作白底冲刷
         if is_color:
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l_channel, a_channel, b_channel = cv2.split(lab)
@@ -146,7 +146,7 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             # 估计白场背景亮度 (使用大核高斯滤波)
             bg_l = cv2.GaussianBlur(l_channel, (0, 0), sigmaX=25, sigmaY=25).astype(np.float32) + 1.0
             
-            # 明度除法漂白：将灰黄底色推向 255
+            # 明度除法漂白：将灰黄底色推向 255 纯白
             norm_l = (l_float / bg_l) * 255.0
             norm_l = np.clip(norm_l, 0, 255)
 
