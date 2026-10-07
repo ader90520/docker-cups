@@ -8,10 +8,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OPENCV_LOG_LEVEL=ERROR
 
 # 1. 基础系统环境、驱动与轻量运行库
-# 瘦身核心：
-# 1) 不装 apt 的 python3-opencv（避免连带拖入 200MB+ 的 GTK/Qt/FFmpeg 桌面多媒体套件）；
-# 2) 使用 pip 安装纯算法版 opencv-python-headless（仅含 core + imgproc 等图像算子）；
-# 3) 立即 purge 清理 pip 与安装缓存，只留核心动态库，镜像体积保持在 140MB~150MB。
+# 核心修复策略：
+# 1) 弃用 pip3（彻底杜绝在 ARM32 下触发 C++ 源码在线编译导致 exit code 1）；
+# 2) 安装 Debian 官方已针对 armv7l 预编译好的 python3-opencv；
+# 3) 强制 --no-install-recommends 并主动清除无用的多媒体与文档缓存，体积稳控在 140MB~150MB。
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -34,22 +34,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
-    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
     python3-numpy \
+    python3-opencv \
     libgomp1 \
     libglib2.0-0 \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    && pip3 install --no-cache-dir --break-system-packages opencv-python-headless \
-    && apt-get purge -y python3-pip \
-    && apt-get autoremove -y \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /root/.cache
 
 # 2. 拷贝代码与静态文件
 COPY modules/ /opt/modules/
@@ -69,7 +66,7 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
+# 5. 执行驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
