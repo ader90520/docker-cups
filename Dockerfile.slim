@@ -1,3 +1,69 @@
+# =========================================================================
+# 阶段 1：在独立构建环境中编译极简版 OpenCV (仅含 core 与 imgproc，不占最终镜像空间)
+# =========================================================================
+FROM debian:bookworm-slim AS opencv-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    python3-dev \
+    python3-numpy \
+    ca-certificates \
+    libjpeg-dev \
+    libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 拉取 OpenCV 浅层源码并编译微型核心
+RUN git clone --depth 1 --branch 4.8.0 https://github.com/opencv/opencv.git /tmp/opencv \
+    && mkdir -p /tmp/opencv/build && cd /tmp/opencv/build \
+    && cmake -D CMAKE_BUILD_TYPE=Release \
+             -D CMAKE_INSTALL_PREFIX=/usr/local \
+             -D BUILD_SHARED_LIBS=OFF \
+             -D BUILD_opencv_python3=ON \
+             -D PYTHON3_EXECUTABLE=/usr/bin/python3 \
+             -D BUILD_TESTS=OFF \
+             -D BUILD_PERF_TESTS=OFF \
+             -D BUILD_EXAMPLES=OFF \
+             -D BUILD_DOCS=OFF \
+             -D WITH_1394=OFF \
+             -D WITH_CUDA=OFF \
+             -D WITH_CUFFT=OFF \
+             -D WITH_FFMPEG=OFF \
+             -D WITH_GSTREAMER=OFF \
+             -D WITH_GTK=OFF \
+             -D WITH_OPENEXR=OFF \
+             -D WITH_TIFF=OFF \
+             -D WITH_V4L=OFF \
+             -D WITH_WEBP=OFF \
+             -D WITH_IPP=OFF \
+             -D WITH_ITT=OFF \
+             -D WITH_LAPACK=OFF \
+             -D WITH_EIGEN=OFF \
+             -D BUILD_opencv_apps=OFF \
+             -D BUILD_opencv_dnn=OFF \
+             -D BUILD_opencv_video=OFF \
+             -D BUILD_opencv_videoio=OFF \
+             -D BUILD_opencv_calib3d=OFF \
+             -D BUILD_opencv_features2d=OFF \
+             -D BUILD_opencv_flann=OFF \
+             -D BUILD_opencv_highgui=OFF \
+             -D BUILD_opencv_ml=OFF \
+             -D BUILD_opencv_objdetect=OFF \
+             -D BUILD_opencv_photo=OFF \
+             -D BUILD_opencv_stitching=OFF \
+             -D BUILD_opencv_gapi=OFF \
+             .. \
+    && make -j$(nproc) \
+    && mkdir -p /dist \
+    && cp $(find lib/ -name "cv2*.so" | head -n 1) /dist/cv2.so \
+    && strip --strip-unneeded /dist/cv2.so
+
+# =========================================================================
+# 阶段 2：原仓库运行环境 (注入极简 OpenCV 动态库，保留所有原有驱动和汉化)
+# =========================================================================
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -6,7 +72,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai
 
-# 1. 基础系统环境、CUPS、SANE全功能驱动及轻量 Python 运行库 (无 OpenCV，纯 PIL + NumPy 极速矩阵加速)
+# 1. 基础系统环境、CUPS、SANE全功能驱动及轻量 Python 运行库 (保留原有依赖，保持镜像精简)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,6 +99,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tornado \
     python3-requests \
     python3-numpy \
+    libjpeg62-turbo \
+    libpng16-16 \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
@@ -40,17 +108,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/*
 
-# 2. 拷贝代码与静态文件 (保留完整目录结构)
+# 2. 从编译阶段仅拷贝 5MB~8MB 的极简 OpenCV 库到 Python 包目录
+COPY --from=opencv-builder /dist/cv2.so /usr/lib/python3/dist-packages/cv2.so
+
+# 3. 拷贝代码与静态文件 (保留完整目录结构)
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 3. 清洗 Windows 换行符并赋权
+# 4. 清洗 Windows 换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 构建期固化 HPLIP 专有插件 (保留原仓库静默安装，保证老款机型免命令交互)
+# 5. 构建期固化 HPLIP 专有插件 (保留原仓库静默安装，保证老款机型免命令交互)
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -58,12 +129,12 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动微码安装与主题补丁
+# 6. 执行驱动微码安装与主题补丁
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true
 RUN /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true
 RUN /bin/bash /opt/modules/theme/patch_cups_theme.sh || true
 
-# 6. 注入 CUPS 中文语言包与模板 (多路径兼容，彻底杜绝汉化丢失)
+# 7. 注入 CUPS 中文语言包与模板 (多路径兼容，彻底杜绝汉化丢失)
 RUN mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
@@ -84,7 +155,7 @@ RUN mkdir -p /usr/share/cups/templates/zh_CN \
        fi \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 7. 初始化各持久化与锁目录
+# 8. 初始化各持久化与锁目录
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
