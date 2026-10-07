@@ -26,7 +26,7 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f1f5f9; color: var(--text-main); line-height: 1.5; padding: 15px; }
         .wrapper { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid var(--border-color); }
         
-        /* 导航与控制条 */
+        /* 导航与顶栏 */
         .top-navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--border-color); }
         .nav-brand { font-size: 16px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 8px; }
         .nav-tabs { display: flex; gap: 6px; }
@@ -37,7 +37,7 @@
         .select-ctrl { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
         .btn-refresh-icon { width: 36px; height: 36px; border-radius: 6px; border: none; background: #007bff; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 
-        /* 子标签页 */
+        /* 子标签页与栅格布局 */
         .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
         .type-item { flex: 1; padding: 12px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .type-item.active { color: #007bff; border-bottom-color: #007bff; background: #f0f7ff; }
@@ -46,7 +46,7 @@
         .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 18px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
         .card-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
 
-        /* 上传组件 */
+        /* 文件上传与文件列表 */
         .upload-drag-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; cursor: pointer; transition: all 0.2s; position: relative; }
         .upload-drag-area:hover, .upload-drag-area.drag-over { border-color: var(--primary); background: #f0fdf4; }
         .upload-icon { font-size: 32px; color: #94a3b8; margin-bottom: 6px; }
@@ -57,7 +57,7 @@
         .file-row.active { background: #f0fdf4; }
         .btn-del { color: #ef4444; border: none; background: transparent; cursor: pointer; font-size: 13px; }
 
-        /* 身份证专用卡片 (85.6:54 黄金套框与缩放裁切) */
+        /* 身份证卡片 (85.6:54 卡槽与缩放裁切) */
         .idcard-person-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; background: #fff; position: relative; }
         .idcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         @media (max-width: 500px) { .idcard-grid { grid-template-columns: 1fr; } }
@@ -90,7 +90,7 @@
         .zoom-slider-wrap { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-sub); }
         .zoom-slider-wrap input[type=range] { width: 60px; height: 3px; accent-color: var(--primary); }
 
-        /* 表单控件 */
+        /* 表单控件与单选组 */
         .param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .form-item label { display: block; font-size: 12px; font-weight: 600; color: var(--text-sub); margin-bottom: 4px; }
         .form-ctrl { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
@@ -135,7 +135,7 @@
         #canvas-preview { max-width: 100%; max-height: 100%; object-fit: contain; }
         #pdf-canvas-render { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
 
-        /* 身份证预览容器 */
+        /* 身份证预览排版 */
         .idcard-a4-holder { width: 100%; height: 100%; position: absolute; top: 0; left: 0; display: none; }
         .idcard-layout-single { display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; width: 100%; height: 100%; }
         .idcard-single-item { width: 180px; aspect-ratio: 85.6 / 54; border: 1px dashed #94a3b8; border-radius: 4px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
@@ -146,7 +146,7 @@
         .idcard-multi-item { width: 130px; aspect-ratio: 85.6 / 54; border: 1px dashed #94a3b8; border-radius: 4px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
         .idcard-multi-item img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* 提交动作与状态 */
+        /* 操作与监控状态 */
         .action-bar { margin-top: 15px; }
         .btn-submit-print { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-submit-print:hover { background: var(--primary-hover); }
@@ -213,7 +213,7 @@
                     </div>
                 </div>
 
-                <!-- 2. 发票上传区 -->
+                <!-- 2. 发票专属上传区 -->
                 <div class="card-box" id="sec-upload-invoice" style="display:none;">
                     <div class="card-title">
                         <span>🧾 上传发票文件</span>
@@ -285,10 +285,10 @@
                             </select>
                         </div>
 
-                        <!-- 仅在标准打印显示 (发票与身份证页面干净隐藏) -->
+                        <!-- 仅在标准打印显示 (发票与身份证页面隐藏) -->
                         <div class="form-item" id="item-enhance-wrap">
                             <label>试卷去黑底增强 (全能王模式)</label>
-                            <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.renderPreview()">
+                            <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.invalidateCache(); EnhanceEngine.renderPreview();">
                                 <option value="true" selected>开启 (视窗实时呈现白底加黑效果)</option>
                                 <option value="false">关闭 (原图直接打印)</option>
                             </select>
@@ -571,6 +571,15 @@ const EnhanceEngine = {
         document.getElementById('a4-viewport').style.transform = 'scale(1)';
     },
 
+    // 关键：彻底注销并清空预览缓存
+    invalidateCache() {
+        if (this.cachedEnhancedBlob) {
+            URL.revokeObjectURL(this.cachedEnhancedBlob);
+        }
+        this.cachedEnhancedBlob = null;
+        this.cachedFileKey = null;
+    },
+
     renderPreview() {
         const canvas = document.getElementById('canvas-preview');
         const pdfCanvas = document.getElementById('pdf-canvas-render');
@@ -592,8 +601,7 @@ const EnhanceEngine = {
         if (files.length === 0) {
             canvas.style.display = 'none';
             tip.style.display = 'block';
-            this.cachedEnhancedBlob = null;
-            this.cachedFileKey = null;
+            this.invalidateCache();
             return;
         }
 
@@ -613,13 +621,13 @@ const EnhanceEngine = {
 
         if (isEnhance && !isMerge) {
             const currentFile = files[0];
-            // 缓存 Key 绑定色彩模式，切换黑白/彩色时必然重新计算
+            // 缓存 Key 绑定文件名、文件大小与当前颜色模式
             const fileKey = `${currentFile.name}_${currentFile.size}_${AppConfig.currentColorMode}`;
 
             if (this.cachedEnhancedBlob && this.cachedFileKey === fileKey) {
                 this.drawImageToCanvas(ctx, this.cachedEnhancedBlob, cw, ch);
             } else {
-                tip.innerText = "⏳ 正在拉正文字并深度加黑笔画...";
+                tip.innerText = "⏳ 正在识别纸张轮廓、拉平并保留彩色细节...";
                 tip.style.display = 'block';
 
                 const fd = new FormData();
@@ -644,7 +652,7 @@ const EnhanceEngine = {
             }
 
         } else if (isMerge && files.length > 1) {
-            // N-up 网格排布
+            // N-up 网格拼版排布
             const count = files.length;
             let cols = (count <= 2) ? (isLand ? 2 : 1) : 2;
             let rows = (count <= 2) ? (isLand ? 1 : 2) : (count <= 4 ? 2 : 3);
@@ -668,6 +676,7 @@ const EnhanceEngine = {
             });
 
         } else {
+            // 普通原图直接平铺
             this.drawImageToCanvas(ctx, files[0], cw, ch);
         }
     },
@@ -922,6 +931,7 @@ const PrintManager = {
 
         if (list.length === 0) {
             wrap.style.display = 'none';
+            EnhanceEngine.invalidateCache();
             EnhanceEngine.renderPreview();
             return;
         }
@@ -937,6 +947,7 @@ const PrintManager = {
             wrap.appendChild(div);
         });
 
+        EnhanceEngine.invalidateCache();
         EnhanceEngine.renderPreview();
     },
 
@@ -975,12 +986,8 @@ const PrintManager = {
         document.getElementById('btn-color-mono').className = 'flat-radio-btn ' + (mode === 'monochrome' ? 'active' : '');
         document.getElementById('btn-color-rgb').className = 'flat-radio-btn ' + (mode === 'color' ? 'active' : '');
         
-        // 关键修复：切换色彩必须强制清空旧的单色缓存 Blob 并重新请求
-        if (EnhanceEngine.cachedEnhancedBlob) {
-            URL.revokeObjectURL(EnhanceEngine.cachedEnhancedBlob);
-        }
-        EnhanceEngine.cachedEnhancedBlob = null;
-        EnhanceEngine.cachedFileKey = null;
+        // 关键：切换颜色模式时注销缓存并强制重新请求
+        EnhanceEngine.invalidateCache();
         EnhanceEngine.renderPreview();
     },
 
@@ -1131,7 +1138,7 @@ const PrintManager = {
             })
             .catch(err => {
                 btn.disabled = false;
-                btn.innerText = '🖨 提交打印';
+                btn.innerText = '🖨️ 提交打印';
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '打印服务异常: ' + err;
@@ -1256,7 +1263,7 @@ const ScanService = {
                 alertBox.innerText = AppConfig.getMsg(d, '扫描件已直接下发至打印机出纸！');
             })
             .catch(err => {
-                if (btn) { btn.disabled = false; btn.innerText = '🖨 打印该件'; }
+                if (btn) { btn.disabled = false; btn.innerText = '🖨️ 打印该件'; }
                 alertBox.style.display = 'block';
                 alertBox.className = 'status-alert status-error';
                 alertBox.innerText = '直接打印异常: ' + err;
@@ -1550,9 +1557,10 @@ const DashboardService = {
             .then(r => r.json())
             .then(d => {
                 alertBox.style.display = 'block';
-                alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
+                const isSuccess = d.success === true;
+                alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
                 alertBox.innerText = AppConfig.getMsg(d, '驱动安装成功！');
-                if (d.success) fileInput.value = '';
+                if (isSuccess) fileInput.value = '';
             });
     },
 
@@ -1574,9 +1582,10 @@ const DashboardService = {
         fetch('/api/printer_admin', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(d => {
-                alertBox.className = 'status-alert ' + (d.success ? 'status-success' : 'status-error');
+                const isSuccess = d.success === true;
+                alertBox.className = 'status-alert ' + (isSuccess ? 'status-success' : 'status-error');
                 alertBox.innerText = AppConfig.getMsg(d, '扫描插件安装成功！');
-                if (d.success) {
+                if (isSuccess) {
                     fileInput.value = '';
                     ScanService.loadDevices();
                 }
