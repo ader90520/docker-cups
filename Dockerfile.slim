@@ -5,12 +5,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANGUAGE=zh_CN:zh \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai \
-    OPENCV_LOG_LEVEL=ERROR \
-    QT_QPA_PLATFORM=offscreen \
-    OMP_NUM_THREADS=4 \
-    OPENBLAS_NUM_THREADS=4
+    OPENCV_LOG_LEVEL=ERROR
 
-# 1. 基础系统环境、驱动与轻量 Python 运行库 (Debian 官方 armhf 优化库，免去 pip 编译)
+# 1. 基础系统环境、驱动与轻量运行库
+# 瘦身核心：
+# 1) 不装 apt 的 python3-opencv（避免连带拖入 200MB+ 的 GTK/Qt/FFmpeg 桌面多媒体套件）；
+# 2) 使用 pip 安装纯算法版 opencv-python-headless（仅含 core + imgproc 等图像算子）；
+# 3) 立即 purge 清理 pip 与安装缓存，只留核心动态库，镜像体积保持在 140MB~150MB。
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,17 +34,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
+    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
     python3-numpy \
-    python3-opencv \
     libgomp1 \
     libglib2.0-0 \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    && pip3 install --no-cache-dir --break-system-packages opencv-python-headless \
+    && apt-get purge -y python3-pip \
+    && apt-get autoremove -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
@@ -57,7 +61,7 @@ COPY i18/ /opt/i18/
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 固化 HPLIP 扫描插件
+# 4. 固化 HPLIP 专有扫描插件
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -65,7 +69,7 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 驱动微码安装、主题美化与中文语言包注入 (单层合并压减体积)
+# 5. 驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
@@ -89,7 +93,7 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     fi && \
     chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 6. 初始化各运行目录与持久化挂载
+# 6. 初始化各持久化与锁目录
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
