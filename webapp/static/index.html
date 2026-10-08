@@ -328,7 +328,7 @@
                     </div>
                 </div>
 
-                <!-- 现代版打印机监控看板 -->
+                <!-- 打印机监控看板 -->
                 <div class="card-box" style="margin-top:18px;">
                     <div class="card-title">
                         <span style="display:flex; align-items:center; gap:6px;">📈 打印机状态</span>
@@ -571,7 +571,6 @@ const EnhanceEngine = {
         document.getElementById('a4-viewport').style.transform = 'scale(1)';
     },
 
-    // 关键：彻底注销并清空预览缓存
     invalidateCache() {
         if (this.cachedEnhancedBlob) {
             URL.revokeObjectURL(this.cachedEnhancedBlob);
@@ -601,6 +600,7 @@ const EnhanceEngine = {
         if (files.length === 0) {
             canvas.style.display = 'none';
             tip.style.display = 'block';
+            tip.innerText = "上传文件后实时呈现效果";
             this.invalidateCache();
             return;
         }
@@ -617,11 +617,18 @@ const EnhanceEngine = {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, cw, ch);
 
+        const currentFile = files[0];
+        const isPdf = currentFile.name.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+            this.renderPdfPreview(currentFile, cw, ch);
+            return;
+        }
+
         const isEnhance = (AppConfig.currentPrintType === 'normal') && (document.getElementById('p-enhance').value === 'true');
 
         if (isEnhance && !isMerge) {
-            const currentFile = files[0];
-            // 缓存 Key 绑定文件名、文件大小与当前颜色模式
+            // 核心修复点 1：精确绑定文件名、文件大小与当前颜色模式
             const fileKey = `${currentFile.name}_${currentFile.size}_${AppConfig.currentColorMode}`;
 
             if (this.cachedEnhancedBlob && this.cachedFileKey === fileKey) {
@@ -634,7 +641,17 @@ const EnhanceEngine = {
                 fd.append('file', currentFile);
                 fd.append('color_mode', AppConfig.currentColorMode);
 
-                fetch('/api/preview_enhance', { method: 'POST', body: fd })
+                // 核心修复点 2：同时兼容 /api/preview/enhance 与 /api/preview_enhance 路由
+                const targetUrl = '/api/preview/enhance';
+
+                fetch(targetUrl, { method: 'POST', body: fd })
+                    .then(r => {
+                        if (!r.ok) {
+                            // 降级探测下划线模式
+                            return fetch('/api/preview_enhance', { method: 'POST', body: fd });
+                        }
+                        return r;
+                    })
                     .then(r => {
                         if (!r.ok) throw new Error('后端处理未响应');
                         return r.blob();
@@ -646,6 +663,7 @@ const EnhanceEngine = {
                         this.drawImageToCanvas(ctx, blob, cw, ch);
                     })
                     .catch(err => {
+                        console.warn("Enhance fallback:", err);
                         tip.style.display = 'none';
                         this.drawImageToCanvas(ctx, currentFile, cw, ch);
                     });
@@ -677,7 +695,7 @@ const EnhanceEngine = {
 
         } else {
             // 普通原图直接平铺
-            this.drawImageToCanvas(ctx, files[0], cw, ch);
+            this.drawImageToCanvas(ctx, currentFile, cw, ch);
         }
     },
 
@@ -705,6 +723,33 @@ const EnhanceEngine = {
             }
         };
         img.src = (source instanceof Blob || source instanceof File) ? URL.createObjectURL(source) : source;
+    },
+
+    renderPdfPreview(file, cw, ch) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const typedarray = new Uint8Array(e.target.result);
+            if (typeof pdfjsLib !== 'undefined') {
+                pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                    pdf.getPage(1).then(page => {
+                        const canvas = document.getElementById('pdf-canvas-render');
+                        const ctx = canvas.getContext('2d');
+                        const viewport = page.getViewport({ scale: 1.5 });
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        canvas.style.display = 'block';
+                        document.getElementById('canvas-preview').style.display = 'none';
+
+                        const renderContext = {
+                            canvasContext: ctx,
+                            viewport: viewport
+                        };
+                        page.render(renderContext);
+                    });
+                });
+            }
+        };
+        reader.readAsArrayBuffer(file);
     }
 };
 
@@ -986,7 +1031,6 @@ const PrintManager = {
         document.getElementById('btn-color-mono').className = 'flat-radio-btn ' + (mode === 'monochrome' ? 'active' : '');
         document.getElementById('btn-color-rgb').className = 'flat-radio-btn ' + (mode === 'color' ? 'active' : '');
         
-        // 关键：切换颜色模式时注销缓存并强制重新请求
         EnhanceEngine.invalidateCache();
         EnhanceEngine.renderPreview();
     },
