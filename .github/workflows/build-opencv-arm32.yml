@@ -1,11 +1,14 @@
-name: Build Minimal ARM32 OpenCV
+name: Build and Commit Minimal OpenCV for ARM32
 
 on:
-  workflow_dispatch: # 支持在 GitHub 网页手动一键点击运行
+  workflow_dispatch: # 在 GitHub Actions 页面点击一键触发
 
 jobs:
-  build:
+  build-and-commit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 赋予自动向仓库提交代码的权限
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -17,8 +20,8 @@ jobs:
 
       - name: Compile Minimal OpenCV inside Debian ARM32 Container
         run: |
-          mkdir -p output
-          docker run --rm --platform linux/arm/v7 -v $(pwd)/output:/dist debian:bookworm-slim bash -c '
+          mkdir -p modules
+          docker run --rm --platform linux/arm/v7 -v $(pwd)/modules:/dist debian:bookworm-slim bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
@@ -30,7 +33,7 @@ jobs:
             cd /tmp/opencv
             mkdir build && cd build
 
-            # 极限定制：仅保留 core 和 imgproc 模块，关闭所有 GUI、多媒体与冗余库
+            # 极限精简编译：仅保留 core 和 imgproc 模块，彻底关闭所有 GUI 与多媒体
             cmake -D CMAKE_BUILD_TYPE=Release \
                   -D CMAKE_INSTALL_PREFIX=/usr/local \
                   -D BUILD_SHARED_LIBS=OFF \
@@ -77,8 +80,10 @@ jobs:
             strip --strip-unneeded /dist/cv2.so
           '
 
-      - name: Upload cv2.so Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cv2-arm32-minimal
-          path: output/cv2.so
+      - name: Commit and Push cv2.so directly to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add modules/cv2.so
+          git commit -m "Auto-build: add minimal ARM32 cv2.so to modules" || echo "No changes to commit"
+          git push
