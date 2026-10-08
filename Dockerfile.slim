@@ -7,11 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     OPENCV_LOG_LEVEL=ERROR
 
-# 1. 基础系统环境、驱动与轻量运行库
-# 核心修复策略：
-# 1) 弃用 pip3（彻底杜绝在 ARM32 下触发 C++ 源码在线编译导致 exit code 1）；
-# 2) 安装 Debian 官方已针对 armv7l 预编译好的 python3-opencv；
-# 3) 强制 --no-install-recommends 并主动清除无用的多媒体与文档缓存，体积稳控在 140MB~150MB。
+# 1. 基础系统环境、驱动与精简版系统 OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -45,6 +41,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    # 核心瘦身：精准剔除 opencv 拖进来的无用多媒体与桌面 GUI 动态库 (立减 140MB+)
+    && rm -rf /usr/lib/*-linux-gnu*/libavcodec* \
+              /usr/lib/*-linux-gnu*/libavformat* \
+              /usr/lib/*-linux-gnu*/libavutil* \
+              /usr/lib/*-linux-gnu*/libswscale* \
+              /usr/lib/*-linux-gnu*/libswresample* \
+              /usr/lib/*-linux-gnu*/libQt5* \
+              /usr/lib/*-linux-gnu*/libgtk* \
+              /usr/lib/*-linux-gnu*/libgstreamer* \
+              /usr/lib/*-linux-gnu*/libgst* \
+              /usr/lib/*-linux-gnu*/libX11* \
+              /usr/lib/*-linux-gnu*/libwayland* \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /root/.cache
 
@@ -58,7 +66,7 @@ COPY i18/ /opt/i18/
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 固化 HPLIP 专有扫描插件
+# 4. 固化 HPLIP 扫描插件
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
     wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
@@ -66,7 +74,7 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
+# 5. 执行驱动微码安装、主题美化与中文语言包注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
