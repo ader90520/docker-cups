@@ -27,8 +27,8 @@ def order_points(pts):
 
 def auto_perspective_transform(img):
     """
-    全能王核心算子：自动寻找纸张四边形边缘并做透视拉平，
-    裁掉桌面木纹、背景阴影。
+    全能王核心算子：智能定位白纸主体并做非线性透视变换，
+    彻底裁除顶部木纹桌面与倾斜黑边。
     """
     try:
         h, w = img.shape[:2]
@@ -39,69 +39,87 @@ def auto_perspective_transform(img):
 
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blur, 30, 120)
+        
+        # 使用自适应阈值与形态学处理，即使试卷边缘有弯曲也能连通
+        thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY_INV, 15, 4)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-        # 闭运算连接断裂的白纸边缘
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return img
 
-        contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+        # 寻找面积最大的白纸主体
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        main_c = contours[0]
+        area = cv2.contourArea(main_c)
 
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        # 白纸面积必须超过画面的 30%
+        if area > (small_w * small_h * 0.30):
+            peri = cv2.arcLength(main_c, True)
+            approx = cv2.approxPolyDP(main_c, 0.03 * peri, True)
+
+            # 方案1：若近似多边形刚好为四边形
             if len(approx) == 4:
-                area = cv2.contourArea(approx)
-                # 纸张面积占 35% 以上即判定为目标文档
-                if area > (small_w * small_h * 0.35):
-                    pts = approx.reshape(4, 2) * ratio
-                    rect = order_points(pts)
-                    (tl, tr, br, bl) = rect
+                pts = approx.reshape(4, 2) * ratio
+                rect = order_points(pts)
+            else:
+                # 方案2（关键修复）：书页有弯曲无法拟合成严格 4 边时，使用最小凸外接多边形
+                hull = cv2.convexHull(main_c)
+                rot_rect = cv2.minAreaRect(hull)
+                box = cv2.boxPoints(rot_rect)
+                box = box * ratio
+                rect = order_points(box)
 
-                    w_a = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-                    w_b = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-                    max_w = max(int(w_a), int(w_b))
+            (tl, tr, br, bl) = rect
+            w_a = np.hypot(br[0] - bl[0], br[1] - bl[1])
+            w_b = np.hypot(tr[0] - tl[0], tr[1] - tl[1])
+            max_w = int(max(w_a, w_b))
 
-                    h_a = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-                    h_b = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-                    max_h = max(int(h_a), int(h_b))
+            h_a = np.hypot(tr[0] - br[0], tr[1] - br[1])
+            h_b = np.hypot(tl[0] - bl[0], tl[1] - bl[1])
+            max_h = int(max(h_a, h_b))
 
-                    dst = np.array([
-                        [0, 0],
-                        [max_w - 1, 0],
-                        [max_w - 1, max_h - 1],
-                        [0, max_h - 1]
-                    ], dtype="float32")
+            # 约束尺寸合理性
+            if max_w > w * 0.5 and max_h > h * 0.5:
+                dst = np.array([
+                    [0, 0],
+                    [max_w - 1, 0],
+                    [max_w - 1, max_h - 1],
+                    [0, max_h - 1]
+                ], dtype="float32")
 
-                    M = cv2.getPerspectiveTransform(rect, dst)
-                    warped = cv2.warpPerspective(img, M, (max_w, max_h), flags=cv2.INTER_CUBIC)
-                    return warped
+                M = cv2.getPerspectiveTransform(rect, dst)
+                warped = cv2.warpPerspective(img, M, (max_w, max_h), flags=cv2.INTER_CUBIC)
+                return warped
     except Exception:
         pass
     return img
 
 def detect_and_deskew_text(img):
-    """保底机制：若未拍全纸张四角，使用文字行密集区梯度做水平微调拉正"""
+    """中段文字行精细纠偏（补偿透视变换后的微小残留倾斜）"""
     try:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        sub_gray = gray[int(h * 0.2):int(h * 0.8), int(w * 0.1):int(w * 0.9)]
-        edges = cv2.Canny(sub_gray, 50, 200, apertureSize=3)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 80, minLineLength=sub_gray.shape[1] // 8, maxLineGap=10)
+        
+        # 裁剪页面中间区域，杜绝四周边缘干扰
+        sub_gray = gray[int(h * 0.25):int(h * 0.75), int(w * 0.15):int(w * 0.85)]
+        edges = cv2.Canny(sub_gray, 50, 150, apertureSize=3)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 70, minLineLength=sub_gray.shape[1] // 8, maxLineGap=12)
 
         angles = []
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                if abs(x2 - x1) > 20:
+                if abs(x2 - x1) > 25:
                     deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
-                    if abs(deg) < 12.0:
+                    if abs(deg) < 10.0:
                         angles.append(deg)
 
         if len(angles) >= 3:
             median_deg = float(np.median(angles))
-            if abs(median_deg) > 0.4:
+            if abs(median_deg) > 0.3:
                 center = (w // 2, h // 2)
                 M = cv2.getRotationMatrix2D(center, median_deg, 1.0)
                 rotated = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
@@ -112,10 +130,11 @@ def detect_and_deskew_text(img):
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     """
-    全能王级增强流水线：
-    1. 透视变换拉直纸张并裁剪外部背景
-    2. 文本行水平纠偏
-    3. Lab 空间照度漂白 + 色度保真增艳
+    全能王同款处理管线：
+    1. 非线性凸包透视展平（切除木纹背景与黑边）
+    2. 文本水平基准线校正
+    3. 形态学光照场除法漂白（彻底纯白、绝不灰黄）
+    4. S型字迹浓墨加深 + 彩色细节通道全真保留（手掌肉色、山丘、红框）
     """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
@@ -126,29 +145,37 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     is_color = (str(color_mode).strip().lower() == "color")
 
     if HAVE_OPENCV and img is not None:
-        # 1. 自动寻找纸张轮廓进行透视拉正并裁掉木纹
+        # 1. 执行四角/凸包透视拉正并裁掉木纹
         img = auto_perspective_transform(img)
 
-        # 2. 文本行二次精细拉平
+        # 2. 文本水平基准线微调
         img = detect_and_deskew_text(img)
         h, w = img.shape[:2]
 
         if is_color:
+            # 彩色增强：转为 Lab 空间，解耦照度与色彩通道
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l_channel, a_channel, b_channel = cv2.split(lab)
-            l_float = l_channel.astype(np.float32)
 
-            bg_l = cv2.GaussianBlur(l_channel, (0, 0), sigmaX=25, sigmaY=25).astype(np.float32) + 1.0
-            norm_l = np.clip((l_float / bg_l) * 255.0, 0, 255)
+            # 使用形态学大核膨胀提取真实纸张白场背景（解决灰黄不均问题）
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+            bg_l = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, kernel)
+            bg_l = cv2.GaussianBlur(bg_l, (21, 21), 0).astype(np.float32) + 1.0
 
-            # S型对比度拉伸：字迹浓黑，浅色调完整保留
-            deep_l = np.where(norm_l < 165.0, (norm_l / 165.0) ** 1.5 * 75.0, norm_l)
-            deep_l = np.where(deep_l > 220.0, 255.0, deep_l)
+            # 照度除法彻底漂白
+            norm_l = (l_channel.astype(np.float32) / bg_l) * 255.0
+            norm_l = np.clip(norm_l, 0, 255)
+
+            # 全能王强化阶调映射：>200 的底色直接推向 255 纯白亮透；<160 的字迹深墨下潜
+            norm_l = np.where(norm_l > 195.0, 255.0, norm_l)
+            deep_l = np.where(norm_l < 160.0, (norm_l / 160.0) ** 1.6 * 68.0, norm_l)
             l_enhanced = np.clip(deep_l, 0, 255).astype(np.uint8)
 
-            # 色度适度增艳（肉色、插图更鲜活）
-            a_boost = np.clip((a_channel.astype(np.float32) - 128.0) * 1.35 + 128.0, 0, 255).astype(np.uint8)
-            b_boost = np.clip((b_channel.astype(np.float32) - 128.0) * 1.35 + 128.0, 0, 255).astype(np.uint8)
+            # 饱和度增强：对手掌肉色、红色印迹、彩色虚线插图增艳
+            a_float = a_channel.astype(np.float32)
+            b_float = b_channel.astype(np.float32)
+            a_boost = np.clip((a_float - 128.0) * 1.45 + 128.0, 0, 255).astype(np.uint8)
+            b_boost = np.clip((b_float - 128.0) * 1.45 + 128.0, 0, 255).astype(np.uint8)
 
             merged_lab = cv2.merge([l_enhanced, a_boost, b_boost])
             out_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
@@ -157,37 +184,43 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             return enc.tobytes()
 
         else:
+            # 黑白试卷增强模式
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            bg_gray = cv2.GaussianBlur(gray, (0, 0), sigmaX=25, sigmaY=25).astype(np.float32) + 1.0
-            norm = np.clip((gray.astype(np.float32) / bg_gray) * 255.0, 0, 255)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+            bg_gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+            bg_gray = cv2.GaussianBlur(bg_gray, (21, 21), 0).astype(np.float32) + 1.0
 
-            deep = np.where(norm < 175.0, (norm / 175.0) ** 1.6 * 75.0, norm)
-            deep = np.where(deep > 200.0, 255.0, deep)
+            norm = (gray.astype(np.float32) / bg_gray) * 255.0
+            norm = np.clip(norm, 0, 255)
+
+            # 背景全白截断 + 浓黑加深
+            norm = np.where(norm > 190.0, 255.0, norm)
+            deep = np.where(norm < 160.0, (norm / 160.0) ** 1.7 * 65.0, norm)
             out_mono = np.clip(deep, 0, 255).astype(np.uint8)
 
             _, enc = cv2.imencode(".jpg", out_mono, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             return enc.tobytes()
 
     else:
-        # PIL 降级保底
+        # PIL 降级容错
         with Image.open(io.BytesIO(raw_bytes)) as pil_img:
             img = ImageOps.exif_transpose(pil_img.convert("RGB"))
         w, h = img.size
         gray = ImageOps.grayscale(img)
-        bg = gray.filter(ImageFilter.GaussianBlur(radius=20))
+        bg = gray.filter(ImageFilter.BoxBlur(radius=20))
         gray_np = np.array(gray, dtype=np.float32)
         bg_np = np.array(bg, dtype=np.float32) + 1.0
 
-        diff = (gray_np / bg_np) * 255.0
-        diff = np.where(diff < 170.0, (diff / 170.0) ** 1.6 * 80.0, diff)
-        diff = np.where(diff > 205.0, 255.0, diff)
+        diff = np.clip((gray_np / bg_np) * 255.0, 0, 255)
+        diff = np.where(diff > 195.0, 255.0, diff)
+        diff = np.where(diff < 160.0, (diff / 160.0) ** 1.6 * 70.0, diff)
         mono_res = np.clip(diff, 0, 255).astype(np.uint8)
 
         if is_color:
             r, g, b = img.split()
-            r_np = np.clip((np.array(r, dtype=np.float32) / bg_np) * 255.0 * 1.15, 0, 255)
-            g_np = np.clip((np.array(g, dtype=np.float32) / bg_np) * 255.0 * 1.15, 0, 255)
-            b_np = np.clip((np.array(b, dtype=np.float32) / bg_np) * 255.0 * 1.15, 0, 255)
+            r_np = np.clip((np.array(r, dtype=np.float32) / bg_np) * 255.0 * 1.2, 0, 255)
+            g_np = np.clip((np.array(g, dtype=np.float32) / bg_np) * 255.0 * 1.1, 0, 255)
+            b_np = np.clip((np.array(b, dtype=np.float32) / bg_np) * 255.0 * 1.1, 0, 255)
             out_img = Image.fromarray(np.stack([r_np, g_np, b_np], axis=-1).astype(np.uint8), mode="RGB")
         else:
             out_img = Image.fromarray(mono_res)
