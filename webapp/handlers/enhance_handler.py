@@ -7,182 +7,170 @@ import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
 
-def auto_crop_borders(img):
+def remove_wood_and_dark_margins(img):
     """
     全能王核心算子 1：
-    上下四周边界暗区扫描，切除顶部、底部露出的桌面木纹与阴影
+    上下四周边界暗区扫描，彻底切掉顶部、底部露出的深色木纹桌面与暗角
     """
-    try:
-        h, w = img.shape[:2]
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # 获取整张纸面中部的白纸特征亮度参考值 (75分位)
-        ref_light = float(np.percentile(gray[int(h * 0.25):int(h * 0.75), int(w * 0.2):int(w * 0.8)], 75))
-        thresh = ref_light * 0.82
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # 1. 扫描顶部 (最多扫描 15%)
-        top_cut = 0
-        top_limit = int(h * 0.15)
-        for y in range(top_limit):
-            row_mean = np.mean(gray[y, :])
-            if row_mean >= thresh:
-                top_cut = y
-                break
+    # 纸张主体白场的基准亮度（取中间区域的 80 分位数）
+    mid_gray = gray[int(h * 0.25):int(h * 0.75), int(w * 0.2):int(w * 0.8)]
+    paper_white = float(np.percentile(mid_gray, 80))
+    thresh = paper_white * 0.78  # 凡是低于白纸亮度 78% 的边缘判定为木纹或黑边
 
-        # 2. 扫描底部 (最多扫描 15%)
-        bot_cut = h
-        bot_limit = int(h * 0.85)
-        for y in range(h - 1, bot_limit, -1):
-            row_mean = np.mean(gray[y, :])
-            if row_mean >= thresh:
-                bot_cut = y + 1
-                break
+    # 1. 扫描顶部木纹 (最多扫描 15%)
+    top = 0
+    for y in range(int(h * 0.15)):
+        if np.mean(gray[y, :]) >= thresh:
+            top = y
+            break
 
-        # 3. 扫描左右边缘 (最多各扫描 5%)
-        left_cut = 0
-        left_limit = int(w * 0.05)
-        for x in range(left_limit):
-            col_mean = np.mean(gray[:, x])
-            if col_mean >= thresh:
-                left_cut = x
-                break
+    # 2. 扫描底部木纹 (最多扫描 15%)
+    bot = h
+    for y in range(h - 1, int(h * 0.85), -1):
+        if np.mean(gray[y, :]) >= thresh:
+            bot = y + 1
+            break
 
-        right_cut = w
-        right_limit = int(w * 0.95)
-        for x in range(w - 1, right_limit, -1):
-            col_mean = np.mean(gray[:, x])
-            if col_mean >= thresh:
-                right_cut = x + 1
-                break
+    # 3. 扫描左右黑边 (最多扫描 6%)
+    left = 0
+    for x in range(int(w * 0.06)):
+        if np.mean(gray[:, x]) >= thresh:
+            left = x
+            break
 
-        # 安全约束，防止误切正文
-        top_cut = min(top_cut, int(h * 0.10))
-        bot_cut = max(bot_cut, int(h * 0.90))
-        left_cut = min(left_cut, int(w * 0.04))
-        right_cut = max(right_cut, int(w * 0.96))
+    right = w
+    for x in range(w - 1, int(w * 0.94), -1):
+        if np.mean(gray[:, x]) >= thresh:
+            right = x + 1
+            break
 
-        return img[top_cut:bot_cut, left_cut:right_cut]
-    except Exception:
-        pass
-    return img
+    # 保底：若原图底部确实有木纹（实拍图常见），至少安全切掉底部极边缘
+    if (h - bot) < int(h * 0.02):
+        # 探测最下部 3% 是否有连续暗行
+        if np.mean(gray[int(h * 0.97):, :]) < thresh:
+            bot = int(h * 0.96)
 
-def deskew_by_projection(img):
+    # 裁剪生效（限制在合理正文范围）
+    top = min(top, int(h * 0.10))
+    bot = max(bot, int(h * 0.92))
+    left = min(left, int(w * 0.04))
+    right = max(right, int(w * 0.96))
+
+    return img[top:bot, left:right]
+
+def deskew_text_lines(img):
     """
     全能王核心算子 2：
-    基于印刷文本行密集区 Radon 投影方差的自适应水平拉正。
-    即使课本上全是碎字、没有长线，也能以 0.2° 步长高精度修正倾斜。
+    基于文本行水平投影方差法的自适应水平拉正。
+    专门纠正 -5° 到 +5° 的拍摄微倾斜。
     """
-    try:
-        h, w = img.shape[:2]
-        # 裁剪正文中部 60% 区域作为计算样本
-        sub = img[int(h * 0.2):int(h * 0.8), int(w * 0.15):int(w * 0.85)]
-        sub_gray = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
-        
-        # 降采样加速计算
-        calc_w = 400
-        calc_h = int(sub_gray.shape[0] * (calc_w / float(sub_gray.shape[1])))
-        small = cv2.resize(sub_gray, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
+    h, w = img.shape[:2]
+    # 截取中部 60% 区域，避开四周边缘与二维码
+    sub = img[int(h * 0.2):int(h * 0.8), int(w * 0.15):int(w * 0.8)]
+    sub_gray = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
 
-        # 二值化提取文字笔画
-        thresh = np.mean(small) - 15
-        binary = (small < thresh).astype(np.float32)
+    # 缩小加速计算
+    calc_w = 400
+    calc_h = int(sub_gray.shape[0] * (calc_w / float(sub_gray.shape[1])))
+    small = cv2.resize(sub_gray, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
 
-        best_angle = 0.0
-        max_var = 0.0
-        center = (calc_w // 2, calc_h // 2)
+    # 二值化提取正文字迹
+    thresh = float(np.mean(small)) - 15.0
+    binary = (small < thresh).astype(np.float32)
 
-        # 在 -6° 到 +6° 范围内高频精扫
-        for angle in np.arange(-6.0, 6.2, 0.2):
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            rot = cv2.warpAffine(binary, M, (calc_w, calc_h), flags=cv2.INTER_NEAREST)
-            row_sums = np.sum(rot, axis=1)
-            v = np.var(row_sums)
-            if v > max_var:
-                max_var = v
-                best_angle = angle
+    best_angle = 0.0
+    max_var = 0.0
+    center = (calc_w // 2, calc_h // 2)
 
-        if abs(best_angle) >= 0.2:
-            real_center = (w // 2, h // 2)
-            M_real = cv2.getRotationMatrix2D(real_center, best_angle, 1.0)
-            rotated = cv2.warpAffine(img, M_real, (w, h), flags=cv2.INTER_CUBIC,
-                                     borderMode=cv2.BORDER_CONSTANT,
-                                     borderValue=(255, 255, 255))
-            return rotated
-    except Exception:
-        pass
+    # 以 0.25° 步长高精扫描
+    for angle in np.arange(-4.5, 4.75, 0.25):
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        rot = cv2.warpAffine(binary, M, (calc_w, calc_h), flags=cv2.INTER_NEAREST)
+        row_sums = np.sum(rot, axis=1)
+        v = float(np.var(row_sums))
+        if v > max_var:
+            max_var = v
+            best_angle = angle
+
+    if abs(best_angle) >= 0.25:
+        real_center = (w // 2, h // 2)
+        M_real = cv2.getRotationMatrix2D(real_center, best_angle, 1.0)
+        rotated = cv2.warpAffine(img, M_real, (w, h), flags=cv2.INTER_CUBIC,
+                                 borderMode=cv2.BORDER_CONSTANT,
+                                 borderValue=(255, 255, 255))
+        return rotated
     return img
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     """
-    扫描全能王同款图像增强处理流：
-    1. 上下四周桌面木纹/黑边自动切除
-    2. 投影方差高精度文字行水平展平
-    3. 自适应大核背景照度除法 + 白场极限归一化 (背景彻底纯白 255)
-    4. S型深墨沉降 + Lab 彩色饱和度高保真 (粉红单元框、小人肉色、四线格鲜艳全彩)
+    全能王同款处理流：
+    1. 彻底切除上下木纹暗边
+    2. 文字行水平纠偏拉正
+    3. 背景彻底漂白（白场推向 255 纯白）
+    4. 字迹加深 + 彩色饱和度提升
     """
-    try:
-        nparr = np.frombuffer(raw_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return raw_bytes
-
-        # 1. 切除上下木纹暗边
-        img = auto_crop_borders(img)
-
-        # 2. 文本水平基准线拉平
-        img = deskew_by_projection(img)
-
-        h, w = img.shape[:2]
-        is_color = (str(color_mode).strip().lower() == "color")
-
-        if is_color:
-            # 彩色模式：转为 Lab 空间，独立分离光照与色彩
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-            l_channel, a_channel, b_channel = cv2.split(lab)
-
-            # 估计白场背景亮度
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
-            bg_l = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, kernel)
-            bg_l = cv2.GaussianBlur(bg_l, (25, 25), 0).astype(np.float32) + 1.0
-
-            # 照度除法漂白
-            norm_l = (l_channel.astype(np.float32) / bg_l) * 255.0
-
-            # 全能王核心白平衡映射：高于 180 的底色直接推向 255 纯白亮透
-            norm_clean = np.where(norm_l > 180.0, 255.0, norm_l)
-            # 低于 155 的字迹沉降浓墨黑
-            deep_l = np.where(norm_clean < 155.0, (norm_clean / 155.0) ** 1.65 * 60.0, norm_clean)
-            l_enhanced = np.clip(deep_l, 0, 255).astype(np.uint8)
-
-            # 色度增艳（粉红标题圆圈、人物浅肉色衣服、红色四线格）
-            a_float = a_channel.astype(np.float32)
-            b_float = b_channel.astype(np.float32)
-            a_boost = np.clip((a_float - 128.0) * 1.55 + 128.0, 0, 255).astype(np.uint8)
-            b_boost = np.clip((b_float - 128.0) * 1.45 + 128.0, 0, 255).astype(np.uint8)
-
-            merged_lab = cv2.merge([l_enhanced, a_boost, b_boost])
-            out_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
-
-            _, enc = cv2.imencode(".jpg", out_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            return enc.tobytes()
-
-        else:
-            # 黑白试卷模式
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
-            bg_gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-            bg_gray = cv2.GaussianBlur(bg_gray, (25, 25), 0).astype(np.float32) + 1.0
-
-            norm = (gray.astype(np.float32) / bg_gray) * 255.0
-            norm_clean = np.where(norm > 178.0, 255.0, norm)
-            deep = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.7 * 55.0, norm_clean)
-            out_mono = np.clip(deep, 0, 255).astype(np.uint8)
-
-            _, enc = cv2.imencode(".jpg", out_mono, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            return enc.tobytes()
-
-    except Exception:
+    nparr = np.frombuffer(raw_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
         return raw_bytes
+
+    # 1. 切除木纹与阴影暗边
+    img = remove_wood_and_dark_margins(img)
+
+    # 2. 纠正页面倾斜，水平拉直
+    img = deskew_text_lines(img)
+
+    h, w = img.shape[:2]
+    is_color = (str(color_mode).strip().lower() == "color")
+
+    if is_color:
+        # 彩色模式：转 Lab 空间解耦亮度与色彩通道
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+
+        # 形态学滤波提取光照背景
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
+        bg_l = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, kernel)
+        bg_l = cv2.GaussianBlur(bg_l, (27, 27), 0).astype(np.float32) + 1.0
+
+        # 背景归一化除法
+        norm_l = (l_channel.astype(np.float32) / bg_l) * 255.0
+
+        # 全能王强效白场截断：只要归一化后大于 175，直接推向 255 纯白亮透
+        norm_clean = np.where(norm_l > 175.0, 255.0, norm_l)
+        # 低于 150 的文字笔画，加黑压暗
+        deep_l = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.6 * 60.0, norm_clean)
+        l_enhanced = np.clip(deep_l, 0, 255).astype(np.uint8)
+
+        # 饱和度增强：对手掌肉色、粉红标题框、红色四线格适度增艳
+        a_float = a_channel.astype(np.float32)
+        b_float = b_channel.astype(np.float32)
+        a_boost = np.clip((a_float - 128.0) * 1.55 + 128.0, 0, 255).astype(np.uint8)
+        b_boost = np.clip((b_float - 128.0) * 1.45 + 128.0, 0, 255).astype(np.uint8)
+
+        merged_lab = cv2.merge([l_enhanced, a_boost, b_boost])
+        out_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
+
+        _, enc = cv2.imencode(".jpg", out_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        return enc.tobytes()
+
+    else:
+        # 黑白试卷模式
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
+        bg_gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+        bg_gray = cv2.GaussianBlur(bg_gray, (27, 27), 0).astype(np.float32) + 1.0
+
+        norm = (gray.astype(np.float32) / bg_gray) * 255.0
+        norm_clean = np.where(norm > 175.0, 255.0, norm)
+        deep = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.7 * 55.0, norm_clean)
+        out_mono = np.clip(deep, 0, 255).astype(np.uint8)
+
+        _, enc = cv2.imencode(".jpg", out_mono, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        return enc.tobytes()
 
 class EnhancePreviewHandler(BaseHandler):
     def post(self):
