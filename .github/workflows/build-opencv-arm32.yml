@@ -1,0 +1,84 @@
+name: Build Minimal ARM32 OpenCV
+
+on:
+  workflow_dispatch: # 支持在 GitHub 网页手动一键点击运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (ARMv7 Emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm/v7
+
+      - name: Compile Minimal OpenCV inside Debian ARM32 Container
+        run: |
+          mkdir -p output
+          docker run --rm --platform linux/arm/v7 -v $(pwd)/output:/dist debian:bookworm-slim bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential cmake git python3-dev python3-numpy ca-certificates libjpeg-dev libpng-dev
+
+            # 浅克隆 OpenCV 4.8.0 源码
+            git clone --depth 1 --branch 4.8.0 https://github.com/opencv/opencv.git /tmp/opencv
+            cd /tmp/opencv
+            mkdir build && cd build
+
+            # 极限定制：仅保留 core 和 imgproc 模块，关闭所有 GUI、多媒体与冗余库
+            cmake -D CMAKE_BUILD_TYPE=Release \
+                  -D CMAKE_INSTALL_PREFIX=/usr/local \
+                  -D BUILD_SHARED_LIBS=OFF \
+                  -D BUILD_opencv_python3=ON \
+                  -D PYTHON3_EXECUTABLE=/usr/bin/python3 \
+                  -D BUILD_TESTS=OFF \
+                  -D BUILD_PERF_TESTS=OFF \
+                  -D BUILD_EXAMPLES=OFF \
+                  -D BUILD_DOCS=OFF \
+                  -D WITH_1394=OFF \
+                  -D WITH_CUDA=OFF \
+                  -D WITH_CUFFT=OFF \
+                  -D WITH_FFMPEG=OFF \
+                  -D WITH_GSTREAMER=OFF \
+                  -D WITH_GTK=OFF \
+                  -D WITH_OPENEXR=OFF \
+                  -D WITH_TIFF=OFF \
+                  -D WITH_V4L=OFF \
+                  -D WITH_WEBP=OFF \
+                  -D WITH_IPP=OFF \
+                  -D WITH_ITT=OFF \
+                  -D WITH_LAPACK=OFF \
+                  -D WITH_EIGEN=OFF \
+                  -D BUILD_opencv_apps=OFF \
+                  -D BUILD_opencv_dnn=OFF \
+                  -D BUILD_opencv_video=OFF \
+                  -D BUILD_opencv_videoio=OFF \
+                  -D BUILD_opencv_calib3d=OFF \
+                  -D BUILD_opencv_features2d=OFF \
+                  -D BUILD_opencv_flann=OFF \
+                  -D BUILD_opencv_highgui=OFF \
+                  -D BUILD_opencv_ml=OFF \
+                  -D BUILD_opencv_objdetect=OFF \
+                  -D BUILD_opencv_photo=OFF \
+                  -D BUILD_opencv_stitching=OFF \
+                  -D BUILD_opencv_gapi=OFF \
+                  ..
+
+            make -j$(nproc)
+
+            # 提取生成的动态库并剔除调试符号瘦身
+            SO_PATH=$(find lib/ -name "cv2*.so" | head -n 1)
+            cp "$SO_PATH" /dist/cv2.so
+            strip --strip-unneeded /dist/cv2.so
+          '
+
+      - name: Upload cv2.so Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cv2-arm32-minimal
+          path: output/cv2.so
