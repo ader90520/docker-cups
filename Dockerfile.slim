@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     OPENCV_LOG_LEVEL=ERROR
 
-# 1. 基础系统环境、驱动与精简版系统 OpenCV
+# 1. 基础系统环境、驱动与轻量 Python 运行库 (不装任何多余的 opencv 臃肿依赖，体积稳固在 140MB 级)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -34,33 +34,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tornado \
     python3-requests \
     python3-numpy \
-    python3-opencv \
-    libgomp1 \
-    libglib2.0-0 \
+    libjpeg62-turbo \
+    libpng16-16 \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    # 核心瘦身：精准剔除 opencv 拖进来的无用多媒体与桌面 GUI 动态库 (立减 140MB+)
-    && rm -rf /usr/lib/*-linux-gnu*/libavcodec* \
-              /usr/lib/*-linux-gnu*/libavformat* \
-              /usr/lib/*-linux-gnu*/libavutil* \
-              /usr/lib/*-linux-gnu*/libswscale* \
-              /usr/lib/*-linux-gnu*/libswresample* \
-              /usr/lib/*-linux-gnu*/libQt5* \
-              /usr/lib/*-linux-gnu*/libgtk* \
-              /usr/lib/*-linux-gnu*/libgstreamer* \
-              /usr/lib/*-linux-gnu*/libgst* \
-              /usr/lib/*-linux-gnu*/libX11* \
-              /usr/lib/*-linux-gnu*/libwayland* \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /root/.cache
 
-# 2. 拷贝代码与静态文件
+# 2. 拷贝代码与静态文件 (保留完整结构)
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
+
+# 关键步骤：把 5MB 的纯核心 cv2.so 注入到 Python 的全局库目录中
+RUN cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
+    chmod 755 /usr/lib/python3/dist-packages/cv2.so
 
 # 3. 清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
@@ -74,7 +65,7 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动微码安装、主题美化与中文语言包注入
+# 5. 执行驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
