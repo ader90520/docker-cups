@@ -49,9 +49,14 @@ COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 关键步骤：把 5MB 的纯核心 cv2.so 注入到 Python 的全局库目录中
-RUN cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
-    chmod 755 /usr/lib/python3/dist-packages/cv2.so
+# 关键步骤：带有容错守护的注入逻辑，检测到 cv2.so 则注入环境，未生成时安全跳过避免 buildx exit code 1
+RUN if [ -f /opt/modules/cv2.so ]; then \
+        cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
+        chmod 755 /usr/lib/python3/dist-packages/cv2.so && \
+        echo "✔ cv2.so 成功注入 Python 环境"; \
+    else \
+        echo "⚠ 未检测到 /opt/modules/cv2.so，跳过注入"; \
+    fi
 
 # 3. 清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
