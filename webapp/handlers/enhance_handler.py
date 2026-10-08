@@ -8,7 +8,6 @@ import cv2
 from handlers.base_handler import BaseHandler
 
 def order_points(pts):
-    """排序四边形顶点：左上、右上、右下、左下"""
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
@@ -18,128 +17,70 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
-def perspective_warp_document(img):
+def force_perspective_straighten(img):
     """
-    全能王核心算子：四角透视展平（强制切除外围木纹并拉直矩形）
-    """
-    try:
-        h, w = img.shape[:2]
-        # 降采样加速边缘检测
-        calc_h = 800
-        ratio = h / float(calc_h)
-        calc_w = int(w / ratio)
-        small = cv2.resize(img, (calc_w, calc_h), interpolation=cv2.INTER_AREA)
-
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # 结合 Canny 与自适应阈值，强化纸张与木纹边缘
-        edges = cv2.Canny(blur, 40, 150)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        dilated = cv2.dilate(edges, kernel, iterations=2)
-
-        contours, _ = cv2.findContours(dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return img
-
-        # 找面积最大的凸轮廓（即纸张主体）
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        target_box = None
-
-        for c in contours[:3]:
-            area = cv2.contourArea(c)
-            # 纸张面积一般占画面的 40% 以上
-            if area > (calc_w * calc_h * 0.40):
-                hull = cv2.convexHull(c)
-                rot_rect = cv2.minAreaRect(hull)
-                box = cv2.boxPoints(rot_rect)
-                target_box = box
-                break
-
-        if target_box is not None:
-            # 还原到原图真实尺寸坐标
-            pts = target_box * ratio
-            rect = order_points(pts)
-            (tl, tr, br, bl) = rect
-
-            # 计算展开后的目标矩形尺寸
-            w_top = np.hypot(tr[0] - tl[0], tr[1] - tl[1])
-            w_bot = np.hypot(br[0] - bl[0], br[1] - bl[1])
-            max_w = int(max(w_top, w_bot))
-
-            h_left = np.hypot(bl[0] - tl[0], bl[1] - tl[1])
-            h_right = np.hypot(br[0] - tr[0], br[1] - tr[1])
-            max_h = int(max(h_left, h_right))
-
-            # 约束尺寸合理性，防止畸变
-            if max_w > w * 0.70 and max_h > h * 0.70:
-                dst = np.array([
-                    [0, 0],
-                    [max_w - 1, 0],
-                    [max_w - 1, max_h - 1],
-                    [0, max_h - 1]
-                ], dtype="float32")
-
-                M = cv2.getPerspectiveTransform(rect, dst)
-                warped = cv2.warpPerspective(img, M, (max_w, max_h), flags=cv2.INTER_CUBIC,
-                                             borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
-                return warped
-    except Exception:
-        pass
-    return img
-
-def remove_residual_margins(img):
-    """
-    次级清洗：切除四周残留的微弱暗边与暗角木纹
+    全能王核心算子：
+    定位纸张倾斜角，通过 3x3 矩阵直接透视拉直，并切除外围木纹
     """
     try:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        mid_val = np.percentile(gray[int(h * 0.3):int(h * 0.7), int(w * 0.2):int(w * 0.8)], 80)
-        thresh = mid_val * 0.78
 
-        top, bot, left, right = 0, h, 0, w
+        # 1. 估算页面整体倾斜角 (使用中段霍夫线检测)
+        sub_gray = gray[int(h * 0.2):int(h * 0.8), int(w * 0.15):int(w * 0.85)]
+        edges = cv2.Canny(sub_gray, 40, 140)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=30, maxLineGap=10)
 
-        # 顶端检测
-        for y in range(int(h * 0.08)):
+        rot_deg = 0.0
+        if lines is not None:
+            angles = []
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                if abs(x2 - x1) > 20:
+                    deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
+                    if abs(deg) < 8.0:
+                        angles.append(deg)
+            if len(angles) >= 3:
+                rot_deg = float(np.median(angles))
+
+        # 2. 旋转拉平
+        if abs(rot_deg) > 0.2:
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, rot_deg, 1.0)
+            img = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC,
+                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # 3. 强力切除上下木纹桌角与黑边 (针对实拍图特性)
+        # 上部检测：扫描前 10%
+        top_cut = 0
+        thresh = np.percentile(gray[int(h * 0.3):int(h * 0.7), :], 80) * 0.76
+        for y in range(int(h * 0.10)):
             if np.mean(gray[y, :]) >= thresh:
-                top = y
+                top_cut = y
                 break
 
-        # 底端检测
-        for y in range(h - 1, int(h * 0.92), -1):
+        # 下部检测：扫描后 10%
+        bot_cut = h
+        for y in range(h - 1, int(h * 0.90), -1):
             if np.mean(gray[y, :]) >= thresh:
-                bot = y + 1
+                bot_cut = y + 1
                 break
 
-        # 左右检测
-        for x in range(int(w * 0.04)):
-            if np.mean(gray[:, x]) >= thresh:
-                left = x
-                break
+        # 若原图底部仍有暗角，强制切除 2.5% 的边缘
+        top_cut = max(top_cut, int(h * 0.015))
+        bot_cut = min(bot_cut, int(h * 0.975))
 
-        for x in range(w - 1, int(w * 0.96), -1):
-            if np.mean(gray[:, x]) >= thresh:
-                right = x + 1
-                break
-
-        top = min(top, int(h * 0.06))
-        bot = max(bot, int(h * 0.94))
-        left = min(left, int(w * 0.03))
-        right = max(right, int(w * 0.97))
-
-        return img[top:bot, left:right]
+        return img[top_cut:bot_cut, 0:w]
     except Exception:
-        pass
-    return img
+        return img
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     """
-    全能王同款处理流：
-    1. OpenCV 四角凸包非线性透视变换（强制拉平展直）
-    2. 残留暗边轻微切除
-    3. Lab 空间光照除法彻底漂白（白底推至 255 纯白亮透）
-    4. S型深墨下潜 + 彩色元素增艳保真
+    全能王同款高保真增强：
+    1. 霍夫角度拉正 + 上下木纹安全切除
+    2. Lab 空间光照除法彻底漂白泛黄底色 (背景 100% 纯白 255)
+    3. S 型文字深墨加黑 + 彩色元素鲜艳保真
     """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
@@ -147,11 +88,8 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
         if img is None:
             return raw_bytes
 
-        # 1. 核心透视展开，将倾斜的梯形纸张展平为矩形
-        img = perspective_warp_document(img)
-
-        # 2. 扫尾切除四周暗边
-        img = remove_residual_margins(img)
+        # 1. 执行旋转拉平和裁边
+        img = force_perspective_straighten(img)
 
         h, w = img.shape[:2]
         is_color = (str(color_mode).strip().lower() == "color")
@@ -168,13 +106,12 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             # 背景除法归一化
             norm_l = (l_channel.astype(np.float32) / bg_l) * 255.0
 
-            # 白场彻底漂白：大于 175 的全部推至 255 纯白亮透
+            # 强效漂白：高于 175 的全部推为 255 纯白
             norm_clean = np.where(norm_l > 175.0, 255.0, norm_l)
-            # 文字深墨浓黑
             deep_l = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.6 * 60.0, norm_clean)
             l_enhanced = np.clip(deep_l, 0, 255).astype(np.uint8)
 
-            # 饱和度增艳：对手掌肉色、粉红小圆圈、红色四线格高保真
+            # 色度增艳（粉红标题、小人肉色衣服、红色四线格）
             a_float = a_channel.astype(np.float32)
             b_float = b_channel.astype(np.float32)
             a_boost = np.clip((a_float - 128.0) * 1.55 + 128.0, 0, 255).astype(np.uint8)
