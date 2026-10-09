@@ -1,0 +1,62 @@
+name: Auto Fetch and Export AI Model
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download-and-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Your Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Fetch or Export ONNX Model
+        run: |
+          mkdir -p webapp/models
+          cd webapp/models
+          
+          echo "尝试方案 1：直接通过 GitHub 美国服务器免密抓取官方轻量模型..."
+          wget -q -O doc_corner.onnx https://huggingface.co/DocsaidLab/DocAligner/resolve/main/lcnet100.onnx || true
+          
+          # 验证文件是否完整（模型通常大于 1MB）
+          if [ ! -s doc_corner.onnx ] || [ $(stat -c%s doc_corner.onnx) -lt 1000000 ]; then
+             echo "方案 1 源站拦截。启动方案 2：自动克隆源码并即时编译..."
+             rm -f doc_corner.onnx
+             
+             git clone https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/doc_repo
+             cd /tmp/doc_repo
+             
+             # 安装环境并运行你截图中的 export_onnx.py 脚本
+             pip install -r requirements.txt
+             pip install onnx
+             python export_onnx.py || true
+             
+             # 寻找编译出的 .onnx 文件并复制回你的仓库
+             ONNX_FILE=$(find . -name "*.onnx" | head -n 1)
+             if [ -n "$ONNX_FILE" ]; then
+                echo "成功从源码编译出 ONNX 模型！"
+                cp "$ONNX_FILE" $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
+             else
+                echo "编译失败，未能找到生成的模型文件。"
+                exit 1
+             fi
+          else
+             echo "模型直接抓取成功！"
+          fi
+
+      - name: Commit and Push to Repository
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add webapp/models/doc_corner.onnx
+          git commit -m "Auto-fetch: add doc_corner.onnx AI model" || echo "No changes to commit"
+          git push
