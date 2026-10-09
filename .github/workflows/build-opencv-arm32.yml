@@ -1,4 +1,4 @@
-Name: Build and Commit Minimal OpenCV for ARM32
+name: Build and Commit Minimal OpenCV for ARM32
 
 on:
   workflow_dispatch: # 在 GitHub Actions 页面点击一键触发
@@ -24,16 +24,20 @@ jobs:
           docker run --rm --platform linux/arm/v7 -v $(pwd)/modules:/dist debian:bookworm-slim bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
+            
+            # 1. 补全 Python 编译所需的全部底层头文件和 pybind11
             apt-get update
             apt-get install -y --no-install-recommends \
-              build-essential cmake git python3-dev python3-numpy ca-certificates libjpeg-dev libpng-dev
+              build-essential cmake git python3-dev python3-numpy \
+              python3-setuptools pybind11-dev ca-certificates \
+              libjpeg-dev libpng-dev
 
-            # 浅克隆 OpenCV 4.8.0 源码
+            # 2. 浅克隆 OpenCV 4.8.0 源码
             git clone --depth 1 --branch 4.8.0 https://github.com/opencv/opencv.git /tmp/opencv
             cd /tmp/opencv
             mkdir build && cd build
 
-            # 极限精简编译：开启 core, imgproc 和 dnn，彻底关闭所有 GUI 与多媒体
+            # 3. 极限精简编译：开启 core, imgproc 和 dnn，彻底关闭所有 GUI 与多媒体
             cmake -D CMAKE_BUILD_TYPE=Release \
                   -D CMAKE_INSTALL_PREFIX=/usr/local \
                   -D BUILD_SHARED_LIBS=OFF \
@@ -73,10 +77,19 @@ jobs:
                   -D BUILD_opencv_gapi=OFF \
                   ..
 
-            make -j$(nproc)
+            # 4. 关键修复：降低并发数至 2，防止 QEMU 模拟器打满内存导致编译器崩溃
+            make -j2
 
-            # 提取生成的动态库并剔除调试符号瘦身
-            SO_PATH=$(find lib/ -name "cv2*.so" | head -n 1)
+            # 5. 查找生成的动态库 (全局搜索，防止 CMake 存放路径变动)
+            echo ">>> 正在查找生成的 cv2.so 文件..."
+            SO_PATH=$(find . -name "cv2*.so" | head -n 1)
+            
+            if [ -z "$SO_PATH" ]; then
+              echo "❌ 致命错误: 未能找到生成的 cv2.so！Python 模块可能被跳过了。"
+              exit 1
+            fi
+            
+            echo "✔ 成功找到动态库: $SO_PATH"
             cp "$SO_PATH" /dist/cv2.so
             strip --strip-unneeded /dist/cv2.so
           '
@@ -86,5 +99,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add modules/cv2.so
-          git commit -m "Auto-build: add minimal ARM32 cv2.so (with DNN) to modules" || echo "No changes to commit"
+          git commit -m "Auto-build: fix & update minimal ARM32 cv2.so (with DNN) to modules" || echo "No changes to commit"
           git push
