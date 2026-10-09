@@ -1,10 +1,10 @@
-name: Auto Fetch and Export AI Model
+name: Auto Fetch AI Model
 
 on:
   workflow_dispatch:
 
 jobs:
-  download-and-commit:
+  download-model:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,45 +18,49 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Fetch or Export ONNX Model
+      - name: Install Dependencies
+        run: pip install huggingface_hub requests
+
+      - name: Smart Fetch ONNX Model
         run: |
           mkdir -p webapp/models
-          cd webapp/models
-          
-          echo "尝试方案 1：直接通过 GitHub 美国服务器免密抓取官方轻量模型..."
-          wget -q -O doc_corner.onnx https://huggingface.co/DocsaidLab/DocAligner/resolve/main/lcnet100.onnx || true
-          
-          # 验证文件是否完整（模型通常大于 1MB）
-          if [ ! -s doc_corner.onnx ] || [ $(stat -c%s doc_corner.onnx) -lt 1000000 ]; then
-             echo "方案 1 源站拦截。启动方案 2：自动克隆源码并即时编译..."
-             rm -f doc_corner.onnx
-             
-             git clone https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/doc_repo
-             cd /tmp/doc_repo
-             
-             # 安装环境并运行你截图中的 export_onnx.py 脚本
-             pip install -r requirements.txt
-             pip install onnx
-             python export_onnx.py || true
-             
-             # 寻找编译出的 .onnx 文件并复制回你的仓库
-             ONNX_FILE=$(find . -name "*.onnx" | head -n 1)
-             if [ -n "$ONNX_FILE" ]; then
-                echo "成功从源码编译出 ONNX 模型！"
-                cp "$ONNX_FILE" $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
-             else
-                echo "编译失败，未能找到生成的模型文件。"
-                exit 1
-             fi
-          else
-             echo "模型直接抓取成功！"
-          fi
+          python -c "
+          import os, shutil
+          from huggingface_hub import hf_hub_download, list_repo_files
 
+          repo_id = 'DocsaidLab/DocAligner'
+          try:
+              print(f'>>> 正在连接 HuggingFace 检索 {repo_id} ...')
+              files = list_repo_files(repo_id)
+              
+              # 优先寻找轻量级的 lcnet 模型
+              onnx_files = [f for f in files if f.endswith('.onnx') and 'lcnet' in f.lower()]
+              if not onnx_files:
+                  onnx_files = [f for f in files if f.endswith('.onnx')]
+              
+              if onnx_files:
+                  target_file = onnx_files[0]
+                  print(f'✔ 找到模型: {target_file}，正在启动专用线路下载...')
+                  
+                  # 自动处理 LFS 和重定向下载
+                  path = hf_hub_download(repo_id=repo_id, filename=target_file)
+                  shutil.copy(path, 'webapp/models/doc_corner.onnx')
+                  
+                  print('✔ 模型下载并提取成功！')
+                  exit(0)
+              else:
+                  print('❌ 仓库中未找到 .onnx 文件。')
+          except Exception as e:
+              print(f'❌ 获取失败，可能仓库已被设为私有或网络阻断: {e}')
+          
+          exit(1)
+          "
+          
       - name: Commit and Push to Repository
+        if: success()
         run: |
-          cd $GITHUB_WORKSPACE
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Auto-fetch: add doc_corner.onnx AI model" || echo "No changes to commit"
+          git commit -m "Auto-fetch: add doc_corner.onnx AI model via HF Hub" || echo "No changes to commit"
           git push
