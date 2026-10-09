@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
 import io
 import math
 import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
 
-def order_points(pts):
+# 预留 AI 模型入口，缺失时系统将自动降级使用强大的纯 OpenCV 寻边算法
+MODEL_PATH = "/opt/webapp/models/doc_corner.onnx"
+net = None
+if os.path.exists(MODEL_PATH):
+    try:
+        net = cv2.dnn.readNetFromONNX(MODEL_PATH)
+        net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    except Exception:
+        pass
+
+def order_points_cv(pts):
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
@@ -17,126 +29,139 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
-def force_perspective_straighten(img):
-    """
-    全能王核心算子：
-    定位纸张倾斜角，通过 3x3 矩阵直接透视拉直，并切除外围木纹
-    """
+def auto_perspective_warp(cv_img):
+    """双引擎透视拉平：AI 模型优先，纯 OpenCV 形态学强力兜底"""
+    if net is not None:
+        try:
+            orig = cv_img.copy()
+            h, w = cv_img.shape[:2]
+            blob = cv2.dnn.blobFromImage(cv_img, 1.0/255.0, (256, 256), swapRB=True, crop=False)
+            net.setInput(blob)
+            out = net.forward()
+            
+            corners = out[0].reshape(4, 2)
+            corners[:, 0] *= w
+            corners[:, 1] *= h
+            rect = order_points_cv(corners)
+            (tl, tr, br, bl) = rect
+            
+            widthA = np.hypot(br[0] - bl[0], br[1] - bl[1])
+            widthB = np.hypot(tr[0] - tl[0], tr[1] - tl[1])
+            maxWidth = max(int(widthA), int(widthB))
+
+            heightA = np.hypot(tr[0] - br[0], tr[1] - br[1])
+            heightB = np.hypot(tl[0] - bl[0], tl[1] - bl[1])
+            maxHeight = max(int(heightA), int(heightB))
+            
+            if maxWidth > 100 and maxHeight > 100:
+                dst = np.array([[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]], dtype="float32")
+                M = cv2.getPerspectiveTransform(rect, dst)
+                warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight), flags=cv2.INTER_LINEAR)
+                pad_y, pad_x = int(maxHeight * 0.015), int(maxWidth * 0.015)
+                return warped[pad_y:maxHeight-pad_y, pad_x:maxWidth-pad_x]
+        except Exception:
+            pass
+
+    # === 纯 OpenCV 强力兜底 ===
     try:
-        h, w = img.shape[:2]
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        orig = cv_img.copy()
+        h, w = cv_img.shape[:2]
+        ratio = h / 600.0
+        small_w = int(w / ratio)
+        small = cv2.resize(cv_img, (small_w, 600), interpolation=cv2.INTER_AREA)
 
-        # 1. 估算页面整体倾斜角 (使用中段霍夫线检测)
-        sub_gray = gray[int(h * 0.2):int(h * 0.8), int(w * 0.15):int(w * 0.85)]
-        edges = cv2.Canny(sub_gray, 40, 140)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=30, maxLineGap=10)
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        rot_deg = 0.0
-        if lines is not None:
-            angles = []
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                if abs(x2 - x1) > 20:
-                    deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
-                    if abs(deg) < 8.0:
-                        angles.append(deg)
-            if len(angles) >= 3:
-                rot_deg = float(np.median(angles))
+        # 边缘检测与形态学闭运算，将断裂的纸张边缘连成一个整体
+        edged = cv2.Canny(blurred, 30, 120)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+        closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
 
-        # 2. 旋转拉平
-        if abs(rot_deg) > 0.2:
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, rot_deg, 1.0)
-            img = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC,
-                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
 
-        # 3. 强力切除上下木纹桌角与黑边 (针对实拍图特性)
-        # 上部检测：扫描前 10%
-        top_cut = 0
-        thresh = np.percentile(gray[int(h * 0.3):int(h * 0.7), :], 80) * 0.76
-        for y in range(int(h * 0.10)):
-            if np.mean(gray[y, :]) >= thresh:
-                top_cut = y
+        screen_cnt = None
+        for c in cnts:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4 and cv2.contourArea(c) > (small_w * 600 * 0.2):
+                screen_cnt = approx
                 break
 
-        # 下部检测：扫描后 10%
-        bot_cut = h
-        for y in range(h - 1, int(h * 0.90), -1):
-            if np.mean(gray[y, :]) >= thresh:
-                bot_cut = y + 1
-                break
+        if screen_cnt is not None:
+            pts = screen_cnt.reshape(4, 2) * ratio
+            rect = order_points_cv(pts)
+            (tl, tr, br, bl) = rect
+            max_w = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
+            max_h = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
 
-        # 若原图底部仍有暗角，强制切除 2.5% 的边缘
-        top_cut = max(top_cut, int(h * 0.015))
-        bot_cut = min(bot_cut, int(h * 0.975))
-
-        return img[top_cut:bot_cut, 0:w]
+            if max_w > 100 and max_h > 100:
+                dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
+                M = cv2.getPerspectiveTransform(rect, dst)
+                warped = cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_LINEAR)
+                
+                pad_y, pad_x = int(max_h * 0.015), int(max_w * 0.015)
+                return warped[pad_y:max_h-pad_y, pad_x:max_w-pad_x]
     except Exception:
-        return img
+        pass
+
+    return cv_img
+
+def camscanner_core_render(img, is_color=True):
+    """文档漂白引擎：消除灰斑，自适应光照补偿"""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
+    bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    bg = cv2.GaussianBlur(bg, (31, 31), 0).astype(np.float32) + 1.0
+    
+    bg_3d = cv2.cvtColor(bg, cv2.COLOR_GRAY2BGR)
+    norm = (img.astype(np.float32) / bg_3d) * 255.0
+    norm = np.clip(norm, 0, 255).astype(np.uint8)
+    
+    if not is_color:
+        norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(norm_gray, (0, 0), 1.0)
+        sharp = cv2.addWeighted(norm_gray, 1.5, blur, -0.5, 0)
+        res = np.zeros_like(sharp, dtype=np.float32)
+        sharp_f = sharp.astype(np.float32)
+        
+        # 柔和非线性映射，防止硬截断引起的笔画虚线断裂
+        res[sharp_f >= 220.0] = 255.0
+        mask_mid = (sharp_f >= 140.0) & (sharp_f < 220.0)
+        res[mask_mid] = 140.0 + ((sharp_f[mask_mid] - 140.0) / 80.0) * 115.0
+        mask_dark = sharp_f < 140.0
+        res[mask_dark] = (sharp_f[mask_dark] / 140.0) ** 1.5 * 60.0
+        return cv2.cvtColor(np.clip(res, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+
+    hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    blur_v = cv2.GaussianBlur(v, (0, 0), 1.0)
+    v_sharp = cv2.addWeighted(v, 1.5, blur_v, -0.5, 0)
+    
+    v_res = np.zeros_like(v_sharp, dtype=np.float32)
+    v_f = v_sharp.astype(np.float32)
+    v_res[v_f >= 220.0] = 255.0
+    mask_mid = (v_f >= 140.0) & (v_f < 220.0)
+    v_res[mask_mid] = 140.0 + ((v_f[mask_mid] - 140.0) / 80.0) * 115.0
+    mask_dark = v_f < 140.0
+    v_res[mask_dark] = (v_f[mask_dark] / 140.0) ** 1.5 * 60.0
+    
+    v_final = np.clip(v_res, 0, 255).astype(np.uint8)
+    s_res = np.where(v_final > 240, 0, np.clip(s.astype(np.float32) * 1.6, 0, 255))
+    merged = cv2.merge([h, s_res.astype(np.uint8), v_final])
+    return cv2.cvtColor(merged, cv2.COLOR_HSV2BGR)
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
-    """
-    全能王同款高保真增强：
-    1. 霍夫角度拉正 + 上下木纹安全切除
-    2. Lab 空间光照除法彻底漂白泛黄底色 (背景 100% 纯白 255)
-    3. S 型文字深墨加黑 + 彩色元素鲜艳保真
-    """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return raw_bytes
-
-        # 1. 执行旋转拉平和裁边
-        img = force_perspective_straighten(img)
-
-        h, w = img.shape[:2]
+        if img is None: return raw_bytes
+        img = auto_perspective_warp(img)
         is_color = (str(color_mode).strip().lower() == "color")
-
-        if is_color:
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-            l_channel, a_channel, b_channel = cv2.split(lab)
-
-            # 形态学滤波提取光照背景
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
-            bg_l = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, kernel)
-            bg_l = cv2.GaussianBlur(bg_l, (27, 27), 0).astype(np.float32) + 1.0
-
-            # 背景除法归一化
-            norm_l = (l_channel.astype(np.float32) / bg_l) * 255.0
-
-            # 强效漂白：高于 175 的全部推为 255 纯白
-            norm_clean = np.where(norm_l > 175.0, 255.0, norm_l)
-            deep_l = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.6 * 60.0, norm_clean)
-            l_enhanced = np.clip(deep_l, 0, 255).astype(np.uint8)
-
-            # 色度增艳（粉红标题、小人肉色衣服、红色四线格）
-            a_float = a_channel.astype(np.float32)
-            b_float = b_channel.astype(np.float32)
-            a_boost = np.clip((a_float - 128.0) * 1.55 + 128.0, 0, 255).astype(np.uint8)
-            b_boost = np.clip((b_float - 128.0) * 1.45 + 128.0, 0, 255).astype(np.uint8)
-
-            merged_lab = cv2.merge([l_enhanced, a_boost, b_boost])
-            out_bgr = cv2.cvtColor(merged_lab, cv2.COLOR_LAB2BGR)
-
-            _, enc = cv2.imencode(".jpg", out_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            return enc.tobytes()
-
-        else:
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
-            bg_gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-            bg_gray = cv2.GaussianBlur(bg_gray, (27, 27), 0).astype(np.float32) + 1.0
-
-            norm = (gray.astype(np.float32) / bg_gray) * 255.0
-            norm_clean = np.where(norm > 175.0, 255.0, norm)
-            deep = np.where(norm_clean < 150.0, (norm_clean / 150.0) ** 1.7 * 55.0, norm_clean)
-            out_mono = np.clip(deep, 0, 255).astype(np.uint8)
-
-            _, enc = cv2.imencode(".jpg", out_mono, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            return enc.tobytes()
-
+        result = camscanner_core_render(img, is_color=is_color)
+        _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        return enc.tobytes()
     except Exception:
         return raw_bytes
 
@@ -145,15 +170,12 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
-
             if not files:
                 self.set_status(400)
                 self.write("未收到预览文件")
                 return
-
             raw_bytes = files[0]["body"]
             processed_bytes = enhance_camscanner_precise(raw_bytes, color_mode=color_mode)
-
             self.set_header("Content-Type", "image/jpeg")
             self.set_header("Cache-Control", "no-cache")
             self.write(processed_bytes)
