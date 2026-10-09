@@ -18,55 +18,37 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install TensorFlow & Exporter
+      - name: Install Dependencies
         run: |
           pip install --upgrade pip
           pip install tensorflow keras tf2onnx onnx
 
-      - name: Clone & Export ONNX
+      - name: Clone & Run Native Exporter
         run: |
           git clone https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/model_source
           cd /tmp/model_source
 
-          # 优先使用作者自带的 export_onnx.py
-          python export_onnx.py || true
+          # 使用作者原生 export_onnx.py 并传齐必选参数
+          python export_onnx.py \
+            --checkpoint checkpoints/mobilenetv2_256_best \
+            --output /tmp/doc_corner.onnx \
+            --opset 13
 
-          # 如果未生成，直接用 tf2onnx 转换现成的 best_model_inference.keras
+          # 校验生成结果
           if [ ! -f /tmp/doc_corner.onnx ]; then
-            python -c "
-          import os, tf2onnx, keras, tensorflow as tf
-
-          keras_path = 'checkpoints/mobilenetv2_256_best/best_model_inference.keras'
-          if not os.path.exists(keras_path):
-              keras_path = 'checkpoints/mobilenetv2_256_best/best_model.keras'
-
-          print('载入 Keras 模型:', keras_path)
-          model = keras.models.load_model(keras_path, compile=False)
-
-          # 导出为 ONNX，固定输入维度 (1, 256, 256, 3) 或 (1, 3, 256, 256)
-          input_signature = [tf.TensorSpec([1, 256, 256, 3], tf.float32, name='input')]
-          onnx_model, _ = tf2onnx.convert.from_keras(model, input_signature=input_signature, opset=13)
-
-          with open('/tmp/doc_corner.onnx', 'wb') as f:
-              f.write(onnx_model.SerializeToString())
-          print('模型导出成功！')
-          "
+            echo "作者 export_onnx 未直接在 /tmp 生成，查找工作区内所有的 onnx 文件..."
+            find . -name "*.onnx" -exec cp {} /tmp/doc_corner.onnx \;
           fi
 
-          # 查找生成的所有 onnx 文件
-          TARGET=$(find /tmp -name "*.onnx" -o -name "doc_corner.onnx" | head -n 1)
-          if [ -z "$TARGET" ]; then
-              TARGET=$(find . -name "*.onnx" | head -n 1)
-          fi
+          ls -lh /tmp/doc_corner.onnx
 
           mkdir -p $GITHUB_WORKSPACE/webapp/models/
-          cp "$TARGET" $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
-          ls -lh $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
+          cp /tmp/doc_corner.onnx $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
 
       - name: Commit Model to Repository
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Auto-build: compiled doc_corner.onnx from Keras weights" || echo "Nothing to commit"
+          git commit -m "Auto-build: successfully exported doc_corner.onnx" || echo "Nothing to commit"
           git push
