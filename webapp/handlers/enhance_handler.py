@@ -62,7 +62,7 @@ def auto_perspective_warp(cv_img):
         except Exception:
             pass
 
-    # === 纯 OpenCV 强力兜底 ===
+    # === 纯 OpenCV 强力兜底 (如果没有模型，会自动执行这里) ===
     try:
         orig = cv_img.copy()
         h, w = cv_img.shape[:2]
