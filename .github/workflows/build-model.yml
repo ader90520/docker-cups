@@ -18,67 +18,55 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install PyTorch & Dependencies
+      - name: Install TensorFlow & Exporter
         run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install onnx onnxruntime albumentations opencv-python-headless
+          pip install --upgrade pip
+          pip install tensorflow keras tf2onnx onnx
 
       - name: Clone & Export ONNX
         run: |
-          # 1. 拉取包含权重代码的 DocCornerNet-CoordClass 仓库
           git clone https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/model_source
           cd /tmp/model_source
 
-          # 2. 检查 checkpoints 目录下的权重文件
-          echo "查看权重目录内容:"
-          ls -la checkpoints/mobilenetv2_256_best/
+          # 优先使用作者自带的 export_onnx.py
+          python export_onnx.py || true
 
-          # 3. 运行转换脚本导出 256x256 的 ONNX
-          python export_onnx.py \
-            --checkpoint checkpoints/mobilenetv2_256_best \
-            --output /tmp/doc_corner.onnx || python export.py || true
-
-          # 4. 如果 export_onnx 失败，执行内嵌兜底导出脚本
+          # 如果未生成，直接用 tf2onnx 转换现成的 best_model_inference.keras
           if [ ! -f /tmp/doc_corner.onnx ]; then
-            echo "尝试直接使用 Python API 实例化导出..."
             python -c "
-          import torch, os
-          from model import CornerNet
+          import os, tf2onnx, keras, tensorflow as tf
 
-          # 加载 MobileNetV2 结构，适配我们代码的 256x256 输入
-          model = CornerNet(backbone='mobilenetv2')
-          ckpt_path = 'checkpoints/mobilenetv2_256_best'
-          weight_file = [os.path.join(ckpt_path, f) for f in os.listdir(ckpt_path) if f.endswith(('.pth', '.pt', '.bin'))][0]
-          print('载入权重文件:', weight_file)
-          
-          state = torch.load(weight_file, map_location='cpu')
-          if 'state_dict' in state:
-              state = state['state_dict']
-          model.load_state_dict(state, strict=False)
-          model.eval()
+          keras_path = 'checkpoints/mobilenetv2_256_best/best_model_inference.keras'
+          if not os.path.exists(keras_path):
+              keras_path = 'checkpoints/mobilenetv2_256_best/best_model.keras'
 
-          dummy_input = torch.randn(1, 3, 256, 256)
-          torch.onnx.export(
-              model,
-              dummy_input,
-              '/tmp/doc_corner.onnx',
-              input_names=['input'],
-              output_names=['output'],
-              opset_version=11
-          )
-          print('内嵌导出成功！')
+          print('载入 Keras 模型:', keras_path)
+          model = keras.models.load_model(keras_path, compile=False)
+
+          # 导出为 ONNX，固定输入维度 (1, 256, 256, 3) 或 (1, 3, 256, 256)
+          input_signature = [tf.TensorSpec([1, 256, 256, 3], tf.float32, name='input')]
+          onnx_model, _ = tf2onnx.convert.from_keras(model, input_signature=input_signature, opset=13)
+
+          with open('/tmp/doc_corner.onnx', 'wb') as f:
+              f.write(onnx_model.SerializeToString())
+          print('模型导出成功！')
           "
           fi
 
-          # 5. 校验模型大小并拷贝至仓库目录
-          ls -lh /tmp/doc_corner.onnx
+          # 查找生成的所有 onnx 文件
+          TARGET=$(find /tmp -name "*.onnx" -o -name "doc_corner.onnx" | head -n 1)
+          if [ -z "$TARGET" ]; then
+              TARGET=$(find . -name "*.onnx" | head -n 1)
+          fi
+
           mkdir -p $GITHUB_WORKSPACE/webapp/models/
-          cp /tmp/doc_corner.onnx $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
+          cp "$TARGET" $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
+          ls -lh $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
 
       - name: Commit Model to Repository
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Add compiled doc_corner.onnx for ARM DNN" || echo "Nothing to commit"
+          git commit -m "Auto-build: compiled doc_corner.onnx from Keras weights" || echo "Nothing to commit"
           git push
