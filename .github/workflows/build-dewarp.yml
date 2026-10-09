@@ -1,0 +1,91 @@
+name: Build Tiny-DocDewarp ONNX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx onnxruntime onnxslim
+
+      - name: Build & Export Lightweight Dewarp Model
+        run: |
+          python -c "
+          import torch
+          import torch.nn as nn
+          from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
+
+          class TinyDewarpNet(nn.Module):
+              def __init__(self, grid_size=32):
+                  super().__init__()
+                  # 采用 MobileNetV3-Small 作为极轻量骨干
+                  backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT).features
+                  self.backbone = backbone
+                  
+                  # 渐进式上采样头：输出 (B, 2, 32, 32) 归一化网格相对位移
+                  self.decoder = nn.Sequential(
+                      nn.Conv2d(576, 128, kernel_size=3, padding=1),
+                      nn.BatchNorm2d(128),
+                      nn.Hardswish(),
+                      nn.Upsample(size=(16, 16), mode='bilinear', align_corners=True),
+                      nn.Conv2d(128, 64, kernel_size=3, padding=1),
+                      nn.BatchNorm2d(64),
+                      nn.Hardswish(),
+                      nn.Upsample(size=(grid_size, grid_size), mode='bilinear', align_corners=True),
+                      nn.Conv2d(64, 2, kernel_size=3, padding=1),
+                      nn.Tanh() # 输出限制在 [-1, 1] 相对偏移量区间
+                  )
+
+              def forward(self, x):
+                  feat = self.backbone(x)
+                  disp = self.decoder(feat)
+                  return disp
+
+          print('初始化 TinyDewarpNet 架构...')
+          model = TinyDewarpNet(grid_size=32)
+          model.eval()
+
+          dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
+          onnx_raw_path = '/tmp/dewarp_raw.onnx'
+
+          torch.onnx.export(
+              model,
+              dummy_input,
+              onnx_raw_path,
+              input_names=['input'],
+              output_names=['displacement_grid'],
+              opset_version=13,
+              do_constant_folding=True
+          )
+          print('初始 ONNX 导出完成！')
+          "
+
+          # 针对嵌入式 ARM 设备做图优化与常量折叠
+          onnxslim /tmp/dewarp_raw.onnx /tmp/doc_dewarp.onnx
+
+          ls -lh /tmp/doc_dewarp.onnx
+          mkdir -p $GITHUB_WORKSPACE/webapp/models/
+          cp /tmp/doc_dewarp.onnx $GITHUB_WORKSPACE/webapp/models/doc_dewarp.onnx
+
+      - name: Commit Model to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add webapp/models/doc_dewarp.onnx
+          git commit -m "Add compiled tiny doc_dewarp.onnx for ARM CPU" || echo "Nothing to commit"
+          git push
