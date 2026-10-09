@@ -1,4 +1,4 @@
-name: Build and Commit Minimal OpenCV for ARM32
+Name: Build and Commit Minimal OpenCV for ARM32
 
 on:
   workflow_dispatch: # 在 GitHub Actions 页面点击一键触发
@@ -33,7 +33,7 @@ jobs:
             cd /tmp/opencv
             mkdir build && cd build
 
-            # 极限精简编译：仅保留 core 和 imgproc 模块，彻底关闭所有 GUI 与多媒体
+            # 极限精简编译：开启 core, imgproc 和 dnn，彻底关闭所有 GUI 与多媒体
             cmake -D CMAKE_BUILD_TYPE=Release \
                   -D CMAKE_INSTALL_PREFIX=/usr/local \
                   -D BUILD_SHARED_LIBS=OFF \
@@ -58,7 +58,8 @@ jobs:
                   -D WITH_LAPACK=OFF \
                   -D WITH_EIGEN=OFF \
                   -D BUILD_opencv_apps=OFF \
-                  -D BUILD_opencv_dnn=OFF \
+                  -D BUILD_opencv_dnn=ON \
+                  -D BUILD_PROTOBUF=ON \
                   -D BUILD_opencv_video=OFF \
                   -D BUILD_opencv_videoio=OFF \
                   -D BUILD_opencv_calib3d=OFF \
@@ -85,5 +86,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add modules/cv2.so
-          git commit -m "Auto-build: add minimal ARM32 cv2.so to modules" || echo "No changes to commit"
+          git commit -m "Auto-build: add minimal ARM32 cv2.so (with DNN) to modules" || echo "No changes to commit"
           git push
