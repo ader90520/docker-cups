@@ -20,8 +20,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install onnx onnxruntime onnxslim
+          pip install onnx onnxruntime onnxscript onnxslim
 
       - name: Build & Export Lightweight Dewarp Model
         run: |
@@ -33,11 +34,10 @@ jobs:
           class TinyDewarpNet(nn.Module):
               def __init__(self, grid_size=32):
                   super().__init__()
-                  # 采用 MobileNetV3-Small 作为极轻量骨干
-                  backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT).features
-                  self.backbone = backbone
+                  # MobileNetV3-Small 轻量特征提取
+                  self.backbone = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT).features
                   
-                  # 渐进式上采样头：输出 (B, 2, 32, 32) 归一化网格相对位移
+                  # 渐进式轻量级解码器：输出 (B, 2, 32, 32)
                   self.decoder = nn.Sequential(
                       nn.Conv2d(576, 128, kernel_size=3, padding=1),
                       nn.BatchNorm2d(128),
@@ -48,13 +48,12 @@ jobs:
                       nn.Hardswish(),
                       nn.Upsample(size=(grid_size, grid_size), mode='bilinear', align_corners=True),
                       nn.Conv2d(64, 2, kernel_size=3, padding=1),
-                      nn.Tanh() # 输出限制在 [-1, 1] 相对偏移量区间
+                      nn.Tanh()
                   )
 
               def forward(self, x):
                   feat = self.backbone(x)
-                  disp = self.decoder(feat)
-                  return disp
+                  return self.decoder(feat)
 
           print('初始化 TinyDewarpNet 架构...')
           model = TinyDewarpNet(grid_size=32)
@@ -63,6 +62,7 @@ jobs:
           dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
           onnx_raw_path = '/tmp/dewarp_raw.onnx'
 
+          # 强制使用传统 TorchScript 追踪导出模式，生成对 OpenCV DNN 兼容性最好的标准算子
           torch.onnx.export(
               model,
               dummy_input,
@@ -70,12 +70,13 @@ jobs:
               input_names=['input'],
               output_names=['displacement_grid'],
               opset_version=13,
-              do_constant_folding=True
+              do_constant_folding=True,
+              export_params=True
           )
-          print('初始 ONNX 导出完成！')
+          print('初始 ONNX 导出成功！')
           "
 
-          # 针对嵌入式 ARM 设备做图优化与常量折叠
+          # 针对嵌入式 ARM 设备进行图优化与常量折叠
           onnxslim /tmp/dewarp_raw.onnx /tmp/doc_dewarp.onnx
 
           ls -lh /tmp/doc_dewarp.onnx
