@@ -17,7 +17,6 @@ jobs:
       - name: 合并分卷权重文件
         run: |
           mkdir -p weights
-          # 如果存在网页端上传的分卷包，则自动合并还原为完整 .pth
           if ls weights/model.zip.* 1> /dev/null 2>&1; then
             echo "[*] 检测到分卷文件，正在合并..."
             cat weights/model.zip.* > weights/model_mbv3_iou_mix_2C049.pth
@@ -31,7 +30,7 @@ jobs:
 
       - name: 安装模型转换与 INT8 量化依赖
         run: |
-          pip install torch torchvision onnx onnxruntime onnxslim
+          pip install torch torchvision onnx onnxruntime onnxslim opencv-python-headless
 
       - name: 导出为 ONNX 并进行轻量化剪枝与 INT8 量化
         run: |
@@ -45,7 +44,12 @@ jobs:
 
           # 1. 注入 Doc-Image-Tool 算法模块路径
           sys.path.append("/tmp/Doc-Image-Tool")
-          from function_method.DocTrimmingEnhancement.models import *
+          
+          # 动态匹配模块定义
+          try:
+              import function_method.DocTrimmingEnhancement as doc_trim
+          except Exception:
+              from function_method import DocTrimmingEnhancement as doc_trim
 
           weight_path = "weights/model_mbv3_iou_mix_2C049.pth"
           if not os.path.exists(weight_path):
@@ -54,11 +58,32 @@ jobs:
           print(f"[*] 正在载入模型权重: {weight_path}")
           checkpoint = torch.load(weight_path, map_location="cpu")
 
-          try:
-              model = Net()
-              model.load_state_dict(checkpoint)
-          except Exception:
+          # 智能定位模型对象或类
+          model = None
+          if isinstance(checkpoint, torch.nn.Module):
               model = checkpoint
+          else:
+              # 遍历模块寻找模型类（通常继承自 torch.nn.Module）
+              for attr_name in dir(doc_trim):
+                  attr = getattr(doc_trim, attr_name)
+                  if isinstance(attr, type) and issubclass(attr, torch.nn.Module) and attr != torch.nn.Module:
+                      try:
+                          inst = attr()
+                          inst.load_state_dict(checkpoint)
+                          model = inst
+                          print(f"[+] 匹配到模型类: {attr_name}")
+                          break
+                      except Exception:
+                          continue
+
+          if model is None:
+              # 降级尝试全局 Net / Model
+              try:
+                  from function_method.DocTrimmingEnhancement.models import Net
+                  model = Net()
+                  model.load_state_dict(checkpoint)
+              except Exception:
+                  model = checkpoint
 
           model.eval()
 
