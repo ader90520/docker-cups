@@ -9,17 +9,19 @@ on:
 jobs:
   build-and-convert:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 安装 unrar 解压工具
+      - name: 安装 unrar 工具
         run: |
           sudo apt-get update
           sudo apt-get install -y unrar
 
-      - name: 解压 RAR 分卷并建立模型路径映射
+      - name: 解压 RAR 分卷并建立模型读取路径
         run: |
           mkdir -p weights/image_trimming_enhancement
           TARGET_FILE="weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth"
@@ -42,7 +44,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/Doc-Image-Tool
 
-      - name: 安装模型转换与 INT8 量化依赖（补齐 onnxscript）
+      - name: 安装模型转换与 INT8 量化依赖
         run: |
           pip install torch torchvision onnx onnxruntime onnxslim opencv-python-headless onnxscript
 
@@ -63,7 +65,7 @@ jobs:
           model = doc_trim.doc_trimming_enhancement_model
           model.eval()
 
-          # 2. 导出基础 FP32 ONNX（强制使用传统 TorchScript 导出路径）
+          # 2. 导出基础 FP32 ONNX
           dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
           raw_onnx = "raw_model.onnx"
           
@@ -73,7 +75,6 @@ jobs:
               "opset_version": 13,
               "do_constant_folding": True
           }
-          # 兼容 PyTorch 2.x 的参数配置
           try:
               torch.onnx.export(model, dummy_input, raw_onnx, dynamo=False, **export_kwargs)
           except TypeError:
@@ -86,22 +87,22 @@ jobs:
           onnxslim.slim(raw_onnx, slim_onnx)
           print(f"[+] 剪枝优化完成: {os.path.getsize(slim_onnx)/1024/1024:.2f} MB")
 
-          # 4. INT8 动态量化 (体积缩减至 6MB 左右，适配 N1 2GB 内存)
-          os.makedirs("models", exist_ok=True)
-          final_onnx = "models/doc_corner.onnx"
+          # 4. INT8 动态量化并直接输出到 webapp/models/
+          os.makedirs("webapp/models", exist_ok=True)
+          final_onnx = "webapp/models/doc_corner.onnx"
           quantize_dynamic(
               model_input=slim_onnx,
               model_output=final_onnx,
               weight_type=QuantType.QUInt8
           )
           final_size = os.path.getsize(final_onnx) / 1024 / 1024
-          print(f"[+] 最终适配 N1 的量化模型生成成功: {final_onnx} (体积: {final_size:.2f} MB)")
+          print(f"[+] 适配 N1 的量化模型生成成功: {final_onnx} (体积: {final_size:.2f} MB)")
           EOF
 
-      - name: 将转换好的轻量模型提交回仓库
+      - name: 提交更新后的模型到仓库
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add models/doc_corner.onnx
-          git commit -m "chore: compile and quantize doc_corner.onnx via Actions" || exit 0
+          git add webapp/models/doc_corner.onnx
+          git commit -m "chore: compile and quantize doc_corner.onnx into webapp/models via Actions" || exit 0
           git push
