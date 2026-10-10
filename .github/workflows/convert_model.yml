@@ -25,10 +25,8 @@ jobs:
           TARGET_FILE="weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth"
 
           echo "[*] 正在解压 weights/ 目录下的 RAR 分卷..."
-          # 解压 part1.rar 会自动联合解压 part2
           unrar x -o+ weights/model_mbv3_iou_mix_2C049.part1.rar weights/
 
-          # 寻找解压出的完整 .pth 文件并对齐硬编码路径
           EXTRACTED_PTH=$(find weights -maxdepth 2 -name "*.pth" | head -n 1)
           if [ -z "$EXTRACTED_PTH" ]; then
             echo "[-] 解压失败，未找到 .pth 权重文件！"
@@ -44,9 +42,9 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/Doc-Image-Tool
 
-      - name: 安装模型转换与 INT8 量化依赖
+      - name: 安装模型转换与 INT8 量化依赖（补齐 onnxscript）
         run: |
-          pip install torch torchvision onnx onnxruntime onnxslim opencv-python-headless
+          pip install torch torchvision onnx onnxruntime onnxslim opencv-python-headless onnxscript
 
       - name: 导出为 ONNX 并进行轻量化剪枝与 INT8 量化
         run: |
@@ -65,18 +63,22 @@ jobs:
           model = doc_trim.doc_trimming_enhancement_model
           model.eval()
 
-          # 2. 导出基础 FP32 ONNX
+          # 2. 导出基础 FP32 ONNX（强制使用传统 TorchScript 导出路径）
           dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
           raw_onnx = "raw_model.onnx"
-          torch.onnx.export(
-              model,
-              dummy_input,
-              raw_onnx,
-              input_names=["input"],
-              output_names=["output"],
-              opset_version=13,
-              do_constant_folding=True
-          )
+          
+          export_kwargs = {
+              "input_names": ["input"],
+              "output_names": ["output"],
+              "opset_version": 13,
+              "do_constant_folding": True
+          }
+          # 兼容 PyTorch 2.x 的参数配置
+          try:
+              torch.onnx.export(model, dummy_input, raw_onnx, dynamo=False, **export_kwargs)
+          except TypeError:
+              torch.onnx.export(model, dummy_input, raw_onnx, **export_kwargs)
+
           print(f"[+] 原始 ONNX 导出成功: {os.path.getsize(raw_onnx)/1024/1024:.2f} MB")
 
           # 3. 算子精简与无用节点剪枝 (onnxslim)
@@ -101,5 +103,5 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add models/doc_corner.onnx
-          git commit -m "chore: extract rar and quantize doc_corner.onnx via Actions" || exit 0
+          git commit -m "chore: compile and quantize doc_corner.onnx via Actions" || exit 0
           git push
