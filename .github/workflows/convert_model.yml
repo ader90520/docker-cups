@@ -1,50 +1,59 @@
-name: Convert Model to ONNX
+name: Convert Model to Optimized ONNX
 
 on:
-  workflow_dispatch: # 支持网页端手动点击一键运行
+  workflow_dispatch:
   push:
     paths:
-      - 'weights/**'    # 当上传新权重时自动触发
+      - 'weights/**'
 
 jobs:
-  convert:
+  build-and-convert:
     runs-on: ubuntu-latest
 
     steps:
       - name: 检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 拉取 Doc-Image-Tool 源代码定义
+      - name: 合并分卷权重文件
         run: |
-          git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/doc_tool
+          mkdir -p weights
+          # 如果存在网页端上传的分卷包，则自动合并还原为完整 .pth
+          if ls weights/model.zip.* 1> /dev/null 2>&1; then
+            echo "[*] 检测到分卷文件，正在合并..."
+            cat weights/model.zip.* > weights/model_mbv3_iou_mix_2C049.pth
+            echo "[+] 分卷合并成功！文件大小:"
+            ls -lh weights/model_mbv3_iou_mix_2C049.pth
+          fi
 
-      - name: 安装 PyTorch 与 ONNX 转换依赖
+      - name: 克隆算法源码以获取网络定义
         run: |
-          pip install torch torchvision onnx onnxslim
+          git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/Doc-Image-Tool
 
-      - name: 执行转换并自动瘦身 (ONNX Export & Slim)
+      - name: 安装模型转换与 INT8 量化依赖
+        run: |
+          pip install torch torchvision onnx onnxruntime onnxslim
+
+      - name: 导出为 ONNX 并进行轻量化剪枝与 INT8 量化
         run: |
           python - << 'EOF'
-          import sys
           import os
+          import sys
           import torch
+          import onnx
+          import onnxslim
+          from onnxruntime.quantization import quantize_dynamic, QuantType
 
-          # 将 Doc-Image-Tool 加入搜索路径以直接使用模型结构定义
-          sys.path.append("/tmp/doc_tool")
-          
-          # 寻找模型定义文件
+          # 1. 注入 Doc-Image-Tool 算法模块路径
+          sys.path.append("/tmp/Doc-Image-Tool")
           from function_method.DocTrimmingEnhancement.models import *
 
-          # 寻找上传的权重文件
           weight_path = "weights/model_mbv3_iou_mix_2C049.pth"
           if not os.path.exists(weight_path):
-              # 如果放在根目录，作为备选路径
-              weight_path = "model_mbv3_iou_mix_2C049.pth"
+              raise FileNotFoundError(f"未找到权重文件: {weight_path}")
 
-          print(f"[*] 正在载入权重: {weight_path}")
+          print(f"[*] 正在载入模型权重: {weight_path}")
           checkpoint = torch.load(weight_path, map_location="cpu")
 
-          # 实例化模型
           try:
               model = Net()
               model.load_state_dict(checkpoint)
@@ -53,9 +62,9 @@ jobs:
 
           model.eval()
 
-          # 导出为 256x256 标准输入
+          # 2. 导出基础 FP32 ONNX
           dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
-          raw_onnx = "doc_corner_raw.onnx"
+          raw_onnx = "raw_model.onnx"
           torch.onnx.export(
               model,
               dummy_input,
@@ -65,19 +74,29 @@ jobs:
               opset_version=13,
               do_constant_folding=True
           )
+          print(f"[+] 原始 ONNX 导出成功: {os.path.getsize(raw_onnx)/1024/1024:.2f} MB")
 
-          # 使用 onnxslim 裁剪无用算子，大幅减小体积以适配 N1
-          import onnxslim
-          os.makedirs("models", exist_ok=True)
-          slim_onnx = "models/doc_corner.onnx"
+          # 3. 算子精简与无用节点剪枝 (onnxslim)
+          slim_onnx = "slim_model.onnx"
           onnxslim.slim(raw_onnx, slim_onnx)
-          print(f"[+] 编译完成，生成目标模型: {slim_onnx} (大小: {os.path.getsize(slim_onnx)/1024/1024:.2f} MB)")
+          print(f"[+] 剪枝优化完成: {os.path.getsize(slim_onnx)/1024/1024:.2f} MB")
+
+          # 4. INT8 动态量化 (体积缩减至 6MB 左右，适配 N1 2GB 内存)
+          os.makedirs("models", exist_ok=True)
+          final_onnx = "models/doc_corner.onnx"
+          quantize_dynamic(
+              model_input=slim_onnx,
+              model_output=final_onnx,
+              weight_type=QuantType.QUInt8
+          )
+          final_size = os.path.getsize(final_onnx) / 1024 / 1024
+          print(f"[+] 最终适配 N1 的量化模型生成成功: {final_onnx} (体积: {final_size:.2f} MB)")
           EOF
 
-      - name: 将转换好的 ONNX 自动提交回仓库
+      - name: 将转换好的轻量模型提交回仓库
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add models/doc_corner.onnx
-          git commit -m "chore: auto convert model_mbv3 to optimized ONNX" || exit 0
+          git commit -m "chore: compile and quantize doc_corner.onnx via GitHub Actions" || exit 0
           git push
