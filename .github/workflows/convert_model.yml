@@ -14,18 +14,31 @@ jobs:
       - name: 检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 合并分卷权重文件并建立原项目路径映射
+      - name: 安装 unrar 解压工具
         run: |
-          mkdir -p weights
-          if ls weights/model.zip.* 1> /dev/null 2>&1; then
-            echo "[*] 检测到分卷文件，正在合并..."
-            cat weights/model.zip.* > weights/model_mbv3_iou_mix_2C049.pth
-            echo "[+] 分卷合并成功！"
-          fi
-          # 满足 DocTrimmingEnhancement 脚本硬编码读取的相对路径
+          sudo apt-get update
+          sudo apt-get install -y unrar
+
+      - name: 解压 RAR 分卷并建立模型路径映射
+        run: |
           mkdir -p weights/image_trimming_enhancement
-          cp weights/model_mbv3_iou_mix_2C049.pth weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth
-          ls -lh weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth
+          TARGET_FILE="weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth"
+
+          echo "[*] 正在解压 weights/ 目录下的 RAR 分卷..."
+          # 解压 part1.rar 会自动联合解压 part2
+          unrar x -o+ weights/model_mbv3_iou_mix_2C049.part1.rar weights/
+
+          # 寻找解压出的完整 .pth 文件并对齐硬编码路径
+          EXTRACTED_PTH=$(find weights -maxdepth 2 -name "*.pth" | head -n 1)
+          if [ -z "$EXTRACTED_PTH" ]; then
+            echo "[-] 解压失败，未找到 .pth 权重文件！"
+            ls -lR weights/
+            exit 1
+          fi
+
+          echo "[+] 成功提取权重: $EXTRACTED_PTH"
+          cp "$EXTRACTED_PTH" "$TARGET_FILE"
+          ls -lh "$TARGET_FILE"
 
       - name: 克隆算法源码以获取网络定义
         run: |
@@ -45,7 +58,7 @@ jobs:
           import onnxslim
           from onnxruntime.quantization import quantize_dynamic, QuantType
 
-          # 1. 注入 Doc-Image-Tool 路径并载入已初始化的全局模型对象
+          # 1. 注入 Doc-Image-Tool 路径并载入模型定义
           sys.path.append("/tmp/Doc-Image-Tool")
           import function_method.DocTrimmingEnhancement as doc_trim
 
@@ -88,5 +101,5 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add models/doc_corner.onnx
-          git commit -m "chore: compile and quantize doc_corner.onnx via GitHub Actions" || exit 0
+          git commit -m "chore: extract rar and quantize doc_corner.onnx via Actions" || exit 0
           git push
