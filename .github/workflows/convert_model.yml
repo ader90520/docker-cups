@@ -14,15 +14,18 @@ jobs:
       - name: 检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 合并分卷权重文件
+      - name: 合并分卷权重文件并建立原项目路径映射
         run: |
           mkdir -p weights
           if ls weights/model.zip.* 1> /dev/null 2>&1; then
             echo "[*] 检测到分卷文件，正在合并..."
             cat weights/model.zip.* > weights/model_mbv3_iou_mix_2C049.pth
-            echo "[+] 分卷合并成功！文件大小:"
-            ls -lh weights/model_mbv3_iou_mix_2C049.pth
+            echo "[+] 分卷合并成功！"
           fi
+          # 满足 DocTrimmingEnhancement 脚本硬编码读取的相对路径
+          mkdir -p weights/image_trimming_enhancement
+          cp weights/model_mbv3_iou_mix_2C049.pth weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth
+          ls -lh weights/image_trimming_enhancement/model_mbv3_iou_mix_2C049.pth
 
       - name: 克隆算法源码以获取网络定义
         run: |
@@ -42,49 +45,11 @@ jobs:
           import onnxslim
           from onnxruntime.quantization import quantize_dynamic, QuantType
 
-          # 1. 注入 Doc-Image-Tool 算法模块路径
+          # 1. 注入 Doc-Image-Tool 路径并载入已初始化的全局模型对象
           sys.path.append("/tmp/Doc-Image-Tool")
-          
-          # 动态匹配模块定义
-          try:
-              import function_method.DocTrimmingEnhancement as doc_trim
-          except Exception:
-              from function_method import DocTrimmingEnhancement as doc_trim
+          import function_method.DocTrimmingEnhancement as doc_trim
 
-          weight_path = "weights/model_mbv3_iou_mix_2C049.pth"
-          if not os.path.exists(weight_path):
-              raise FileNotFoundError(f"未找到权重文件: {weight_path}")
-
-          print(f"[*] 正在载入模型权重: {weight_path}")
-          checkpoint = torch.load(weight_path, map_location="cpu")
-
-          # 智能定位模型对象或类
-          model = None
-          if isinstance(checkpoint, torch.nn.Module):
-              model = checkpoint
-          else:
-              # 遍历模块寻找模型类（通常继承自 torch.nn.Module）
-              for attr_name in dir(doc_trim):
-                  attr = getattr(doc_trim, attr_name)
-                  if isinstance(attr, type) and issubclass(attr, torch.nn.Module) and attr != torch.nn.Module:
-                      try:
-                          inst = attr()
-                          inst.load_state_dict(checkpoint)
-                          model = inst
-                          print(f"[+] 匹配到模型类: {attr_name}")
-                          break
-                      except Exception:
-                          continue
-
-          if model is None:
-              # 降级尝试全局 Net / Model
-              try:
-                  from function_method.DocTrimmingEnhancement.models import Net
-                  model = Net()
-                  model.load_state_dict(checkpoint)
-              except Exception:
-                  model = checkpoint
-
+          model = doc_trim.doc_trimming_enhancement_model
           model.eval()
 
           # 2. 导出基础 FP32 ONNX
