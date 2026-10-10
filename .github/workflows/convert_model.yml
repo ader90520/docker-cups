@@ -1,0 +1,83 @@
+name: Convert Model to ONNX
+
+on:
+  workflow_dispatch: # 支持网页端手动点击一键运行
+  push:
+    paths:
+      - 'weights/**'    # 当上传新权重时自动触发
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 拉取 Doc-Image-Tool 源代码定义
+        run: |
+          git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/doc_tool
+
+      - name: 安装 PyTorch 与 ONNX 转换依赖
+        run: |
+          pip install torch torchvision onnx onnxslim
+
+      - name: 执行转换并自动瘦身 (ONNX Export & Slim)
+        run: |
+          python - << 'EOF'
+          import sys
+          import os
+          import torch
+
+          # 将 Doc-Image-Tool 加入搜索路径以直接使用模型结构定义
+          sys.path.append("/tmp/doc_tool")
+          
+          # 寻找模型定义文件
+          from function_method.DocTrimmingEnhancement.models import *
+
+          # 寻找上传的权重文件
+          weight_path = "weights/model_mbv3_iou_mix_2C049.pth"
+          if not os.path.exists(weight_path):
+              # 如果放在根目录，作为备选路径
+              weight_path = "model_mbv3_iou_mix_2C049.pth"
+
+          print(f"[*] 正在载入权重: {weight_path}")
+          checkpoint = torch.load(weight_path, map_location="cpu")
+
+          # 实例化模型
+          try:
+              model = Net()
+              model.load_state_dict(checkpoint)
+          except Exception:
+              model = checkpoint
+
+          model.eval()
+
+          # 导出为 256x256 标准输入
+          dummy_input = torch.randn(1, 3, 256, 256, dtype=torch.float32)
+          raw_onnx = "doc_corner_raw.onnx"
+          torch.onnx.export(
+              model,
+              dummy_input,
+              raw_onnx,
+              input_names=["input"],
+              output_names=["output"],
+              opset_version=13,
+              do_constant_folding=True
+          )
+
+          # 使用 onnxslim 裁剪无用算子，大幅减小体积以适配 N1
+          import onnxslim
+          os.makedirs("models", exist_ok=True)
+          slim_onnx = "models/doc_corner.onnx"
+          onnxslim.slim(raw_onnx, slim_onnx)
+          print(f"[+] 编译完成，生成目标模型: {slim_onnx} (大小: {os.path.getsize(slim_onnx)/1024/1024:.2f} MB)")
+          EOF
+
+      - name: 将转换好的 ONNX 自动提交回仓库
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add models/doc_corner.onnx
+          git commit -m "chore: auto convert model_mbv3 to optimized ONNX" || exit 0
+          git push
