@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 基础系统环境、驱动与 Python 图像处理库 (加入 python3-pip 与 onnx 工具链)
+# 基础系统环境、驱动与 Python 图像处理库 (精简可靠，不通过 pip 源码编译重型 ONNX 包，保障多架构 buildx 秒过)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,7 +33,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
-    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
@@ -45,7 +44,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    && pip3 install --no-cache-dir --break-system-packages onnx onnxslim \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
@@ -53,12 +51,6 @@ COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
-
-# 构建期直接脱量化 doc_corner.onnx，源头清除 DynamicQuantizeLinear 报错
-RUN if [ -f /opt/webapp/models/doc_corner.onnx ]; then \
-        python3 -c "import onnx, onnxslim; p='/opt/webapp/models/doc_corner.onnx'; onnx.save(onnxslim.slim(p), p)" || true; \
-        echo "✔ [Build] doc_corner.onnx 纯浮点脱量化处理完成"; \
-    fi
 
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
