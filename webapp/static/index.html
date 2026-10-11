@@ -158,19 +158,26 @@
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
-                        <span style="font-size:13px; font-weight:700;">👁️ 实时预览 (拖拽/滚轮漫游)</span>
+                        <span style="font-size:13px; font-weight:700;">👁️ 实时预览</span>
                         <div class="preview-zoom-ctrl">
+                            <!-- 专属操作锁切换按钮 -->
+                            <span id="preview-lock-badge" class="preview-lock-badge locked" title="点击解锁以进行鼠标缩放与拖拽">
+                                <span id="lock-icon">🔒</span> <span id="lock-text">点击激活操作</span>
+                            </span>
+                            <span style="display:inline-block; width:1px; height:14px; background:#cbd5e1; margin:0 2px;"></span>
                             <button type="button" class="zoom-btn" onclick="EnhanceEngine.changePage(-1)" id="btn-prev-page">‹</button>
                             <span id="page-counter-lbl" style="font-size:12px; font-weight:600; color:#475569; min-width:35px; text-align:center;">0 / 0</span>
                             <button type="button" class="zoom-btn" onclick="EnhanceEngine.changePage(1)" id="btn-next-page">›</button>
-                            <span style="display:inline-block; width:1px; height:14px; background:#cbd5e1; margin:0 4px;"></span>
+                            <span style="display:inline-block; width:1px; height:14px; background:#cbd5e1; margin:0 2px;"></span>
                             <button type="button" class="zoom-btn" onclick="EnhanceEngine.adjustZoom(-0.25)">🔍 -</button>
                             <button type="button" class="zoom-btn" onclick="EnhanceEngine.resetZoom()">1:1 复位</button>
                             <button type="button" class="zoom-btn" onclick="EnhanceEngine.adjustZoom(0.25)">🔍 +</button>
                         </div>
                     </div>
 
-                    <div class="viewport-wrapper" id="viewport-box">
+                    <!-- 视口容器，默认带有锁定态 -->
+                    <div class="viewport-wrapper locked" id="viewport-box">
+                        <div class="viewport-lock-hint" id="viewport-lock-hint">🔒 点击视口内部激活缩放与拖拽</div>
                         <div class="sheet-a4-viewport" id="a4-viewport">
                             <div class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</div>
                             <canvas id="canvas-preview"></canvas>
