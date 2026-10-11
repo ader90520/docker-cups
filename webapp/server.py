@@ -33,10 +33,12 @@ from handlers.scan_handler import (
 from handlers.enhance_handler import EnhancePreviewHandler
 
 STATIC_PATH = os.path.join(BASE_DIR, "static")
+MODELS_PATH = os.path.join(BASE_DIR, "models")
 SCANS_PATH = "/scans"
 
 os.makedirs(SCANS_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
+os.makedirs(MODELS_PATH, exist_ok=True)
 
 class ScanListHandler(tornado.web.RequestHandler):
     def get(self):
@@ -77,10 +79,11 @@ def make_app():
         # 1. 静态资源与首页映射
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
+        (r"/models/(.*)", StaticFileHandler, {"path": MODELS_PATH}),  # 映射端侧 AI 模型目录
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 2. 核心业务打印与图像实时算法接口 (同时挂载带斜杠与带下划线两个路由，100% 避开 404)
+        # 2. 核心业务打印与图像实时算法接口 (兼容所有调用路径)
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
@@ -89,6 +92,7 @@ def make_app():
         (r"/api/mail_config", MailConfigHandler),
         (r"/api/preview/enhance", EnhancePreviewHandler),
         (r"/api/preview_enhance", EnhancePreviewHandler),
+        (r"/enhance_preview", EnhancePreviewHandler),
 
         # 3. 扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
@@ -112,4 +116,5 @@ if __name__ == "__main__":
     server = tornado.httpserver.HTTPServer(app, max_buffer_size=104857600)
     server.listen(8088, address="0.0.0.0")
     print(">>> CUPS 智能工作台已在 8088 端口正常启动 (Listen: 0.0.0.0:8088)", flush=True)
+    print(f">>> 静态模型目录已映射至: {MODELS_PATH} (路由: /models/*)", flush=True)
     tornado.ioloop.IOLoop.current().start()
