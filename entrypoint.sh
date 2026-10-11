@@ -42,11 +42,9 @@ echo "$CUPS_USER:$CUPS_PASSWORD" | chpasswd
 usermod -a -G lp,scanner,lpadmin root 2>/dev/null || true
 
 # ================= 3. 根除虚拟假打印机与启用 SANE 扫描驱动 =================
-# 彻底移除/屏蔽虚拟盲文打印机和虚拟传真后端
 rm -f /usr/lib/cups/backend/cups-brf /usr/lib/cups/backend/hp-fax 2>/dev/null || true
 chmod 000 /usr/lib/cups/backend/cups-brf /usr/lib/cups/backend/hp-fax 2>/dev/null || true
 
-# 激活 SANE 对一体机 (HP M126a等) 的底层驱动协议
 if [ -f /etc/sane.d/dll.conf ]; then
     grep -q "^hpaio" /etc/sane.d/dll.conf || echo "hpaio" >> /etc/sane.d/dll.conf
 fi
@@ -63,7 +61,6 @@ rm -rf /var/run/dbus/* \
 mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data /opt/webapp/static
 chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data /opt/webapp/static 2>/dev/null || true
 
-# 前端防漏同步
 if [ -f /opt/webapp/index.html ] && [ ! -f /opt/webapp/static/index.html ]; then
     cp -f /opt/webapp/index.html /opt/webapp/static/index.html 2>/dev/null || true
 fi
@@ -84,7 +81,7 @@ sleep 1
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 sleep 1
 
-# ================= 6. 常驻后台守护进程 (带非空校验，杜绝击垮 CUPS) =================
+# ================= 6. 常驻后台守护进程 =================
 auto_usb_daemon() {
     echo ">>> [Hotplug] 自动热插拔与设备恢复守护已上线..."
     while true; do
@@ -94,7 +91,6 @@ auto_usb_daemon() {
         if [ -d "/dev/bus/usb" ]; then
             chmod -R 666 /dev/bus/usb 2>/dev/null || true
         fi
-        # 严格非空判断：只在存在打印机时才触发恢复，防止空命令阻塞 CGI 管道导致空白页
         PRINTER_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
         if [ -n "$PRINTER_LIST" ]; then
             cupsenable $PRINTER_LIST 2>/dev/null || true
@@ -118,12 +114,10 @@ PageLogFormat
 MaxLogSize 1m
 ErrorPolicy retry-job
 
-# 超时与长连接支持（彻底解决偶发空白页）
 Timeout 90
 KeepAlive Yes
 KeepAliveTimeout 30
 
-# 单一标准端口绑定，严禁与 Listen 0.0.0.0:631 重复声明避免端口冲突
 Port 631
 Listen /run/cups/cups.sock
 
@@ -136,13 +130,11 @@ DefaultLanguage zh_CN
 DefaultPaperSize A4
 DefaultEncryption Never
 
-# 根目录放行
 <Location />
   Order allow,deny
   Allow all
 </Location>
 
-# 管理主页允许浏览，敏感管理操作严格弹出账号密码认证
 <Location /admin>
   Order allow,deny
   Allow all
@@ -154,7 +146,6 @@ DefaultEncryption Never
   </Limit>
 </Location>
 
-# 配置文件管理：强制账号密码认证
 <Location /admin/conf>
   AuthType Default
   Require user @SYSTEM
@@ -162,7 +153,6 @@ DefaultEncryption Never
   Allow all
 </Location>
 
-# 日志查看：强制账号密码认证
 <Location /admin/log>
   AuthType Default
   Require user @SYSTEM
@@ -170,19 +160,16 @@ DefaultEncryption Never
   Allow all
 </Location>
 
-# 打印机列表与详情放行（彻底解决拒绝连接）
 <Location /printers>
   Order allow,deny
   Allow all
 </Location>
 
-# 类别页面放行
 <Location /classes>
   Order allow,deny
   Allow all
 </Location>
 
-# 任务队列放行，取消任务需身份验证
 <Location /jobs>
   Order allow,deny
   Allow all
@@ -206,36 +193,45 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ================= 9. 汉化全量注入与多语言软链接映射 (解决英文回退) =================
-echo ">>> [I18N] 恢复 CUPS 中文界面与原版汉化模板..."
+# ================= 9. 汉化全量注入与动态子页面全覆盖修复 =================
+echo ">>> [I18N] 修复 CUPS 全量中文界面与子页面模板..."
 
 mkdir -p /usr/share/cups/templates \
          /usr/share/cups/locale/zh_CN \
          /usr/share/cups/locale/zh \
          /usr/share/cups/doc-root/zh_CN
 
-# 1. 编译并注入系统级中文语言包 (.mo)
+# 1. 编译并安装系统级消息翻译 (.mo)
 if [ -f /opt/i18/cups_zh.po ]; then
     msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
 fi
 
-# 2. 注入动态页面模板 (.tmpl) 并创建多语言变体目录，确保协商直接命中
-if [ -d /opt/i18/zh_CN ]; then
+# 2. 核心修复：彻底覆盖根模板与所有语言协商子目录
+# 优先查找 /opt/i18/zh_CN，其次查找 /opt/i18/templates
+SRC_TMPL=""
+if [ -d "/opt/i18/zh_CN" ]; then
+    SRC_TMPL="/opt/i18/zh_CN"
+elif [ -d "/opt/i18/templates" ]; then
+    SRC_TMPL="/opt/i18/templates"
+fi
+
+if [ -n "$SRC_TMPL" ]; then
     mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/templates/zh-cn \
              /usr/share/cups/templates/zh-Hans
 
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh-cn/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh-Hans/ 2>/dev/null || true
+    # 强制将默认英文模板完全替换为中文版本（这样即便请求头缺少 zh，渲染出的也是中文）
+    cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/ 2>/dev/null || true
+    cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh/ 2>/dev/null || true
+    cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh-cn/ 2>/dev/null || true
+    cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh-Hans/ 2>/dev/null || true
 fi
 
-# 3. 精准抓取中文 index.html 并部署至所有文档根路径
+# 3. 静态首页多语言链接绑定
 ZH_INDEX=""
 if [ -f /opt/i18/zh_CN/index.html ]; then
     ZH_INDEX="/opt/i18/zh_CN/index.html"
@@ -250,11 +246,10 @@ if [ -n "$ZH_INDEX" ]; then
     ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
 fi
 
-# 4. 核心样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
+# 4. 样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
 CSS_FILE="/usr/share/cups/doc-root/cups.css"
 if [ -f "$CSS_FILE" ]; then
     cat << 'EOF' >> "$CSS_FILE"
-/* 修复双重标题堆叠 */
 div.body > h2:first-of-type + h2 {
     display: none !important;
 }
@@ -266,7 +261,7 @@ div.body > h2 {
 EOF
 fi
 
-# ================= 10. 启动服务与模型自愈 =================
+# ================= 10. 启动服务 =================
 echo ">>> [1/2] 启动 CUPS 核心引擎 (631)..."
 /usr/sbin/cupsd
 sleep 2
@@ -275,29 +270,6 @@ PRINTER_INIT_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
 if [ -n "$PRINTER_INIT_LIST" ]; then
     cupsenable $PRINTER_INIT_LIST 2>/dev/null || true
     cupsaccept $PRINTER_INIT_LIST 2>/dev/null || true
-fi
-
-# 自动脱量化自愈：消除 DynamicQuantizeLinear，还原为 WebGL 与 OpenCV 原生浮点模型
-if [ -f /opt/webapp/models/doc_corner.onnx ]; then
-    python3 -c "
-import os
-try:
-    import onnx
-    p = '/opt/webapp/models/doc_corner.onnx'
-    m = onnx.load(p)
-    if any(n.op_type in ['DynamicQuantizeLinear', 'MatMulInteger'] for n in m.graph.node):
-        print('>>> [AI] 检测到包含动态量化节点，正在自动脱量化还原...')
-        try:
-            import onnxslim
-        except ImportError:
-            os.system('pip install onnxslim -q')
-            import onnxslim
-        m_slim = onnxslim.slim(p)
-        onnx.save(m_slim, p)
-        print('>>> [AI] doc_corner.onnx 纯浮点脱量化还原就绪！')
-except Exception as e:
-    pass
-" 2>/dev/null || true
 fi
 
 echo ">>> [2/2] 启动 8088 智能控制台..."
