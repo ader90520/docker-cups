@@ -71,7 +71,7 @@ def crop_scanner_black_borders(img):
             if (w - 1 - x) > (w - right + 5): break
 
     if (bottom - top > h * 0.70) and (right - left > w * 0.70):
-        img = img[top:bottom, left:right]
+        img = img[top:bottom, left:right].copy()
 
     return img
 
@@ -105,7 +105,7 @@ def auto_perspective_crop(cv_img):
                         y0 = max(0, y - pad_y)
                         x1 = min(w, x + bw + pad_x)
                         y1 = min(h, y + bh + pad_y)
-                        cv_img = cv_img[y0:y1, x0:x1]
+                        cv_img = cv_img[y0:y1, x0:x1].copy()
         except Exception:
             pass
 
@@ -133,7 +133,7 @@ def camscanner_core_render(img, is_color=True):
     norm = np.clip((img.astype(np.float32) / bg_3d) * 255.0, 0, 255).astype(np.uint8)
 
     if not is_color:
-        norm_gray = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
+        norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
         lut = np.zeros(256, dtype=np.uint8)
         for i in range(256):
             if i >= 195: lut[i] = 255
@@ -248,13 +248,14 @@ class ModelUploadHandler(tornado.web.RequestHandler):
                 return
 
             raw_filename = files[0]["filename"]
-            # 路径穿越防御：强制提取纯文件名
+            # 路径穿越防御与空文件名过滤
             safe_filename = os.path.basename(raw_filename).replace(" ", "_")
-            if not safe_filename.lower().endswith(".onnx"):
+            if not safe_filename or not safe_filename.lower().endswith(".onnx"):
                 self.set_status(400)
                 self.write(json.dumps({"success": False, "msg": "仅允许上传 .onnx 格式权重文件"}))
                 return
 
+            os.makedirs(MODELS_PATH, exist_ok=True)
             target_path = os.path.join(MODELS_PATH, safe_filename)
             with open(target_path, "wb") as f:
                 f.write(files[0]["body"])
@@ -283,6 +284,7 @@ class ModelUploadHandler(tornado.web.RequestHandler):
 class ModelManageHandler(tornado.web.RequestHandler):
     def get(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
+        os.makedirs(MODELS_PATH, exist_ok=True)
         models = [f for f in os.listdir(MODELS_PATH) if f.endswith(".onnx")]
         self.write(json.dumps({"success": True, "models": models}))
 
