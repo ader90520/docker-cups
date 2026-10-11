@@ -3,13 +3,15 @@
 
 import os
 import io
+import json
 import math
 import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
 
-# 保持服务端模型实例全局就绪（作为邮箱远程打印与低配环境的服务端推理兜底）
-MODEL_PATH = "/opt/webapp/models/doc_corner.onnx"
+MODELS_PATH = "/opt/webapp/models"
+MODEL_PATH = os.path.join(MODELS_PATH, "doc_corner.onnx")
+
 net = None
 if os.path.exists(MODEL_PATH):
     try:
@@ -23,44 +25,35 @@ def crop_scanner_black_borders(img):
     """几何自适应边界收割：探测并裁除扫描仪物理黑边与装订黑缝"""
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     top, bottom, left, right = 0, h, 0, w
 
-    # 扫描上边缘（向下探测最多 12% 高度）
     for y in range(int(h * 0.12)):
         line = gray[y, int(w * 0.15):int(w * 0.85)]
         if np.mean(line < 100) > 0.35 or np.mean(line) < 140:
             top = y + 1
         else:
-            if y > top + 5:
-                break
+            if y > top + 5: break
 
-    # 扫描下边缘（向上探测最多 8% 高度）
     for y in range(h - 1, int(h * 0.92), -1):
         line = gray[y, int(w * 0.15):int(w * 0.85)]
         if np.mean(line < 100) > 0.35 or np.mean(line) < 140:
             bottom = y
         else:
-            if (h - 1 - y) > (h - bottom + 5):
-                break
+            if (h - 1 - y) > (h - bottom + 5): break
 
-    # 扫描左边缘（向右探测最多 8% 宽度）
     for x in range(int(w * 0.08)):
         col = gray[int(h * 0.15):int(h * 0.85), x]
         if np.mean(col < 100) > 0.35 or np.mean(col) < 140:
             left = x + 1
         else:
-            if x > left + 5:
-                break
+            if x > left + 5: break
 
-    # 扫描右边缘（向左探测最多 8% 宽度）
     for x in range(w - 1, int(w * 0.92), -1):
         col = gray[int(h * 0.15):int(h * 0.85), x]
         if np.mean(col < 100) > 0.35 or np.mean(col) < 140:
             right = x
         else:
-            if (w - 1 - x) > (w - right + 5):
-                break
+            if (w - 1 - x) > (w - right + 5): break
 
     if (bottom - top > h * 0.70) and (right - left > w * 0.70):
         img = img[top:bottom, left:right]
@@ -70,8 +63,6 @@ def crop_scanner_black_borders(img):
 def auto_perspective_crop(cv_img):
     """服务端深度模型切边兜底：专供邮箱远程打印与降级通道"""
     h, w = cv_img.shape[:2]
-    
-    # 物理黑边先行切除
     cv_img = crop_scanner_black_borders(cv_img)
     h, w = cv_img.shape[:2]
 
@@ -105,7 +96,7 @@ def auto_perspective_crop(cv_img):
     return cv_img
 
 def sanitize_clean_borders(img):
-    """极细安全边缘置白：消除传感器最外圈残留噪点"""
+    """极细安全边缘置白"""
     h, w = img.shape[:2]
     m = 5
     img[:m, :] = (255, 255, 255)
@@ -115,75 +106,52 @@ def sanitize_clean_borders(img):
     return img
 
 def camscanner_core_render(img, is_color=True):
-    """核心高清渲染：大核光照除法归一化 + 实心字 LUT（黑白字迹饱满不镂空，彩色保真）"""
+    """核心高清渲染：大核除法归一化 + 实心字 LUT 压黑"""
     h, w = img.shape[:2]
-
-    # 背景大核除法光照归一化
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 45))
     bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
     bg = cv2.GaussianBlur(bg, (39, 39), 0).astype(np.float32) + 1.0
 
     bg_3d = cv2.cvtColor(bg, cv2.COLOR_GRAY2BGR)
-    norm = (img.astype(np.float32) / bg_3d) * 255.0
-    norm = np.clip(norm, 0, 255).astype(np.uint8)
+    norm = np.clip((img.astype(np.float32) / bg_3d) * 255.0, 0, 255).astype(np.uint8)
 
-    # 1. 黑白模式：实心笔画 LUT 映射，消灭空心镂空字，保证字迹黑实
     if not is_color:
         norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
         lut = np.zeros(256, dtype=np.uint8)
         for i in range(256):
-            if i >= 195:
-                lut[i] = 255
-            elif i <= 140:
-                lut[i] = int((i / 140.0) ** 1.3 * 40.0)
-            else:
-                lut[i] = int(40.0 + ((i - 140.0) / 55.0) * (255.0 - 40.0))
-        
+            if i >= 195: lut[i] = 255
+            elif i <= 140: lut[i] = int((i / 140.0) ** 1.3 * 40.0)
+            else: lut[i] = int(40.0 + ((i - 140.0) / 55.0) * (255.0 - 40.0))
         solid_gray = cv2.LUT(norm_gray, lut)
         out = cv2.cvtColor(solid_gray, cv2.COLOR_GRAY2BGR)
         return sanitize_clean_borders(out)
 
-    # 2. 彩色模式：保留彩色插图与字迹饱和度
     hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV)
     h_c, s_c, v_c = cv2.split(hsv)
-
     lut_v = np.zeros(256, dtype=np.uint8)
     for i in range(256):
-        if i >= 210:
-            lut_v[i] = 255
-        elif i <= 130:
-            lut_v[i] = int((i / 130.0) ** 1.2 * 50.0)
-        else:
-            lut_v[i] = int(50.0 + ((i - 130.0) / 80.0) * (255.0 - 50.0))
+        if i >= 210: lut_v[i] = 255
+        elif i <= 130: lut_v[i] = int((i / 130.0) ** 1.2 * 50.0)
+        else: lut_v[i] = int(50.0 + ((i - 130.0) / 80.0) * (255.0 - 50.0))
 
     v_final = cv2.LUT(v_c, lut_v)
     s_f = s_c.astype(np.float32)
     s_boost = np.clip(s_f * 1.4, 0, 255).astype(np.uint8)
     s_final = np.where((v_final > 250) & (s_f < 15), 0, s_boost)
-
     merged = cv2.merge([h_c, s_final.astype(np.uint8), v_final])
     out = cv2.cvtColor(merged, cv2.COLOR_HSV2BGR)
     return sanitize_clean_borders(out)
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", is_already_cropped=False):
-    """
-    通用增强接口：
-    - 邮箱远程打印时：is_already_cropped=False，自动执行边界扫描与切边
-    - 前端大模型已裁剪时：is_already_cropped=True，直接执行纯净去黑底白底化，避免二次误切
-    """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return raw_bytes
-        
+        if img is None: return raw_bytes
         if not is_already_cropped:
             img = auto_perspective_crop(img)
-        
         is_color = (str(color_mode).strip().lower() == "color")
         result = camscanner_core_render(img, is_color=is_color)
-        
         _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return enc.tobytes()
     except Exception:
@@ -194,21 +162,17 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
-            # 接收前端端侧 AI 是否已裁剪的标记
             client_cropped = self.get_argument("client_cropped", "false").strip().lower() == "true"
-            
             if not files:
                 self.set_status(400)
                 self.write("未收到预览文件")
                 return
-            
             raw_bytes = files[0]["body"]
             processed_bytes = enhance_camscanner_precise(
                 raw_bytes, 
                 color_mode=color_mode, 
                 is_already_cropped=client_cropped
             )
-            
             self.set_header("Content-Type", "image/jpeg")
             self.set_header("Cache-Control", "no-cache")
             self.write(processed_bytes)
@@ -216,3 +180,57 @@ class EnhancePreviewHandler(BaseHandler):
         except Exception as e:
             self.set_status(500)
             self.write(str(e))
+
+class ModelUploadHandler(tornado.web.RequestHandler):
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        try:
+            files = self.request.files.get("model_file", [])
+            if not files or not files[0]["filename"].lower().endswith(".onnx"):
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "请上传合法 .onnx 模型"}))
+                return
+            target_path = os.path.join(MODELS_PATH, files[0]["filename"])
+            with open(target_path, "wb") as f:
+                f.write(files[0]["body"])
+            default_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
+            if "corner" in files[0]["filename"].lower() or not os.path.exists(default_path):
+                with open(default_path, "wb") as f:
+                    f.write(files[0]["body"])
+            self.write(json.dumps({"success": True, "msg": f"模型 {files[0]['filename']} 上传生效"}))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
+class ModelManageHandler(tornado.web.RequestHandler):
+    """预留：模型清单查询接口"""
+    def get(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        models = [f for f in os.listdir(MODELS_PATH) if f.endswith(".onnx")]
+        self.write(json.dumps({"success": True, "models": models}))
+
+class AdvancedEnhanceHandler(BaseHandler):
+    """预留：去手写笔迹 / 展平扭曲 / 红章剥离接口"""
+    def post(self):
+        task_type = self.get_argument("task", "remove_handwriting")
+        files = self.request.files.get("file", [])
+        if not files:
+            self.set_status(400)
+            self.write("未收到图像")
+            return
+        raw_bytes = files[0]["body"]
+        out_bytes = enhance_camscanner_precise(raw_bytes, color_mode="monochrome")
+        self.set_header("Content-Type", "image/jpeg")
+        self.write(out_bytes)
+
+class OcrHandler(tornado.web.RequestHandler):
+    """预留：文字识别、快递单号提取接口"""
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        self.write(json.dumps({"success": True, "text": "", "codes": []}))
+
+class WebhookPrintHandler(tornado.web.RequestHandler):
+    """预留：外部系统 Webhook 直接打印接口"""
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        self.write(json.dumps({"success": True, "msg": "Webhook 任务已接收"}))
