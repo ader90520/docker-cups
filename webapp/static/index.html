@@ -6,6 +6,8 @@
     <title>在线打印 - CUPS 智能工作台</title>
     <!-- PDF.js 客户端预览引擎 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <!-- ONNX Runtime Web 客户端推理引擎 (支持 WebGL 硬件加速) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js"></script>
 
     <!-- ========================================== -->
     <!-- 1. 样式区域 (CSS Scope)                     -->
@@ -36,6 +38,7 @@
         .printer-select-wrap { display: flex; align-items: center; gap: 8px; flex: 1; }
         .select-ctrl { width: 100%; max-width: 380px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
         .btn-refresh-icon { width: 32px; height: 32px; border-radius: 6px; border: none; background: #007bff; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .ai-engine-tag { font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 600; }
 
         /* 子标签页与栅格布局 */
         .sub-type-nav { display: flex; border-bottom: 1px solid var(--border-color); background: #fff; }
@@ -197,6 +200,7 @@
             <div class="printer-select-wrap">
                 <select id="printer-select" class="select-ctrl" onchange="DashboardService.onPrinterChange()"></select>
                 <button type="button" class="btn-refresh-icon" onclick="DashboardService.loadPrinters(false)" title="刷新打印机状态">🔄</button>
+                <span id="ai-engine-pill" class="ai-engine-tag" style="background:#e2e8f0; color:#475569;">AI 引擎就绪中...</span>
             </div>
         </div>
 
@@ -570,6 +574,167 @@ const AppConfig = {
 };
 
 /**
+ * 【模块 A.1】客户端大模型推理与 IndexedDB 永久持久化引擎 (ClientDocAI)
+ */
+const ClientDocAI = {
+    dbName: "cups_ai_cache_v1",
+    storeName: "models",
+    session: null,
+    isReady: false,
+
+    getDB() {
+        return new Promise((resolve) => {
+            const req = indexedDB.open(this.dbName, 1);
+            req.onupgradeneeded = (e) => e.target.result.createObjectStore(this.storeName);
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = () => resolve(null);
+        });
+    },
+
+    async getModelBuffer(key) {
+        const db = await this.getDB();
+        if (!db) return null;
+        return new Promise((resolve) => {
+            const tx = db.transaction(this.storeName, "readonly");
+            const req = tx.objectStore(this.storeName).get(key);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        });
+    },
+
+    async saveModelBuffer(key, buf) {
+        const db = await this.getDB();
+        if (!db) return;
+        const tx = db.transaction(this.storeName, "readwrite");
+        tx.objectStore(this.storeName).put(buf, key);
+    },
+
+    async init() {
+        const pill = document.getElementById("ai-engine-pill");
+        if (!window.ort) {
+            this.setFallbackPill(pill);
+            return false;
+        }
+
+        try {
+            ort.env.wasm.numThreads = 2;
+            let buffer = await this.getModelBuffer("doc_corner");
+
+            if (!buffer) {
+                const resp = await Promise.race([
+                    fetch("/models/doc_corner.onnx"),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 4000))
+                ]);
+                if (!resp.ok) throw new Error("Fetch failed");
+                buffer = await resp.arrayBuffer();
+                await this.saveModelBuffer("doc_corner", buffer);
+            }
+
+            this.session = await ort.InferenceSession.create(buffer, {
+                executionProviders: ["webgl", "wasm"]
+            });
+            this.isReady = true;
+
+            if (pill) {
+                pill.style.background = "#dcfce7";
+                pill.style.color = "#15803d";
+                pill.innerText = "⚡ 端侧 GPU 引擎";
+            }
+            return true;
+        } catch (e) {
+            console.warn("[ClientDocAI] 客户端模型未能加载，降级至轻量通道:", e);
+            this.isReady = false;
+            this.setFallbackPill(pill);
+            return false;
+        }
+    },
+
+    setFallbackPill(pill) {
+        if (pill) {
+            pill.style.background = "#e0f2fe";
+            pill.style.color = "#0369a1";
+            pill.innerText = "☁ 云端轻量加速";
+        }
+    },
+
+    // 内存安全缩放：防止 iPhone Safari 在处理超大高像素照片时 OOM 闪退
+    safeResize(img, maxDim = 2048) {
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+            if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+            else { w = Math.round((w * maxDim) / h); h = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        return canvas;
+    },
+
+    async processImageCrop(file) {
+        if (!this.isReady || !this.session) return null;
+        try {
+            const img = await new Promise((res) => {
+                const i = new Image();
+                i.onload = () => res(i);
+                i.src = URL.createObjectURL(file);
+            });
+
+            const baseCanvas = this.safeResize(img, 2048);
+            const w = baseCanvas.width, h = baseCanvas.height;
+
+            const netCanvas = document.createElement("canvas");
+            netCanvas.width = 256; netCanvas.height = 256;
+            const nCtx = netCanvas.getContext("2d");
+            nCtx.drawImage(baseCanvas, 0, 0, 256, 256);
+            const data = nCtx.getImageData(0, 0, 256, 256).data;
+
+            const floatArr = new Float32Array(3 * 256 * 256);
+            for (let i = 0; i < 256 * 256; i++) {
+                floatArr[i] = data[i * 4] / 255.0;
+                floatArr[256 * 256 + i] = data[i * 4 + 1] / 255.0;
+                floatArr[2 * 256 * 256 + i] = data[i * 4 + 2] / 255.0;
+            }
+
+            const inputTensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
+            const results = await this.session.run({ input: inputTensor });
+            const mask = results.output.data;
+
+            let minX = 256, minY = 256, maxX = 0, maxY = 0, cnt = 0;
+            for (let y = 0; y < 256; y++) {
+                for (let x = 0; x < 256; x++) {
+                    if (mask[y * 256 + x] > 0.35) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                        cnt++;
+                    }
+                }
+            }
+
+            if (cnt > (256 * 256 * 0.20)) {
+                const sx = w / 256.0, sy = h / 256.0;
+                const cropX = Math.max(0, Math.floor(minX * sx));
+                const cropY = Math.max(0, Math.floor(minY * sy));
+                const cropW = Math.min(w - cropX, Math.ceil((maxX - minX) * sx));
+                const cropH = Math.min(h - cropY, Math.ceil((maxY - minY) * sy));
+
+                const outCanvas = document.createElement("canvas");
+                outCanvas.width = cropW; outCanvas.height = cropH;
+                const outCtx = outCanvas.getContext("2d");
+                outCtx.drawImage(baseCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+                return await new Promise((res) => outCanvas.toBlob(res, "image/jpeg", 0.92));
+            }
+        } catch (err) {
+            console.warn("[ClientDocAI] 端侧推理异常，降级原图:", err);
+        }
+        return null;
+    }
+};
+
+/**
  * 【模块 B】画布着色器、倾斜拉平与高深浓黑处理 (EnhanceEngine)
  */
 const EnhanceEngine = {
@@ -653,7 +818,7 @@ const EnhanceEngine = {
         this.enhancedCache = {};
     },
 
-    renderPreview() {
+    async renderPreview() {
         const canvas = document.getElementById('canvas-preview');
         const pdfCanvas = document.getElementById('pdf-canvas-render');
         const tip = document.getElementById('viewport-empty-tip');
@@ -728,8 +893,17 @@ const EnhanceEngine = {
                 tip.innerText = "⏳ 正在识别纸张轮廓、拉平并保留彩色细节...";
                 tip.style.display = 'block';
 
+                // 优先在端侧执行 GPU 裁切
+                let uploadPayload = currentFile;
+                if (ClientDocAI.isReady) {
+                    const clientCroppedBlob = await ClientDocAI.processImageCrop(currentFile);
+                    if (clientCroppedBlob) {
+                        uploadPayload = clientCroppedBlob;
+                    }
+                }
+
                 const fd = new FormData();
-                fd.append('file', currentFile);
+                fd.append('file', uploadPayload, currentFile.name);
                 fd.append('color_mode', AppConfig.currentColorMode);
 
                 fetch('/api/preview/enhance', { method: 'POST', body: fd })
@@ -1191,7 +1365,7 @@ const PrintManager = {
         }
     },
 
-    submitJob() {
+    async submitJob() {
         const btn = document.getElementById('btn-submit');
         const alertBox = document.getElementById('print-alert');
         const printer = document.getElementById('printer-select').value;
@@ -1268,7 +1442,16 @@ const PrintManager = {
         if (pageRanges) fd.append('page_ranges', pageRanges);
         if (isMerge && targetList.length > 1) fd.append('multi_merge', 'true');
 
-        targetList.forEach(f => fd.append('file', f));
+        // 提交打印前，如果存在端侧缓存的增强成果，优先使用，极速出纸
+        for (let i = 0; i < targetList.length; i++) {
+            const f = targetList[i];
+            const fileKey = `${f.name}_${f.size}_${AppConfig.currentColorMode}`;
+            if (EnhanceEngine.enhancedCache[fileKey]) {
+                fd.append('file', EnhanceEngine.enhancedCache[fileKey], f.name);
+            } else {
+                fd.append('file', f);
+            }
+        }
 
         fetch('/api/print', { method: 'POST', body: fd })
             .then(r => r.json())
@@ -1856,6 +2039,7 @@ document.getElementById('mail-cfg-form').onsubmit = function(e) {
 // 页面初始化
 IdCardManager.init();
 EnhanceEngine.initViewerInteraction();
+ClientDocAI.init(); // 初始化端侧 AI
 DashboardService.loadPrinters(false);
 
 setInterval(() => {
