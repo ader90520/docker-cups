@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+# 生成并强制生效 UTF-8 中文本地化
+locale-gen zh_CN.UTF-8 2>/dev/null || true
 export LC_ALL="zh_CN.UTF-8"
 export LANG="zh_CN.UTF-8"
 export LANGUAGE="zh_CN:zh"
@@ -82,7 +84,7 @@ sleep 1
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 sleep 1
 
-# ================= 6. 常驻后台守护进程 (防断电丢打印机) =================
+# ================= 6. 常驻后台守护进程 (带非空校验，杜绝击垮 CUPS) =================
 auto_usb_daemon() {
     echo ">>> [Hotplug] 自动热插拔与设备恢复守护已上线..."
     while true; do
@@ -92,9 +94,13 @@ auto_usb_daemon() {
         if [ -d "/dev/bus/usb" ]; then
             chmod -R 666 /dev/bus/usb 2>/dev/null || true
         fi
-        cupsenable $(lpstat -p 2>/dev/null | awk '{print $2}') 2>/dev/null || true
-        cupsaccept $(lpstat -p 2>/dev/null | awk '{print $2}') 2>/dev/null || true
-        sleep 5
+        # 严格非空判断：只在存在打印机时才触发恢复，防止空命令阻塞 CGI 管道导致空白页
+        PRINTER_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
+        if [ -n "$PRINTER_LIST" ]; then
+            cupsenable $PRINTER_LIST 2>/dev/null || true
+            cupsaccept $PRINTER_LIST 2>/dev/null || true
+        fi
+        sleep 6
     done
 }
 auto_usb_daemon &
@@ -105,13 +111,19 @@ SystemGroup root lpadmin
 FileDevice Yes
 EOF
 
-# ================= 8. 生成全放行且允许 HTTP 管理的 cupsd.conf =================
+# ================= 8. 生成防崩溃 + 稳健鉴权的 cupsd.conf =================
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
 MaxLogSize 1m
 ErrorPolicy retry-job
 
+# 超时与长连接支持（彻底解决偶发空白页）
+Timeout 90
+KeepAlive Yes
+KeepAliveTimeout 30
+
+# 单一标准端口绑定，严禁与 Listen 0.0.0.0:631 重复声明避免端口冲突
 Port 631
 Listen /run/cups/cups.sock
 
@@ -124,11 +136,13 @@ DefaultLanguage zh_CN
 DefaultPaperSize A4
 DefaultEncryption Never
 
+# 根目录放行
 <Location />
   Order allow,deny
   Allow all
 </Location>
 
+# 管理主页允许浏览，敏感管理操作严格弹出账号密码认证
 <Location /admin>
   Order allow,deny
   Allow all
@@ -140,6 +154,7 @@ DefaultEncryption Never
   </Limit>
 </Location>
 
+# 配置文件管理：强制账号密码认证
 <Location /admin/conf>
   AuthType Default
   Require user @SYSTEM
@@ -147,6 +162,7 @@ DefaultEncryption Never
   Allow all
 </Location>
 
+# 日志查看：强制账号密码认证
 <Location /admin/log>
   AuthType Default
   Require user @SYSTEM
@@ -154,16 +170,19 @@ DefaultEncryption Never
   Allow all
 </Location>
 
+# 打印机列表与详情放行（彻底解决拒绝连接）
 <Location /printers>
   Order allow,deny
   Allow all
 </Location>
 
+# 类别页面放行
 <Location /classes>
   Order allow,deny
   Allow all
 </Location>
 
+# 任务队列放行，取消任务需身份验证
 <Location /jobs>
   Order allow,deny
   Allow all
@@ -187,28 +206,51 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ================= 9. 汉化全量注入与重叠排版修复 =================
+# ================= 9. 汉化全量注入与多语言软链接映射 (解决英文回退) =================
 echo ">>> [I18N] 恢复 CUPS 中文界面与原版汉化模板..."
 
-mkdir -p /usr/share/cups/templates/zh_CN \
+mkdir -p /usr/share/cups/templates \
          /usr/share/cups/locale/zh_CN \
-         /usr/share/cups/locale/zh
+         /usr/share/cups/locale/zh \
+         /usr/share/cups/doc-root/zh_CN
 
+# 1. 编译并注入系统级中文语言包 (.mo)
 if [ -f /opt/i18/cups_zh.po ]; then
     msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
+    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
 fi
 
+# 2. 注入动态页面模板 (.tmpl) 并创建多语言变体目录，确保协商直接命中
 if [ -d /opt/i18/zh_CN ]; then
-    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/ 2>/dev/null || true
-    cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    mkdir -p /usr/share/cups/templates/zh_CN \
+             /usr/share/cups/templates/zh \
+             /usr/share/cups/templates/zh-cn \
+             /usr/share/cups/templates/zh-Hans
+
+    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/ 2>/dev/null || true
+    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true
+    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh-cn/ 2>/dev/null || true
+    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh-Hans/ 2>/dev/null || true
 fi
 
-if [ -f /opt/i18/index.html ]; then
-    cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
+# 3. 精准抓取中文 index.html 并部署至所有文档根路径
+ZH_INDEX=""
+if [ -f /opt/i18/zh_CN/index.html ]; then
+    ZH_INDEX="/opt/i18/zh_CN/index.html"
+elif [ -f /opt/i18/index.html ]; then
+    ZH_INDEX="/opt/i18/index.html"
 fi
 
-# 核心样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
+if [ -n "$ZH_INDEX" ]; then
+    cp -f "$ZH_INDEX" /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    cp -f "$ZH_INDEX" /usr/share/cups/doc-root/zh_CN/index.html 2>/dev/null || true
+    ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true
+    ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
+fi
+
+# 4. 核心样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
 CSS_FILE="/usr/share/cups/doc-root/cups.css"
 if [ -f "$CSS_FILE" ]; then
     cat << 'EOF' >> "$CSS_FILE"
@@ -229,8 +271,11 @@ echo ">>> [1/2] 启动 CUPS 核心引擎 (631)..."
 /usr/sbin/cupsd
 sleep 2
 
-cupsenable $(lpstat -p 2>/dev/null | awk '{print $2}') 2>/dev/null || true
-cupsaccept $(lpstat -p 2>/dev/null | awk '{print $2}') 2>/dev/null || true
+PRINTER_INIT_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
+if [ -n "$PRINTER_INIT_LIST" ]; then
+    cupsenable $PRINTER_INIT_LIST 2>/dev/null || true
+    cupsaccept $PRINTER_INIT_LIST 2>/dev/null || true
+fi
 
 echo ">>> [2/2] 启动 8088 智能控制台..."
 cd /opt/webapp
