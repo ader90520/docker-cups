@@ -5,6 +5,7 @@ import os
 import io
 import json
 import math
+import shutil
 import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
@@ -20,6 +21,20 @@ if os.path.exists(MODEL_PATH):
         net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
     except Exception:
         pass
+
+def limit_max_resolution(img, max_dim=2560):
+    """
+    海纳思/N1 内存保护天花板：
+    将超大像素照片（如 4800W 像素手机原图）等比限高限宽至安全尺寸，
+    防止大核形态学膨胀腐蚀造成 1GB 内存 OOM 闪退。
+    """
+    h, w = img.shape[:2]
+    if max(h, w) > max_dim:
+        scale = max_dim / float(max(h, w))
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return img
 
 def crop_scanner_black_borders(img):
     """几何自适应边界收割：探测并裁除扫描仪物理黑边与装订黑缝"""
@@ -66,11 +81,12 @@ def auto_perspective_crop(cv_img):
     cv_img = crop_scanner_black_borders(cv_img)
     h, w = cv_img.shape[:2]
 
-    if net is not None:
+    current_net = net
+    if current_net is not None:
         try:
             blob = cv2.dnn.blobFromImage(cv_img, 1.0 / 255.0, (256, 256), swapRB=True, crop=False)
-            net.setInput(blob)
-            out = net.forward()
+            current_net.setInput(blob)
+            out = current_net.forward()
 
             if len(out.shape) == 4:
                 feat = out[0, 1] if out.shape[1] > 1 else out[0, 0]
@@ -148,14 +164,54 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", is_already_cr
         nparr = np.frombuffer(raw_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None: return raw_bytes
+        
+        # 激活内存安全防护截断
+        img = limit_max_resolution(img, max_dim=2560)
+
         if not is_already_cropped:
             img = auto_perspective_crop(img)
+            
         is_color = (str(color_mode).strip().lower() == "color")
         result = camscanner_core_render(img, is_color=is_color)
         _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return enc.tobytes()
     except Exception:
         return raw_bytes
+
+def sanitize_onnx_for_webgl(input_path, output_path=None):
+    """
+    安全事务型脱量化：将 DynamicQuantizeLinear 节点清除，
+    优先输出至临时文件，通过完整性校验后再做替换。
+    """
+    if output_path is None:
+        output_path = input_path
+    temp_target = output_path + ".tmp"
+    try:
+        import onnx
+        model = onnx.load(input_path)
+        has_quant = any(node.op_type in ["DynamicQuantizeLinear", "MatMulInteger"] for node in model.graph.node)
+        if not has_quant:
+            return True, "模型已是原生浮点结构，无需转换"
+
+        try:
+            import onnxslim
+        except ImportError:
+            os.system("pip install onnxslim -q")
+            import onnxslim
+
+        model_slim = onnxslim.slim(input_path)
+        onnx.save(model_slim, temp_target)
+        if os.path.exists(temp_target) and os.path.getsize(temp_target) > 1024:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            os.rename(temp_target, output_path)
+            return True, "已成功消除 DynamicQuantizeLinear，转换为 WebGL 原生浮点模型"
+        else:
+            if os.path.exists(temp_target): os.remove(temp_target)
+            return False, "模型精简输出校验未通过"
+    except Exception as e:
+        if os.path.exists(temp_target): os.remove(temp_target)
+        return False, f"脱量化处理异常: {str(e)}"
 
 class EnhancePreviewHandler(BaseHandler):
     def post(self):
@@ -186,31 +242,51 @@ class ModelUploadHandler(tornado.web.RequestHandler):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
             files = self.request.files.get("model_file", [])
-            if not files or not files[0]["filename"].lower().endswith(".onnx"):
+            if not files:
                 self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "请上传合法 .onnx 模型"}))
+                self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
                 return
-            target_path = os.path.join(MODELS_PATH, files[0]["filename"])
+
+            raw_filename = files[0]["filename"]
+            # 路径穿越防御：强制截取纯文件名并过滤非法字符
+            safe_filename = os.path.basename(raw_filename).replace(" ", "_")
+            if not safe_filename.lower().endswith(".onnx"):
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "仅允许上传 .onnx 格式权重文件"}))
+                return
+
+            target_path = os.path.join(MODELS_PATH, safe_filename)
             with open(target_path, "wb") as f:
                 f.write(files[0]["body"])
+
+            ok, msg = sanitize_onnx_for_webgl(target_path)
+
             default_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
-            if "corner" in files[0]["filename"].lower() or not os.path.exists(default_path):
-                with open(default_path, "wb") as f:
-                    f.write(files[0]["body"])
-            self.write(json.dumps({"success": True, "msg": f"模型 {files[0]['filename']} 上传生效"}))
+            if "corner" in safe_filename.lower() or not os.path.exists(default_path):
+                shutil.copyfile(target_path, default_path)
+
+            # 原子切换后台 DNN 模型实例，避免多线程悬空指针
+            global net
+            try:
+                new_net = cv2.dnn.readNetFromONNX(default_path)
+                new_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                new_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                net = new_net
+            except Exception:
+                pass
+
+            self.write(json.dumps({"success": True, "msg": f"模型 {safe_filename} 部署就绪: {msg}"}))
         except Exception as e:
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
 class ModelManageHandler(tornado.web.RequestHandler):
-    """预留：模型清单查询接口"""
     def get(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         models = [f for f in os.listdir(MODELS_PATH) if f.endswith(".onnx")]
         self.write(json.dumps({"success": True, "models": models}))
 
 class AdvancedEnhanceHandler(BaseHandler):
-    """预留：去手写笔迹 / 展平扭曲 / 红章剥离接口"""
     def post(self):
         task_type = self.get_argument("task", "remove_handwriting")
         files = self.request.files.get("file", [])
@@ -224,13 +300,11 @@ class AdvancedEnhanceHandler(BaseHandler):
         self.write(out_bytes)
 
 class OcrHandler(tornado.web.RequestHandler):
-    """预留：文字识别、快递单号提取接口"""
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         self.write(json.dumps({"success": True, "text": "", "codes": []}))
 
 class WebhookPrintHandler(tornado.web.RequestHandler):
-    """预留：外部系统 Webhook 直接打印接口"""
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         self.write(json.dumps({"success": True, "msg": "Webhook 任务已接收"}))
