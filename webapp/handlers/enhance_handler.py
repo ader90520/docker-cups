@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
 
+# 保持模型实例全局就绪（如果盒子宿主机存在该文件，则自动作为服务端备用推理引擎）
 MODEL_PATH = "/opt/webapp/models/doc_corner.onnx"
 net = None
 if os.path.exists(MODEL_PATH):
@@ -67,7 +68,7 @@ def crop_scanner_black_borders(img):
     return img
 
 def auto_perspective_crop(cv_img):
-    """结合深度模型 Mask 与外接矩形的文档智能切边"""
+    """服务端深度模型切边兜底：专供邮箱远程打印与低配降级通道"""
     h, w = cv_img.shape[:2]
     
     # 物理黑边先行切除
@@ -106,7 +107,7 @@ def auto_perspective_crop(cv_img):
 def sanitize_clean_borders(img):
     """极细安全边缘置白：消除传感器最外圈残留噪点"""
     h, w = img.shape[:2]
-    m = 6
+    m = 5
     img[:m, :] = (255, 255, 255)
     img[h - m:, :] = (255, 255, 255)
     img[:, :m] = (255, 255, 255)
@@ -114,6 +115,7 @@ def sanitize_clean_borders(img):
     return img
 
 def camscanner_core_render(img, is_color=True):
+    """核心高清渲染：大核光照除法归一化 + 实心字 LUT（黑白字迹饱满不镂空，彩色保真）"""
     h, w = img.shape[:2]
 
     # 背景大核除法光照归一化
@@ -126,7 +128,7 @@ def camscanner_core_render(img, is_color=True):
     norm = (img.astype(np.float32) / bg_3d) * 255.0
     norm = np.clip(norm, 0, 255).astype(np.uint8)
 
-    # 1. 黑白模式：实心笔画 LUT 映射，消灭空心镂空字
+    # 1. 黑白模式：实心笔画 LUT 映射，消灭空心镂空字，保证字迹黑实
     if not is_color:
         norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
         lut = np.zeros(256, dtype=np.uint8)
@@ -164,16 +166,26 @@ def camscanner_core_render(img, is_color=True):
     out = cv2.cvtColor(merged, cv2.COLOR_HSV2BGR)
     return sanitize_clean_borders(out)
 
-def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
+def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", is_already_cropped=False):
+    """
+    通用增强入口：
+    - 邮箱远程打印时：is_already_cropped=False，自动执行边界收割与切边
+    - 前端大模型已裁剪时：is_already_cropped=True，直接执行纯净去黑底白底化，避免重复裁切
+    """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None:
             return raw_bytes
         
-        img = auto_perspective_crop(img)
+        # 仅在未预先裁切的情况下执行边界扫描与切边
+        if not is_already_cropped:
+            img = auto_perspective_crop(img)
+        
         is_color = (str(color_mode).strip().lower() == "color")
         result = camscanner_core_render(img, is_color=is_color)
+        
+        # 导出高质量 JPEG（压缩率适中，利于 CUPS 极速送打）
         _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return enc.tobytes()
     except Exception:
@@ -184,12 +196,21 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
+            # 接收客户端大模型切边标记（若客户端已切边则传入 client_cropped=true）
+            client_cropped = self.get_argument("client_cropped", "false").strip().lower() == "true"
+            
             if not files:
                 self.set_status(400)
                 self.write("未收到预览文件")
                 return
+            
             raw_bytes = files[0]["body"]
-            processed_bytes = enhance_camscanner_precise(raw_bytes, color_mode=color_mode)
+            processed_bytes = enhance_camscanner_precise(
+                raw_bytes, 
+                color_mode=color_mode, 
+                is_already_cropped=client_cropped
+            )
+            
             self.set_header("Content-Type", "image/jpeg")
             self.set_header("Cache-Control", "no-cache")
             self.write(processed_bytes)
