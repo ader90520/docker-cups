@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 from handlers.base_handler import BaseHandler
 
+# 保持服务端模型实例全局就绪（作为邮箱远程打印与低配环境的服务端推理兜底）
 MODEL_PATH = "/opt/webapp/models/doc_corner.onnx"
 net = None
 if os.path.exists(MODEL_PATH):
@@ -25,6 +26,7 @@ def crop_scanner_black_borders(img):
 
     top, bottom, left, right = 0, h, 0, w
 
+    # 扫描上边缘（向下探测最多 12% 高度）
     for y in range(int(h * 0.12)):
         line = gray[y, int(w * 0.15):int(w * 0.85)]
         if np.mean(line < 100) > 0.35 or np.mean(line) < 140:
@@ -33,6 +35,7 @@ def crop_scanner_black_borders(img):
             if y > top + 5:
                 break
 
+    # 扫描下边缘（向上探测最多 8% 高度）
     for y in range(h - 1, int(h * 0.92), -1):
         line = gray[y, int(w * 0.15):int(w * 0.85)]
         if np.mean(line < 100) > 0.35 or np.mean(line) < 140:
@@ -41,6 +44,7 @@ def crop_scanner_black_borders(img):
             if (h - 1 - y) > (h - bottom + 5):
                 break
 
+    # 扫描左边缘（向右探测最多 8% 宽度）
     for x in range(int(w * 0.08)):
         col = gray[int(h * 0.15):int(h * 0.85), x]
         if np.mean(col < 100) > 0.35 or np.mean(col) < 140:
@@ -49,6 +53,7 @@ def crop_scanner_black_borders(img):
             if x > left + 5:
                 break
 
+    # 扫描右边缘（向左探测最多 8% 宽度）
     for x in range(w - 1, int(w * 0.92), -1):
         col = gray[int(h * 0.15):int(h * 0.85), x]
         if np.mean(col < 100) > 0.35 or np.mean(col) < 140:
@@ -63,8 +68,10 @@ def crop_scanner_black_borders(img):
     return img
 
 def auto_perspective_crop(cv_img):
-    """服务端轻量切边兜底：专供邮箱远程打印与低配降级通道"""
+    """服务端深度模型切边兜底：专供邮箱远程打印与降级通道"""
     h, w = cv_img.shape[:2]
+    
+    # 物理黑边先行切除
     cv_img = crop_scanner_black_borders(cv_img)
     h, w = cv_img.shape[:2]
 
@@ -111,6 +118,7 @@ def camscanner_core_render(img, is_color=True):
     """核心高清渲染：大核光照除法归一化 + 实心字 LUT（黑白字迹饱满不镂空，彩色保真）"""
     h, w = img.shape[:2]
 
+    # 背景大核除法光照归一化
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (45, 45))
     bg = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
@@ -160,9 +168,9 @@ def camscanner_core_render(img, is_color=True):
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", is_already_cropped=False):
     """
-    通用增强入口：
-    - 邮箱远程打印时：is_already_cropped=False，自动执行边界收割与切边
-    - 前端大模型已裁剪时：is_already_cropped=True，直接执行纯净去黑底白底化，避免重复裁切
+    通用增强接口：
+    - 邮箱远程打印时：is_already_cropped=False，自动执行边界扫描与切边
+    - 前端大模型已裁剪时：is_already_cropped=True，直接执行纯净去黑底白底化，避免二次误切
     """
     try:
         nparr = np.frombuffer(raw_bytes, np.uint8)
@@ -186,6 +194,7 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
+            # 接收前端端侧 AI 是否已裁剪的标记
             client_cropped = self.get_argument("client_cropped", "false").strip().lower() == "true"
             
             if not files:
