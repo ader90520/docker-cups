@@ -75,7 +75,7 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
 class ModelUploadHandler(tornado.web.RequestHandler):
-    """接收 ONNX 模型上传并自动持久化部署"""
+    """支持端侧 ONNX 模型的在线热上传与持久化存储"""
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
@@ -96,16 +96,15 @@ class ModelUploadHandler(tornado.web.RequestHandler):
             with open(target_path, "wb") as f:
                 f.write(upload_file["body"])
 
-            # 若上传的是通用切边或纠偏，自动映射为缺省 doc_corner.onnx
-            default_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
-            if "corner" in filename.lower() or not os.path.exists(default_path):
-                with open(default_path, "wb") as f:
+            # 兼容默认切边模型命名
+            default_corner_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
+            if "corner" in filename.lower() or not os.path.exists(default_corner_path):
+                with open(default_corner_path, "wb") as f:
                     f.write(upload_file["body"])
 
             self.write(json.dumps({
-                "success": True, 
-                "msg": f"模型【{filename}】上传成功并已持久化挂载！",
-                "filename": filename
+                "success": True,
+                "msg": f"模型 {filename} 已成功上传并部署至 /models/{filename}"
             }))
         except Exception as e:
             self.set_status(500)
@@ -120,7 +119,7 @@ def make_app():
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 2. 核心业务打印与图像实时算法接口
+        # 2. 核心业务打印与图像算法接口
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
