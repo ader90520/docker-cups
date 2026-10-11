@@ -124,13 +124,13 @@ class DocumentAIEngine {
                 this.log(`[成功] 模型已下载并永久存入 IndexedDB 数据库`, "success");
             }
 
-            // 启用标准 WebGL2 硬件管线配置
+            // WebGL2 硬件配置：启用浮点纹理打包
             const sessionOptions = {
                 executionProviders: [
                     {
                         name: 'webgl',
                         contextId: 'webgl2',
-                        pack: true  // 激活纹理打包，大幅降低显存带宽消耗
+                        pack: true
                     },
                     'wasm'
                 ],
@@ -165,6 +165,7 @@ class DocumentAIEngine {
     }
 
     async init() {
+        if (!window.ort) return false;
         ort.env.wasm.numThreads = 2;
         this.log("端侧 AI 诊断守护启动...", "info");
         const ok = await this.loadModel("corner", "doc_corner.onnx");
@@ -187,11 +188,29 @@ class DocumentAIEngine {
     async processDocument(file, options = { pipeline: ["corner"] }) {
         if (!this.readyStatus["corner"]) return null;
         const t0 = performance.now();
+        let objectUrl = null;
+        let inputTensor = null;
+
         try {
-            const img = await new Promise((res) => {
+            const img = await new Promise((res, rej) => {
                 const i = new Image();
-                i.onload = () => res(i);
-                i.src = URL.createObjectURL(file);
+                objectUrl = URL.createObjectURL(file);
+                i.onload = () => {
+                    // 图片加载完成后立即解绑 URL，防止 iOS Safari 显存常驻泄露
+                    if (objectUrl) {
+                        URL.revokeObjectURL(objectUrl);
+                        objectUrl = null;
+                    }
+                    res(i);
+                };
+                i.onerror = (e) => {
+                    if (objectUrl) {
+                        URL.revokeObjectURL(objectUrl);
+                        objectUrl = null;
+                    }
+                    rej(e);
+                };
+                i.src = objectUrl;
             });
 
             let curCanvas = this.safeResize(img, 2048);
@@ -211,8 +230,8 @@ class DocumentAIEngine {
                     floatArr[2 * 256 * 256 + i] = data[i * 4 + 2] / 255.0;
                 }
 
-                const tensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
-                const results = await this.sessions["corner"].run({ input: tensor });
+                inputTensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
+                const results = await this.sessions["corner"].run({ input: inputTensor });
                 const mask = results.output.data;
 
                 let minX = 256, minY = 256, maxX = 0, maxY = 0, cnt = 0;
@@ -228,6 +247,9 @@ class DocumentAIEngine {
                     }
                 }
 
+                // 释放网络输入画布
+                netCanvas.width = 1; netCanvas.height = 1;
+
                 if (cnt > (256 * 256 * 0.20)) {
                     const sx = w / 256.0, sy = h / 256.0;
                     const cropX = Math.max(0, Math.floor(minX * sx));
@@ -239,21 +261,21 @@ class DocumentAIEngine {
                     outCanvas.width = cropW; outCanvas.height = cropH;
                     const outCtx = outCanvas.getContext("2d");
                     outCtx.drawImage(curCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                    
+                    curCanvas.width = 1; curCanvas.height = 1;
                     curCanvas = outCanvas;
                 }
-            }
-
-            // 预留 pipeline 插槽：展平模型 (dewarp)
-            if (options.pipeline.includes("dewarp") && this.sessions["dewarp"]) {
-                // 展平扩展点
             }
 
             this.lastInferTime = Math.round(performance.now() - t0);
             this.log(`图像推理与切边完成，耗时: ${this.lastInferTime} ms`, "success");
             this.updateDashboardMetrics();
 
-            return await new Promise((res) => curCanvas.toBlob(res, "image/jpeg", 0.94));
+            const blobResult = await new Promise((res) => curCanvas.toBlob(res, "image/jpeg", 0.94));
+            curCanvas.width = 1; curCanvas.height = 1; // 彻底释放离屏像素内存
+            return blobResult;
         } catch (err) {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
             this.log(`推理执行异常: ${err.message}，自动回退原图`, "warn");
             return null;
         }
