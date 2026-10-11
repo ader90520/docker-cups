@@ -8,6 +8,7 @@ import math
 import shutil
 import numpy as np
 import cv2
+import tornado.web
 from handlers.base_handler import BaseHandler
 
 MODELS_PATH = "/opt/webapp/models"
@@ -20,13 +21,12 @@ if os.path.exists(MODEL_PATH):
         net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
         net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
     except Exception:
-        pass
+        net = None
 
 def limit_max_resolution(img, max_dim=2560):
     """
     海纳思/N1 内存保护天花板：
-    将超大像素照片（如 4800W 像素手机原图）等比限高限宽至安全尺寸，
-    防止大核形态学膨胀腐蚀造成 1GB 内存 OOM 闪退。
+    将超大像素照片等比限高限宽至安全尺寸，防止 1GB 内存盒子 OOM 崩溃。
     """
     h, w = img.shape[:2]
     if max(h, w) > max_dim:
@@ -133,7 +133,7 @@ def camscanner_core_render(img, is_color=True):
     norm = np.clip((img.astype(np.float32) / bg_3d) * 255.0, 0, 255).astype(np.uint8)
 
     if not is_color:
-        norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
+        norm_gray = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
         lut = np.zeros(256, dtype=np.uint8)
         for i in range(256):
             if i >= 195: lut[i] = 255
@@ -181,7 +181,7 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", is_already_cr
 def sanitize_onnx_for_webgl(input_path, output_path=None):
     """
     安全事务型脱量化：将 DynamicQuantizeLinear 节点清除，
-    优先输出至临时文件，通过完整性校验后再做替换。
+    还原为浏览器 WebGL 与 OpenCV DNN 原生支持的纯浮点图结构。
     """
     if output_path is None:
         output_path = input_path
@@ -248,7 +248,7 @@ class ModelUploadHandler(tornado.web.RequestHandler):
                 return
 
             raw_filename = files[0]["filename"]
-            # 路径穿越防御：强制截取纯文件名并过滤非法字符
+            # 路径穿越防御：强制提取纯文件名
             safe_filename = os.path.basename(raw_filename).replace(" ", "_")
             if not safe_filename.lower().endswith(".onnx"):
                 self.set_status(400)
@@ -273,7 +273,7 @@ class ModelUploadHandler(tornado.web.RequestHandler):
                 new_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                 net = new_net
             except Exception:
-                pass
+                net = None
 
             self.write(json.dumps({"success": True, "msg": f"模型 {safe_filename} 部署就绪: {msg}"}))
         except Exception as e:
