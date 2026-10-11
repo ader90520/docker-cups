@@ -1,6 +1,5 @@
 /**
- * client_ai.js - 端侧 AI 模型引擎 (IndexedDB 永久持久化 + WebGL 硬件加速)
- * 支持切边纠偏 (Corner)、文字方向与文档展平 (Dewarp)
+ * client_ai.js - 端侧通用 AI 多模型推理管线 + 状态诊断与日志引擎
  */
 
 const ClientModelCache = {
@@ -39,75 +38,128 @@ const ClientModelCache = {
         if (!db) return;
         const tx = db.transaction(this.storeName, "readwrite");
         tx.objectStore(this.storeName).delete(key);
+    },
+
+    async clearAll() {
+        const db = await this.openDB();
+        if (!db) return;
+        const tx = db.transaction(this.storeName, "readwrite");
+        tx.objectStore(this.storeName).clear();
     }
 };
 
 class DocumentAIEngine {
     constructor() {
-        this.sessionCorner = null;
-        this.sessionDewarp = null;
-        this.isCornerReady = false;
-        this.isDewarpReady = false;
+        this.sessions = {};
+        this.readyStatus = {};
+        this.currentBackend = "未初始化";
+        this.cacheSource = "无";
+        this.lastInferTime = 0;
+        this.activeModelName = "无";
+        this.logs = [];
     }
 
-    // 显式界面状态提示
-    updateBadge(text, isSuccess = true) {
-        let badge = document.getElementById("ai-engine-pill");
-        if (!badge) {
-            badge = document.createElement("span");
-            badge.id = "ai-engine-pill";
-            badge.className = "ai-engine-tag";
-            const parent = document.querySelector(".printer-select-wrap");
-            if (parent) parent.appendChild(badge);
+    // 记录诊断日志并在 UI 呈现
+    log(msg, type = "info") {
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+        const item = { time: timeStr, msg, type };
+        this.logs.unshift(item);
+        if (this.logs.length > 50) this.logs.pop();
+        this.renderLogs();
+    }
+
+    renderLogs() {
+        const logBox = document.getElementById("ai-diag-console");
+        if (!logBox) return;
+        logBox.innerHTML = this.logs.map(l => {
+            let color = "#64748b";
+            if (l.type === "success") color = "#16a34a";
+            if (l.type === "warn") color = "#d97706";
+            if (l.type === "error") color = "#dc2626";
+            return `<div style="margin-bottom:3px; line-height:1.4;"><span style="color:#94a3b8;">[${l.time}]</span> <span style="color:${color}; font-weight:600;">${l.msg}</span></div>`;
+        }).join("");
+    }
+
+    updateDashboardMetrics() {
+        const elBackend = document.getElementById("diag-metric-backend");
+        const elCache = document.getElementById("diag-metric-cache");
+        const elModel = document.getElementById("diag-metric-model");
+        const elSpeed = document.getElementById("diag-metric-speed");
+        const elPill = document.getElementById("ai-engine-pill");
+
+        if (elBackend) elBackend.innerText = this.currentBackend;
+        if (elCache) elCache.innerText = this.cacheSource;
+        if (elModel) elModel.innerText = this.activeModelName;
+        if (elSpeed) elSpeed.innerText = this.lastInferTime > 0 ? `${this.lastInferTime} ms` : "-";
+
+        if (elPill) {
+            const isOk = !!this.readyStatus["corner"];
+            elPill.style.background = isOk ? "#dcfce7" : "#e0f2fe";
+            elPill.style.color = isOk ? "#15803d" : "#0369a1";
+            elPill.innerText = isOk ? `⚡ 端侧 AI 就绪 (${this.currentBackend})` : "☁ 云端轻量加速";
         }
-        badge.style.background = isSuccess ? "#dcfce7" : "#e0f2fe";
-        badge.style.color = isSuccess ? "#15803d" : "#0369a1";
-        badge.style.fontSize = "11px";
-        badge.style.padding = "3px 8px";
-        badge.style.borderRadius = "12px";
-        badge.style.fontWeight = "600";
-        badge.innerText = text;
+    }
+
+    async loadModel(modelKey, filename) {
+        if (!window.ort) {
+            this.log("未检测到 onnxruntime-web 引擎库，将降级至盒子端处理", "warn");
+            return null;
+        }
+
+        this.log(`正在检查模型: ${filename}...`, "info");
+        try {
+            let buf = await ClientModelCache.get(modelKey);
+            if (buf) {
+                this.cacheSource = "IndexedDB (秒开)";
+                this.log(`[成功] 命中浏览器本地 IndexedDB 缓存 (${(buf.byteLength / 1024 / 1024).toFixed(2)} MB)`, "success");
+            } else {
+                this.cacheSource = "网络下载";
+                this.log(`[下载] 本地无缓存，正在向服务请求 /models/${filename}...`, "info");
+                const resp = await fetch(`/models/${filename}`);
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status} - 服务端 /models/ 目录未找到该模型文件`);
+                }
+                buf = await resp.arrayBuffer();
+                await ClientModelCache.set(modelKey, buf);
+                this.log(`[成功] 模型已下载并永久存入 IndexedDB 数据库`, "success");
+            }
+
+            // 测试 WebGL 与硬件加速
+            this.log("正在初始化 WebGL 硬件执行通道...", "info");
+            let session = null;
+            try {
+                session = await ort.InferenceSession.create(buf, { executionProviders: ["webgl", "wasm"] });
+                this.currentBackend = "WebGL (GPU 加速)";
+                this.log("[就绪] WebGL 硬件加速激活成功，当前在设备显卡上运算", "success");
+            } catch (gpuErr) {
+                this.log(`[降级] WebGL 初始化受限 (${gpuErr.message})，转为 WASM (CPU 多线程)`, "warn");
+                session = await ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
+                this.currentBackend = "WASM (CPU 多线程)";
+            }
+
+            this.sessions[modelKey] = session;
+            this.readyStatus[modelKey] = true;
+            this.activeModelName = filename;
+            this.updateDashboardMetrics();
+            return session;
+        } catch (e) {
+            this.readyStatus[modelKey] = false;
+            this.currentBackend = "降级至服务端";
+            this.log(`[故障] 模型载入失败: ${e.message}`, "error");
+            this.log("排查提示: 1.请检查盒子 /opt/webapp/models/ 是否存在该文件; 2.可在下方重新上传模型覆盖", "warn");
+            this.updateDashboardMetrics();
+            return null;
+        }
     }
 
     async init() {
-        if (!window.ort) {
-            this.updateBadge("☁ 云端轻量加速", false);
-            return false;
-        }
-
-        try {
-            ort.env.wasm.numThreads = 2;
-            let cornerBuf = await ClientModelCache.get("doc_corner");
-
-            if (!cornerBuf) {
-                this.updateBadge("⏳ 正在下载模型...", false);
-                const resp = await Promise.race([
-                    fetch("/models/doc_corner.onnx"),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 4000))
-                ]);
-                if (!resp.ok) throw new Error("Model not found");
-                cornerBuf = await resp.arrayBuffer();
-                await ClientModelCache.set("doc_corner", cornerBuf);
-            }
-
-            this.sessionCorner = await ort.InferenceSession.create(cornerBuf, {
-                executionProviders: ["webgl", "wasm"]
-            });
-            this.isCornerReady = true;
-
-            // 成功提示：明确呈现模型已加载就绪
-            this.updateBadge("⚡ 端侧 AI 硬件加速就绪", true);
-            console.log("[ClientAI] 切边与校正模型加载成功并就绪 (WebGL)");
-            return true;
-        } catch (e) {
-            console.warn("[ClientAI] 端侧模型未找到或初始化跳过，降级至服务端通道:", e);
-            this.isCornerReady = false;
-            this.updateBadge("☁ 云端轻量加速", false);
-            return false;
-        }
+        ort.env.wasm.numThreads = 2;
+        this.log("端侧 AI 诊断守护启动...", "info");
+        const ok = await this.loadModel("corner", "doc_corner.onnx");
+        return !!ok;
     }
 
-    // 防 Safari 内存崩溃缩放
     safeResize(img, maxDim = 2048) {
         let w = img.width, h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -121,9 +173,9 @@ class DocumentAIEngine {
         return canvas;
     }
 
-    // 执行切边与轮廓纠偏
-    async processDocument(file) {
-        if (!this.isCornerReady || !this.sessionCorner) return null;
+    async processDocument(file, options = { pipeline: ["corner"] }) {
+        if (!this.readyStatus["corner"]) return null;
+        const t0 = performance.now();
         try {
             const img = await new Promise((res) => {
                 const i = new Image();
@@ -131,13 +183,13 @@ class DocumentAIEngine {
                 i.src = URL.createObjectURL(file);
             });
 
-            const baseCanvas = this.safeResize(img, 2048);
-            const w = baseCanvas.width, h = baseCanvas.height;
+            let curCanvas = this.safeResize(img, 2048);
+            const w = curCanvas.width, h = curCanvas.height;
 
             const netCanvas = document.createElement("canvas");
             netCanvas.width = 256; netCanvas.height = 256;
             const nCtx = netCanvas.getContext("2d");
-            nCtx.drawImage(baseCanvas, 0, 0, 256, 256);
+            nCtx.drawImage(curCanvas, 0, 0, 256, 256);
             const data = nCtx.getImageData(0, 0, 256, 256).data;
 
             const floatArr = new Float32Array(3 * 256 * 256);
@@ -147,8 +199,8 @@ class DocumentAIEngine {
                 floatArr[2 * 256 * 256 + i] = data[i * 4 + 2] / 255.0;
             }
 
-            const inputTensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
-            const results = await this.sessionCorner.run({ input: inputTensor });
+            const tensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
+            const results = await this.sessions["corner"].run({ input: tensor });
             const mask = results.output.data;
 
             let minX = 256, minY = 256, maxX = 0, maxY = 0, cnt = 0;
@@ -174,17 +226,30 @@ class DocumentAIEngine {
                 const outCanvas = document.createElement("canvas");
                 outCanvas.width = cropW; outCanvas.height = cropH;
                 const outCtx = outCanvas.getContext("2d");
-                outCtx.drawImage(baseCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-                return await new Promise((res) => outCanvas.toBlob(res, "image/jpeg", 0.94));
+                outCtx.drawImage(curCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                curCanvas = outCanvas;
             }
+
+            this.lastInferTime = Math.round(performance.now() - t0);
+            this.log(`图像推理与切边完成，耗时: ${this.lastInferTime} ms`, "success");
+            this.updateDashboardMetrics();
+
+            return await new Promise((res) => curCanvas.toBlob(res, "image/jpeg", 0.94));
         } catch (err) {
-            console.warn("[ClientAI] 推理微异常，直接降级:", err);
+            this.log(`推理执行异常: ${err.message}，已自动回退至服务端原图`, "warn");
+            return null;
         }
-        return null;
     }
 
-    // 在线上传并热重载新模型
+    async clearCacheAndReload() {
+        this.log("正在清空浏览器 IndexedDB 数据库中的模型缓存...", "info");
+        await ClientModelCache.clearAll();
+        this.readyStatus = {};
+        this.sessions = {};
+        this.log("缓存已清空，正在重新拉取最新模型...", "info");
+        await this.init();
+    }
+
     async uploadAndReloadModel(fileInputId, alertId) {
         const fileInput = document.getElementById(fileInputId);
         const alertBox = document.getElementById(alertId);
@@ -199,25 +264,26 @@ class DocumentAIEngine {
 
         alertBox.style.display = "block";
         alertBox.className = "status-alert status-success";
-        alertBox.innerText = "⏳ 正在上传模型并刷新本地缓存...";
+        alertBox.innerText = `⏳ 正在上传模型 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`;
+        this.log(`正在上传新模型文件: ${file.name}`, "info");
 
         try {
             const resp = await fetch("/api/model/upload", { method: "POST", body: fd });
             const d = await resp.json();
             if (d.success) {
-                alertBox.innerText = "✅ 模型已更新成功！正在热加载...";
-                // 清理旧缓存并重启
-                await ClientModelCache.remove("doc_corner");
-                await this.init();
-                alertBox.innerText = "✅ " + (d.msg || "新模型已生效并已加载至浏览器！");
+                alertBox.innerText = "✅ " + d.msg;
+                this.log(`服务端保存成功: ${d.msg}`, "success");
                 fileInput.value = "";
+                await this.clearCacheAndReload();
             } else {
                 alertBox.className = "status-alert status-error";
                 alertBox.innerText = "❌ 上传失败: " + d.msg;
+                this.log(`上传被拦截: ${d.msg}`, "error");
             }
         } catch (e) {
             alertBox.className = "status-alert status-error";
             alertBox.innerText = "❌ 请求异常: " + e;
+            this.log(`网络上传错误: ${e}`, "error");
         }
     }
 }
