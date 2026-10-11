@@ -1,5 +1,5 @@
 /**
- * client_ai.js - 端侧通用 AI 多模型推理管线 + 状态诊断与日志引擎
+ * client_ai.js - 端侧通用 AI 多模型推理管线 + 状态诊断与 WebGL2 硬件加速引擎
  */
 
 const ClientModelCache = {
@@ -59,7 +59,6 @@ class DocumentAIEngine {
         this.logs = [];
     }
 
-    // 记录诊断日志并在 UI 呈现
     log(msg, type = "info") {
         const now = new Date();
         const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
@@ -103,7 +102,7 @@ class DocumentAIEngine {
 
     async loadModel(modelKey, filename) {
         if (!window.ort) {
-            this.log("未检测到 onnxruntime-web 引擎库，将降级至盒子端处理", "warn");
+            this.log("未检测到 onnxruntime-web 引擎库，降级至盒子端处理", "warn");
             return null;
         }
 
@@ -115,23 +114,35 @@ class DocumentAIEngine {
                 this.log(`[成功] 命中浏览器本地 IndexedDB 缓存 (${(buf.byteLength / 1024 / 1024).toFixed(2)} MB)`, "success");
             } else {
                 this.cacheSource = "网络下载";
-                this.log(`[下载] 本地无缓存，正在向服务请求 /models/${filename}...`, "info");
+                this.log(`[下载] 本地无缓存，正在请求 /models/${filename}...`, "info");
                 const resp = await fetch(`/models/${filename}`);
                 if (!resp.ok) {
-                    throw new Error(`HTTP ${resp.status} - 服务端 /models/ 目录未找到该模型文件`);
+                    throw new Error(`HTTP ${resp.status} - 服务端 /models/ 目录未找到该模型`);
                 }
                 buf = await resp.arrayBuffer();
                 await ClientModelCache.set(modelKey, buf);
                 this.log(`[成功] 模型已下载并永久存入 IndexedDB 数据库`, "success");
             }
 
-            // 测试 WebGL 与硬件加速
+            // WebGL2 硬件配置：启用浮点纹理打包
+            const sessionOptions = {
+                executionProviders: [
+                    {
+                        name: 'webgl',
+                        contextId: 'webgl2',
+                        pack: true
+                    },
+                    'wasm'
+                ],
+                graphOptimizationLevel: 'all'
+            };
+
             this.log("正在初始化 WebGL 硬件执行通道...", "info");
             let session = null;
             try {
-                session = await ort.InferenceSession.create(buf, { executionProviders: ["webgl", "wasm"] });
+                session = await ort.InferenceSession.create(buf, sessionOptions);
                 this.currentBackend = "WebGL (GPU 加速)";
-                this.log("[就绪] WebGL 硬件加速激活成功，当前在设备显卡上运算", "success");
+                this.log("[就绪] WebGL 硬件加速激活成功，当前在设备显卡上全速运算", "success");
             } catch (gpuErr) {
                 this.log(`[降级] WebGL 初始化受限 (${gpuErr.message})，转为 WASM (CPU 多线程)`, "warn");
                 session = await ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
@@ -147,7 +158,7 @@ class DocumentAIEngine {
             this.readyStatus[modelKey] = false;
             this.currentBackend = "降级至服务端";
             this.log(`[故障] 模型载入失败: ${e.message}`, "error");
-            this.log("排查提示: 1.请检查盒子 /opt/webapp/models/ 是否存在该文件; 2.可在下方重新上传模型覆盖", "warn");
+            this.log("排查建议: 1. 检查 /opt/webapp/models/ 文件状态; 2. 上传剔除动态量化的原生模型覆盖", "warn");
             this.updateDashboardMetrics();
             return null;
         }
@@ -184,50 +195,57 @@ class DocumentAIEngine {
             });
 
             let curCanvas = this.safeResize(img, 2048);
-            const w = curCanvas.width, h = curCanvas.height;
 
-            const netCanvas = document.createElement("canvas");
-            netCanvas.width = 256; netCanvas.height = 256;
-            const nCtx = netCanvas.getContext("2d");
-            nCtx.drawImage(curCanvas, 0, 0, 256, 256);
-            const data = nCtx.getImageData(0, 0, 256, 256).data;
+            if (options.pipeline.includes("corner") && this.sessions["corner"]) {
+                const w = curCanvas.width, h = curCanvas.height;
+                const netCanvas = document.createElement("canvas");
+                netCanvas.width = 256; netCanvas.height = 256;
+                const nCtx = netCanvas.getContext("2d");
+                nCtx.drawImage(curCanvas, 0, 0, 256, 256);
+                const data = nCtx.getImageData(0, 0, 256, 256).data;
 
-            const floatArr = new Float32Array(3 * 256 * 256);
-            for (let i = 0; i < 256 * 256; i++) {
-                floatArr[i] = data[i * 4] / 255.0;
-                floatArr[256 * 256 + i] = data[i * 4 + 1] / 255.0;
-                floatArr[2 * 256 * 256 + i] = data[i * 4 + 2] / 255.0;
-            }
+                const floatArr = new Float32Array(3 * 256 * 256);
+                for (let i = 0; i < 256 * 256; i++) {
+                    floatArr[i] = data[i * 4] / 255.0;
+                    floatArr[256 * 256 + i] = data[i * 4 + 1] / 255.0;
+                    floatArr[2 * 256 * 256 + i] = data[i * 4 + 2] / 255.0;
+                }
 
-            const tensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
-            const results = await this.sessions["corner"].run({ input: tensor });
-            const mask = results.output.data;
+                const tensor = new ort.Tensor("float32", floatArr, [1, 3, 256, 256]);
+                const results = await this.sessions["corner"].run({ input: tensor });
+                const mask = results.output.data;
 
-            let minX = 256, minY = 256, maxX = 0, maxY = 0, cnt = 0;
-            for (let y = 0; y < 256; y++) {
-                for (let x = 0; x < 256; x++) {
-                    if (mask[y * 256 + x] > 0.35) {
-                        if (x < minX) minX = x;
-                        if (x > maxX) maxX = x;
-                        if (y < minY) minY = y;
-                        if (y > maxY) maxY = y;
-                        cnt++;
+                let minX = 256, minY = 256, maxX = 0, maxY = 0, cnt = 0;
+                for (let y = 0; y < 256; y++) {
+                    for (let x = 0; x < 256; x++) {
+                        if (mask[y * 256 + x] > 0.35) {
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
+                            cnt++;
+                        }
                     }
+                }
+
+                if (cnt > (256 * 256 * 0.20)) {
+                    const sx = w / 256.0, sy = h / 256.0;
+                    const cropX = Math.max(0, Math.floor(minX * sx));
+                    const cropY = Math.max(0, Math.floor(minY * sy));
+                    const cropW = Math.min(w - cropX, Math.ceil((maxX - minX) * sx));
+                    const cropH = Math.min(h - cropY, Math.ceil((maxY - minY) * sy));
+
+                    const outCanvas = document.createElement("canvas");
+                    outCanvas.width = cropW; outCanvas.height = cropH;
+                    const outCtx = outCanvas.getContext("2d");
+                    outCtx.drawImage(curCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                    curCanvas = outCanvas;
                 }
             }
 
-            if (cnt > (256 * 256 * 0.20)) {
-                const sx = w / 256.0, sy = h / 256.0;
-                const cropX = Math.max(0, Math.floor(minX * sx));
-                const cropY = Math.max(0, Math.floor(minY * sy));
-                const cropW = Math.min(w - cropX, Math.ceil((maxX - minX) * sx));
-                const cropH = Math.min(h - cropY, Math.ceil((maxY - minY) * sy));
-
-                const outCanvas = document.createElement("canvas");
-                outCanvas.width = cropW; outCanvas.height = cropH;
-                const outCtx = outCanvas.getContext("2d");
-                outCtx.drawImage(curCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-                curCanvas = outCanvas;
+            // 预留 pipeline 插槽：展平模型 (dewarp)
+            if (options.pipeline.includes("dewarp") && this.sessions["dewarp"]) {
+                // 展平扩展点
             }
 
             this.lastInferTime = Math.round(performance.now() - t0);
@@ -236,7 +254,7 @@ class DocumentAIEngine {
 
             return await new Promise((res) => curCanvas.toBlob(res, "image/jpeg", 0.94));
         } catch (err) {
-            this.log(`推理执行异常: ${err.message}，已自动回退至服务端原图`, "warn");
+            this.log(`推理执行异常: ${err.message}，自动回退原图`, "warn");
             return null;
         }
     }
@@ -246,7 +264,7 @@ class DocumentAIEngine {
         await ClientModelCache.clearAll();
         this.readyStatus = {};
         this.sessions = {};
-        this.log("缓存已清空，正在重新拉取最新模型...", "info");
+        this.log("缓存已清空，重新拉取最新模型...", "info");
         await this.init();
     }
 
