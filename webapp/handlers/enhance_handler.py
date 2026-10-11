@@ -133,7 +133,7 @@ def camscanner_core_render(img, is_color=True):
     norm = np.clip((img.astype(np.float32) / bg_3d) * 255.0, 0, 255).astype(np.uint8)
 
     if not is_color:
-        norm_gray = cv2.cvtColor(norm, cv2.COLOR_BGR2GRAY)
+        norm_gray = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
         lut = np.zeros(256, dtype=np.uint8)
         for i in range(256):
             if i >= 195: lut[i] = 255
