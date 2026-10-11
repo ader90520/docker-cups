@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OMP_NUM_THREADS=4 \
     OPENBLAS_NUM_THREADS=4
 
-# 基础系统环境、驱动与 Python 图像处理库
+# 基础系统环境、驱动与 Python 图像处理库 (加入 python3-pip 与 onnx 工具链)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
+    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
@@ -44,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
+    && pip3 install --no-cache-dir --break-system-packages onnx onnxslim \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
@@ -51,6 +53,12 @@ COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
+
+# 构建期直接脱量化 doc_corner.onnx，源头清除 DynamicQuantizeLinear 报错
+RUN if [ -f /opt/webapp/models/doc_corner.onnx ]; then \
+        python3 -c "import onnx, onnxslim; p='/opt/webapp/models/doc_corner.onnx'; onnx.save(onnxslim.slim(p), p)" || true; \
+        echo "✔ [Build] doc_corner.onnx 纯浮点脱量化处理完成"; \
+    fi
 
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
@@ -62,26 +70,35 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
+# 驱动微码安装、主题美化与中文语言包/主页精准注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
     mkdir -p /usr/share/cups/templates/zh_CN \
              /usr/share/cups/templates/zh \
              /usr/share/cups/locale/zh_CN \
-             /usr/share/cups/locale/zh && \
+             /usr/share/cups/locale/zh \
+             /usr/share/cups/doc-root/zh_CN && \
     if [ -f /opt/i18/cups_zh.po ]; then \
         msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po && \
         cp /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo || true; \
     fi && \
     if [ -d /opt/i18/zh_CN ]; then \
-        cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh_CN/ && \
-        cp -rf /opt/i18/zh_CN/* /usr/share/cups/templates/zh/; \
+        cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true && \
+        cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true; \
     elif [ -d /opt/i18/templates ]; then \
-        cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh_CN/ && \
-        cp -rf /opt/i18/templates/* /usr/share/cups/templates/zh/; \
+        cp -rf /opt/i18/templates/*.tmpl /usr/share/cups/templates/zh_CN/ 2>/dev/null || true && \
+        cp -rf /opt/i18/templates/*.tmpl /usr/share/cups/templates/zh/ 2>/dev/null || true; \
     fi && \
-    if [ -f /opt/i18/index.html ]; then \
-        cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html; \
+    if [ -f /opt/i18/zh_CN/index.html ]; then \
+        cp -f /opt/i18/zh_CN/index.html /usr/share/cups/doc-root/index.html && \
+        cp -f /opt/i18/zh_CN/index.html /usr/share/cups/doc-root/zh_CN/index.html && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
+    elif [ -f /opt/i18/index.html ]; then \
+        cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
     fi && \
     chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
