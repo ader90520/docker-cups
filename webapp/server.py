@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 正常导入你仓库现有的全部业务模块
+# 导入业务模块
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
@@ -74,16 +74,53 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
+class ModelUploadHandler(tornado.web.RequestHandler):
+    """接收 ONNX 模型上传并自动持久化部署"""
+    def post(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        try:
+            files = self.request.files.get("model_file", [])
+            if not files:
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
+                return
+
+            upload_file = files[0]
+            filename = upload_file["filename"]
+            if not filename.lower().endswith(".onnx"):
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "仅支持上传 .onnx 格式的模型文件"}))
+                return
+
+            target_path = os.path.join(MODELS_PATH, filename)
+            with open(target_path, "wb") as f:
+                f.write(upload_file["body"])
+
+            # 若上传的是通用切边或纠偏，自动映射为缺省 doc_corner.onnx
+            default_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
+            if "corner" in filename.lower() or not os.path.exists(default_path):
+                with open(default_path, "wb") as f:
+                    f.write(upload_file["body"])
+
+            self.write(json.dumps({
+                "success": True, 
+                "msg": f"模型【{filename}】上传成功并已持久化挂载！",
+                "filename": filename
+            }))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
 def make_app():
     handlers = [
         # 1. 静态资源与首页映射
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
-        (r"/models/(.*)", StaticFileHandler, {"path": MODELS_PATH}),  # 映射端侧 AI 模型目录
+        (r"/models/(.*)", StaticFileHandler, {"path": MODELS_PATH}),
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 2. 核心业务打印与图像实时算法接口 (兼容所有调用路径)
+        # 2. 核心业务打印与图像实时算法接口
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
@@ -93,6 +130,7 @@ def make_app():
         (r"/api/preview/enhance", EnhancePreviewHandler),
         (r"/api/preview_enhance", EnhancePreviewHandler),
         (r"/enhance_preview", EnhancePreviewHandler),
+        (r"/api/model/upload", ModelUploadHandler),
 
         # 3. 扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
