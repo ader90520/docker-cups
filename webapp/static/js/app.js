@@ -1,5 +1,5 @@
 /**
- * app.js - CUPS 智能工作台前端核心交互逻辑
+ * app.js - CUPS 智能工作台前端核心交互逻辑 (集成视口防误触锁与黄金比例响应)
  */
 
 const AppConfig = {
@@ -14,6 +14,7 @@ const AppConfig = {
     isDragging: false,
     startX: 0,
     startY: 0,
+    isViewerActive: false, // 专属交互锁状态：默认锁定
     globalPrintersData: [],
     isPollingActive: false,
     currentLiveScanUrl: null,
@@ -32,18 +33,70 @@ const AppConfig = {
 const EnhanceEngine = {
     enhancedCache: {},
 
+    setViewerState(active) {
+        AppConfig.isViewerActive = active;
+        const vpBox = document.getElementById('viewport-box');
+        const lockBadge = document.getElementById('preview-lock-badge');
+        const lockIcon = document.getElementById('lock-icon');
+        const lockText = document.getElementById('lock-text');
+
+        if (!vpBox || !lockBadge) return;
+
+        if (active) {
+            vpBox.classList.remove('locked');
+            vpBox.classList.add('unlocked');
+            lockBadge.className = 'preview-lock-badge unlocked';
+            if (lockIcon) lockIcon.innerText = '🔓';
+            if (lockText) lockText.innerText = '已激活漫游';
+        } else {
+            vpBox.classList.remove('unlocked');
+            vpBox.classList.add('locked');
+            lockBadge.className = 'preview-lock-badge locked';
+            if (lockIcon) lockIcon.innerText = '🔒';
+            if (lockText) lockText.innerText = '点击激活操作';
+            AppConfig.isDragging = false;
+        }
+    },
+
     initViewerInteraction() {
         const vpBox = document.getElementById('viewport-box');
+        const lockBadge = document.getElementById('preview-lock-badge');
         if (!vpBox) return;
 
+        // 1. 点击锁标切换锁状态
+        if (lockBadge) {
+            lockBadge.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.setViewerState(!AppConfig.isViewerActive);
+            });
+        }
+
+        // 2. 点击视口内部任意位置直接激活
+        vpBox.addEventListener('click', () => {
+            if (!AppConfig.isViewerActive) {
+                this.setViewerState(true);
+            }
+        });
+
+        // 3. 点击视口外部任意区域，自动恢复锁定防误触
+        document.addEventListener('click', (e) => {
+            if (!vpBox.contains(e.target) && (!lockBadge || !lockBadge.contains(e.target))) {
+                if (AppConfig.isViewerActive) {
+                    this.setViewerState(false);
+                }
+            }
+        });
+
+        // 4. 鼠标拖拽平移 (仅激活态允许)
         vpBox.addEventListener('mousedown', (e) => {
+            if (!AppConfig.isViewerActive) return;
             AppConfig.isDragging = true;
             AppConfig.startX = e.clientX - AppConfig.panX;
             AppConfig.startY = e.clientY - AppConfig.panY;
         });
 
         window.addEventListener('mousemove', (e) => {
-            if (!AppConfig.isDragging) return;
+            if (!AppConfig.isDragging || !AppConfig.isViewerActive) return;
             AppConfig.panX = e.clientX - AppConfig.startX;
             AppConfig.panY = e.clientY - AppConfig.startY;
             this.updateTransform();
@@ -51,7 +104,9 @@ const EnhanceEngine = {
 
         window.addEventListener('mouseup', () => { AppConfig.isDragging = false; });
 
+        // 5. 触摸屏拖拽
         vpBox.addEventListener('touchstart', (e) => {
+            if (!AppConfig.isViewerActive) return;
             if (e.touches.length === 1) {
                 AppConfig.isDragging = true;
                 AppConfig.startX = e.touches[0].clientX - AppConfig.panX;
@@ -60,7 +115,7 @@ const EnhanceEngine = {
         });
 
         window.addEventListener('touchmove', (e) => {
-            if (!AppConfig.isDragging || e.touches.length !== 1) return;
+            if (!AppConfig.isDragging || !AppConfig.isViewerActive || e.touches.length !== 1) return;
             AppConfig.panX = e.touches[0].clientX - AppConfig.startX;
             AppConfig.panY = e.touches[0].clientY - AppConfig.startY;
             this.updateTransform();
@@ -68,7 +123,12 @@ const EnhanceEngine = {
 
         window.addEventListener('touchend', () => { AppConfig.isDragging = false; });
 
+        // 6. 核心拦截：滚轮缩放 (未激活时放行给页面，激活时拦截并缩放)
         vpBox.addEventListener('wheel', (e) => {
+            if (!AppConfig.isViewerActive) {
+                // 锁定态：顺畅滚动浏览器页面
+                return;
+            }
             e.preventDefault();
             const delta = e.deltaY > 0 ? -0.15 : 0.15;
             this.adjustZoom(delta);
@@ -167,7 +227,7 @@ const EnhanceEngine = {
         ctx.fillRect(0, 0, cw, ch);
 
         const currentFile = files[AppConfig.currentPreviewIndex];
-        const isPdf = currentFile.name.toLowerCase().endswith('.pdf');
+        const isPdf = currentFile.name.toLowerCase().endsWith('.pdf');
 
         if (isPdf) {
             this.renderPdfPreview(currentFile, cw, ch, baseW, baseH);
@@ -1306,7 +1366,7 @@ if (mailForm) {
     };
 }
 
-// 智能可见性轮询管理器（防止手机后台空转耗电和持续请求）
+// 智能可见性轮询管理器
 let pollTimer = null;
 function startSmartPolling() {
     if (pollTimer) clearInterval(pollTimer);
