@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     OPENCV_LOG_LEVEL=ERROR
 
-# 1. 基础系统环境、驱动与轻量 Python 运行库 (不装任何多余的 opencv 臃肿依赖，体积稳固在 140MB 级)
+# 1. 基础系统环境、驱动与轻量 Python 运行库 (体积稳固在 140MB 级，无额外 C++ 编译链)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -30,7 +30,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsane-hpaio \
     sane-airscan \
     python3 \
-    python3-pip \
     python3-pil \
     python3-tornado \
     python3-requests \
@@ -41,7 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    && pip3 install --no-cache-dir --break-system-packages onnx onnxslim \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /root/.cache
 
@@ -51,13 +49,7 @@ COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 关键步骤：构建期一键脱量化 doc_corner.onnx，杜绝 DynamicQuantizeLinear 报错
-RUN if [ -f /opt/webapp/models/doc_corner.onnx ]; then \
-        python3 -c "import onnx, onnxslim; p='/opt/webapp/models/doc_corner.onnx'; onnx.save(onnxslim.slim(p), p)" || true; \
-        echo "✔ doc_corner.onnx 纯浮点脱量化处理完成"; \
-    fi
-
-# 关键步骤：带有容错守护的注入逻辑，检测到 cv2.so 则注入环境，未生成时安全跳过避免 buildx exit code 1
+# 带有容错守护的注入逻辑，检测到 cv2.so 则注入环境，未生成时安全跳过避免 buildx exit code 1
 RUN if [ -f /opt/modules/cv2.so ]; then \
         cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
         chmod 755 /usr/lib/python3/dist-packages/cv2.so && \
@@ -78,7 +70,7 @@ RUN cd /tmp && \
     printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动微码安装、主题美化与中文语言包注入 (单层合并压减镜像体积)
+# 5. 执行驱动微码安装、主题美化与中文语言包/主页精准注入 (单层合并压减镜像体积)
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
@@ -104,7 +96,9 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
         ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true && \
         ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
     elif [ -f /opt/i18/index.html ]; then \
-        cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html; \
+        cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true && \
+        ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
     fi && \
     chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
