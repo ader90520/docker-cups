@@ -20,7 +20,7 @@ body {
 }
 
 .wrapper { 
-    max-width: 1320px; 
+    max-width: 1360px; 
     margin: 0 auto; 
     background: #fff; 
     border-radius: 12px; 
@@ -41,7 +41,7 @@ body {
 .btn-refresh-icon { width: 32px; height: 32px; border-radius: 6px; border: none; background: #007bff; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; }
 .ai-engine-tag { font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 600; }
 
-/* 顶栏右侧内嵌紧凑状态胶囊 (解决 PC 端原在预览口下方突兀的问题) */
+/* 顶栏右侧内嵌紧凑状态胶囊 */
 .header-status-capsule {
     display: flex;
     align-items: center;
@@ -58,9 +58,18 @@ body {
 .type-item { flex: 1; padding: 10px; text-align: center; font-size: 13px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .type-item.active { color: #007bff; border-bottom-color: #007bff; background: #f0f7ff; }
 
-/* 主栅格布局 (左控右视) */
-.main-layout { display: grid; grid-template-columns: 460px 1fr; gap: 16px; padding: 16px; background: #f8fafc; align-items: start; }
-@media (max-width: 1024px) { .main-layout { grid-template-columns: 1fr; } }
+/* 核心优化：主栅格黄金分割布局 (左控 43% : 右视 57%) */
+.main-layout { 
+    display: grid; 
+    grid-template-columns: 43% 57%; 
+    gap: 16px; 
+    padding: 16px; 
+    background: #f8fafc; 
+    align-items: start; 
+}
+@media (max-width: 1024px) { 
+    .main-layout { grid-template-columns: 1fr; } 
+}
 
 .card-box { background: #fff; border-radius: 8px; border: 1px solid var(--border-color); padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
 .card-title { font-size: 13px; font-weight: 700; color: #1e293b; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
@@ -111,7 +120,7 @@ body {
 .flat-radio-btn { flex: 1; text-align: center; padding: 6px 8px; font-size: 12px; font-weight: 600; cursor: pointer; background: #fff; color: var(--text-sub); border: none; transition: all 0.2s; }
 .flat-radio-btn.active { background: var(--primary); color: #fff; }
 
-/* 预览视窗与漫游引擎 */
+/* 预览视窗与漫游引擎容器 */
 .preview-container { 
     display: flex; 
     flex-direction: column; 
@@ -123,32 +132,95 @@ body {
     position: relative; 
 }
 .preview-toolbar { display: flex; justify-content: space-between; width: 100%; margin-bottom: 10px; align-items: center; flex-wrap: wrap; gap: 6px; }
-.preview-zoom-ctrl { display: flex; gap: 6px; align-items: center; }
+.preview-zoom-ctrl { display: flex; gap: 5px; align-items: center; }
 .zoom-btn { padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: #fff; font-size: 12px; font-weight: 700; cursor: pointer; color: var(--text-main); }
 .zoom-btn:hover { background: #f1f5f9; }
 
+/* 交互防误触锁标签控件 */
+.preview-lock-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+}
+.preview-lock-badge.locked {
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+}
+.preview-lock-badge.locked:hover {
+    background: #e2e8f0;
+    color: #1e293b;
+}
+.preview-lock-badge.unlocked {
+    background: #0284c7;
+    color: #ffffff;
+    border: 1px solid #0284c7;
+    box-shadow: 0 1px 4px rgba(2, 132, 199, 0.35);
+}
+
+/* 核心优化：预览视口高度收敛与锁状态动效 */
 .viewport-wrapper { 
     width: 100%; 
-    height: 72vh; 
-    min-height: 520px; 
-    background: #334155; 
+    height: calc(100vh - 280px);
+    min-height: 440px; 
+    max-height: 580px; 
+    background: #273549; 
     border-radius: 8px; 
     position: relative; 
     overflow: hidden; 
     display: flex; 
     align-items: center; 
     justify-content: center; 
-    cursor: grab;
     user-select: none;
     touch-action: none;
+    border: 2px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
-.viewport-wrapper:active { cursor: grabbing; }
+
+/* 锁定与激活态样式表现 */
+.viewport-wrapper.locked {
+    cursor: default;
+}
+.viewport-wrapper.unlocked {
+    cursor: grab;
+    border-color: #0284c7;
+    box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+}
+.viewport-wrapper.unlocked:active {
+    cursor: grabbing;
+}
+
+/* 视口浮动引导提示条 */
+.viewport-lock-hint {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.75);
+    color: #cbd5e1;
+    padding: 3px 12px;
+    font-size: 11px;
+    border-radius: 12px;
+    pointer-events: none;
+    z-index: 10;
+    transition: opacity 0.25s ease;
+}
+.viewport-wrapper.unlocked .viewport-lock-hint {
+    opacity: 0;
+}
 
 /* A4 白色纸张底板 */
 .sheet-a4-viewport { 
     position: absolute;
-    width: 320px;
-    height: 452px;
+    width: 300px;
+    height: 424px;
     background: #ffffff !important; 
     box-shadow: 0 8px 30px rgba(0,0,0,0.45); 
     display: flex; 
@@ -174,9 +246,7 @@ body {
 #canvas-preview { display: block; background: #fff; }
 #pdf-canvas-render { display: none; background: #fff; }
 
-/* =================================================== */
-/* 身份证专属 A4 摆放口参考线与槽位 (彻底解决空白不显示) */
-/* =================================================== */
+/* 身份证专属 A4 摆放口参考线与槽位 */
 .idcard-a4-holder { 
     width: 100%; 
     height: 100%; 
@@ -189,7 +259,6 @@ body {
     padding: 24px 20px;
 }
 
-/* 1人模式：上下居中标准摆放 */
 .idcard-layout-single { 
     display: flex; 
     flex-direction: column; 
@@ -199,7 +268,6 @@ body {
     height: 100%; 
 }
 
-/* 身份证标准 85.6:54 槽位 */
 .idcard-slot-box {
     width: 215px; 
     aspect-ratio: 85.6 / 54; 
@@ -233,7 +301,6 @@ body {
     line-height: 1.4;
 }
 
-/* 2~3人多排版 */
 .idcard-layout-multi { 
     display: flex; 
     flex-direction: column; 
@@ -257,13 +324,14 @@ body {
     font-size: 10px;
 }
 
-/* 按钮与状态 */
+/* 按钮与状态看板 */
 .action-bar { margin-top: 12px; }
 .btn-submit-print { width: 100%; padding: 10px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .btn-submit-print:hover { background: var(--primary-hover); }
 .status-badge-pill { padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d; }
 .status-badge-pill.busy { background: #dbeafe; color: #1d4ed8; }
 .status-badge-pill.stopped { background: #fee2e2; color: #b91c1c; }
+.status-metric-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
 .status-alert { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12px; display: none; }
 .status-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
 .status-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
