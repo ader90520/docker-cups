@@ -44,11 +44,11 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/jiangnanboy/Doc-Image-Tool.git /tmp/Doc-Image-Tool
 
-      - name: 安装模型转换与 INT8 量化依赖
+      - name: 安装模型转换依赖
         run: |
           pip install torch torchvision onnx onnxruntime onnxslim opencv-python-headless onnxscript
 
-      - name: 导出为 ONNX 并进行轻量化剪枝与 INT8 量化
+      - name: 导出为纯浮点优化 ONNX (移除阻断 WebGL 的动态量化)
         run: |
           python - << 'EOF'
           import os
@@ -56,7 +56,6 @@ jobs:
           import torch
           import onnx
           import onnxslim
-          from onnxruntime.quantization import quantize_dynamic, QuantType
 
           # 1. 注入 Doc-Image-Tool 路径并载入模型定义
           sys.path.append("/tmp/Doc-Image-Tool")
@@ -82,21 +81,22 @@ jobs:
 
           print(f"[+] 原始 ONNX 导出成功: {os.path.getsize(raw_onnx)/1024/1024:.2f} MB")
 
-          # 3. 算子精简与无用节点剪枝 (onnxslim)
-          slim_onnx = "slim_model.onnx"
-          onnxslim.slim(raw_onnx, slim_onnx)
-          print(f"[+] 剪枝优化完成: {os.path.getsize(slim_onnx)/1024/1024:.2f} MB")
-
-          # 4. INT8 动态量化并直接输出到 webapp/models/
+          # 3. 使用 onnxslim 剪枝常量并直接输出为最终 WebGL 纯浮点模型
           os.makedirs("webapp/models", exist_ok=True)
           final_onnx = "webapp/models/doc_corner.onnx"
-          quantize_dynamic(
-              model_input=slim_onnx,
-              model_output=final_onnx,
-              weight_type=QuantType.QUInt8
-          )
+          
+          onnxslim.slim(raw_onnx, final_onnx)
           final_size = os.path.getsize(final_onnx) / 1024 / 1024
-          print(f"[+] 适配 N1 的量化模型生成成功: {final_onnx} (体积: {final_size:.2f} MB)")
+          print(f"[+] WebGL 纯浮点轻量模型生成成功: {final_onnx} (体积: {final_size:.2f} MB)")
+          
+          # 4. 严格校验：确保无任何动态量化算子残留
+          m = onnx.load(final_onnx)
+          quant_ops = [n.op_type for n in m.graph.node if 'Quantize' in n.op_type or 'Integer' in n.op_type]
+          if quant_ops:
+              print(f"[-] 警告：仍包含量化算子: {quant_ops}")
+              sys.exit(1)
+          else:
+              print("[✔] 校验通过：模型为纯浮点拓扑，完全兼容 WebGL2 硬件加速！")
           EOF
 
       - name: 提交更新后的模型到仓库
@@ -104,5 +104,5 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add webapp/models/doc_corner.onnx
-          git commit -m "chore: compile and quantize doc_corner.onnx into webapp/models via Actions" || exit 0
+          git commit -m "chore: export pure float32 slim onnx model for WebGL" || exit 0
           git push
