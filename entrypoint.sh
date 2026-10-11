@@ -113,10 +113,9 @@ MaxLogSize 1m
 ErrorPolicy retry-job
 
 Port 631
-Listen 0.0.0.0:631
 Listen /run/cups/cups.sock
 
-Browsing On
+Browsing Yes
 BrowseLocalProtocols dnssd
 DefaultAuthType Basic
 WebInterface Yes
@@ -133,9 +132,22 @@ DefaultEncryption Never
 <Location /admin>
   Order allow,deny
   Allow all
+  <Limit CUPS-Add-Modify-Printer CUPS-Delete-Printer CUPS-Add-Modify-Class CUPS-Delete-Class CUPS-Set-Default>
+    AuthType Default
+    Require user @SYSTEM
+    Order deny,allow
+    Allow all
+  </Limit>
 </Location>
 
 <Location /admin/conf>
+  AuthType Default
+  Require user @SYSTEM
+  Order allow,deny
+  Allow all
+</Location>
+
+<Location /admin/log>
   AuthType Default
   Require user @SYSTEM
   Order allow,deny
@@ -147,9 +159,20 @@ DefaultEncryption Never
   Allow all
 </Location>
 
+<Location /classes>
+  Order allow,deny
+  Allow all
+</Location>
+
 <Location /jobs>
   Order allow,deny
   Allow all
+  <Limit Cancel-Job CUPS-Move-Job>
+    AuthType Default
+    Require user @SYSTEM
+    Order deny,allow
+    Allow all
+  </Limit>
 </Location>
 
 <Policy default>
