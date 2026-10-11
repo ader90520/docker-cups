@@ -266,7 +266,7 @@ div.body > h2 {
 EOF
 fi
 
-# ================= 10. 启动服务 =================
+# ================= 10. 启动服务与模型自愈 =================
 echo ">>> [1/2] 启动 CUPS 核心引擎 (631)..."
 /usr/sbin/cupsd
 sleep 2
@@ -275,6 +275,29 @@ PRINTER_INIT_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
 if [ -n "$PRINTER_INIT_LIST" ]; then
     cupsenable $PRINTER_INIT_LIST 2>/dev/null || true
     cupsaccept $PRINTER_INIT_LIST 2>/dev/null || true
+fi
+
+# 自动脱量化自愈：消除 DynamicQuantizeLinear，还原为 WebGL 与 OpenCV 原生浮点模型
+if [ -f /opt/webapp/models/doc_corner.onnx ]; then
+    python3 -c "
+import os
+try:
+    import onnx
+    p = '/opt/webapp/models/doc_corner.onnx'
+    m = onnx.load(p)
+    if any(n.op_type in ['DynamicQuantizeLinear', 'MatMulInteger'] for n in m.graph.node):
+        print('>>> [AI] 检测到包含动态量化节点，正在自动脱量化还原...')
+        try:
+            import onnxslim
+        except ImportError:
+            os.system('pip install onnxslim -q')
+            import onnxslim
+        m_slim = onnxslim.slim(p)
+        onnx.save(m_slim, p)
+        print('>>> [AI] doc_corner.onnx 纯浮点脱量化还原就绪！')
+except Exception as e:
+    pass
+" 2>/dev/null || true
 fi
 
 echo ">>> [2/2] 启动 8088 智能控制台..."
