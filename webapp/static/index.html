@@ -16,7 +16,7 @@
 <body>
 
 <div class="wrapper">
-    <!-- 顶栏与导航 -->
+    <!-- 顶栏与主导航 -->
     <div class="top-navbar">
         <div class="nav-brand">🖨️ 在线打印 - CUPS 智能工作台</div>
         <div class="nav-tabs">
@@ -27,7 +27,7 @@
         </div>
     </div>
 
-    <!-- 1. 智能打印面板 -->
+    <!-- 1. 智能打印主面板 -->
     <div id="panel-print" class="tab-panel-container active" style="padding:0;">
         <div class="print-header-bar">
             <span style="font-weight:700; font-size:14px; color:#1e293b;">🖨 打印机</span>
@@ -46,7 +46,7 @@
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 上传区：标准文档 -->
+                <!-- 上传区：标准文档/试卷 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文档/试卷</span>
@@ -93,7 +93,7 @@
                     <div id="idcard-person-container"></div>
                 </div>
 
-                <!-- 打印参数配置 -->
+                <!-- 打印参数设置 -->
                 <div class="card-box">
                     <div class="card-title">⚙ 打印参数</div>
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:8px;">
@@ -154,7 +154,7 @@
                 </div>
             </div>
 
-            <!-- 右侧视窗预览与监控看板 -->
+            <!-- 右侧视窗预览与打印机状态看板 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
@@ -250,99 +250,130 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 -->
+    <!-- 3. 设备管理面板 (双列对称排版 + 诊断控制台) -->
     <div id="panel-devices" class="tab-panel-container">
-        <div class="card-box">
-            <div class="card-title">
-                <span>🚨 设备运行与故障告警看板</span>
-                <button type="button" class="btn-del" onclick="DashboardService.cleanDisk()" style="color:var(--text-sub); font-size:11px;">🧹 立即清理垃圾</button>
-            </div>
-            <div style="padding:10px; border-radius:6px; background:#f0fdf4; border:1px solid #bbf7d0;">
-                <b style="color:#166534; font-size:12px;">✔ 打印与扫描通信链路正常</b>
-                <div style="font-size:11px; color:#15803d; margin-top:2px;">系统已开启后台自动清理缓存机制，闪存安全健康。</div>
-            </div>
-        </div>
-
-        <div class="card-box">
-            <div class="card-title">
-                <span>🖨️ 打印机列表与 AirPrint 隔空打印控制</span>
+        <!-- 运维顶栏 -->
+        <div class="card-box" style="margin-bottom:14px; border-left: 4px solid var(--primary);">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:20px;">⚡</span>
+                    <div>
+                        <b style="color:#1e293b; font-size:13px;">CUPS 硬件打印通信与端侧运算中枢</b>
+                        <div style="font-size:11px; color:var(--text-sub); margin-top:2px;">后台守护进程在线运行，支持 USB 热插拔、AirPrint 自动组播广播与每日存储自洁。</div>
+                    </div>
+                </div>
                 <div style="display:flex; gap:6px;">
-                    <button type="button" class="nav-btn" style="color:var(--primary); font-weight:700;" onclick="DashboardService.resetUsb()">⚡ 复位USB</button>
-                    <button type="button" class="nav-btn" onclick="DashboardService.loadPrinters(true)">🔄 刷新状态</button>
-                    <button type="button" class="nav-btn" style="color:#ef4444;" onclick="DashboardService.cleanJobs()">🧹 清空队列</button>
+                    <button type="button" class="nav-btn" style="color:var(--primary); font-weight:700;" onclick="DashboardService.resetUsb()">⚡ 复位USB总线</button>
+                    <button type="button" class="nav-btn" onclick="DashboardService.loadPrinters(true)">🔄 刷新设备</button>
+                    <button type="button" class="nav-btn" style="color:var(--danger);" onclick="DashboardService.cleanJobs()">🧹 清空作业队列</button>
+                    <button type="button" class="nav-btn" onclick="DashboardService.cleanDisk()">🗑️ 清理临时闪存</button>
                 </div>
             </div>
-            <div id="device-card-list" style="display:flex; flex-direction:column; gap:10px; margin-top:8px;"></div>
         </div>
 
-        <div class="card-box">
-            <div class="card-title">🔌 1. 已检测到的物理打印机端口</div>
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
-                <select id="discovered-device-select" class="form-ctrl" style="flex:1;"><option value="">正在检测物理硬件端口...</option></select>
-                <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="DashboardService.loadDiscoveredDevices()">🔄 重新扫描</button>
-            </div>
+        <div class="device-dashboard-grid">
+            <!-- 左列：硬件设备管理与驱动安装中心 -->
+            <div class="col-left">
+                <div class="card-box">
+                    <div class="card-title">
+                        <span>🖨️ 当前可用打印机 (AirPrint 隔空打印)</span>
+                    </div>
+                    <div id="device-card-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                </div>
 
-            <div class="card-title">🔎 2. 检索系统驱动库（同步 631 驱动池）</div>
-            <div style="display:flex; gap:8px; margin-bottom:8px;">
-                <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="输入驱动关键词" style="flex:1;">
-                <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="DashboardService.searchDrivers()">🔍 搜索驱动</button>
-            </div>
-            <div id="driver-search-results" style="max-height:140px; overflow-y:auto; border:1px solid var(--border-color); border-radius:6px; display:none; margin-bottom:10px; font-size:12px;"></div>
+                <div class="card-box">
+                    <div class="card-title">
+                        <span>➕ 安装与绑定物理打印机</span>
+                    </div>
 
-            <div class="card-title" style="margin-top:12px; font-size:12px;">📦 上传自定义 PPD 驱动文件</div>
-            <div style="display:flex; gap:8px; align-items:center;">
-                <input type="file" id="ppd-file-input" accept=".ppd" class="form-ctrl" style="flex:1;">
-                <button type="button" class="btn-submit-print" style="width:auto; padding:6px 14px; font-size:12px;" onclick="DashboardService.uploadPpd()">📤 安装PPD</button>
-            </div>
-            <div id="ppd-alert" class="status-alert"></div>
+                    <div class="driver-step-box">
+                        <div class="driver-step-title">🔌 步骤 1：探测物理连接端口</div>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <select id="discovered-device-select" class="form-ctrl" style="flex:1;">
+                                <option value="">正在检测物理硬件端口...</option>
+                            </select>
+                            <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="DashboardService.loadDiscoveredDevices()">🔄 扫描</button>
+                        </div>
+                    </div>
 
-            <div class="card-title" style="margin-top:16px; font-size:12px;">📷 上传扫描仪闭源插件包 (.run)</div>
-            <div style="display:flex; gap:8px; align-items:center;">
-                <input type="file" id="plugin-file-input" accept=".run" class="form-ctrl" style="flex:1;">
-                <button type="button" class="btn-submit-print" style="width:auto; padding:6px 14px; background:#059669; font-size:12px;" onclick="DashboardService.uploadPlugin()">📤 安装插件</button>
-            </div>
-            <div id="plugin-alert" class="status-alert"></div>
-        </div>
+                    <div class="driver-step-box">
+                        <div class="driver-step-title">🔎 步骤 2：检索 CUPS 631 驱动库并绑定</div>
+                        <div style="display:flex; gap:8px; margin-bottom:8px;">
+                            <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="输入打印机型号 (如: HP 1020, M1005, P1102)" style="flex:1;">
+                            <button type="button" class="nav-btn" style="background:#007bff; color:#fff; border:none;" onclick="DashboardService.searchDrivers()">🔍 搜索</button>
+                        </div>
+                        <div id="driver-search-results" style="max-height:130px; overflow-y:auto; border:1px solid var(--border-color); border-radius:6px; display:none; background:#fff; font-size:12px;"></div>
+                    </div>
 
-        <!-- 🧠 端侧 AI 状态监测、热更新与故障诊断日志看板 -->
-        <div class="card-box" style="margin-top:14px; border:1px solid #c7d2fe; background:#f8faff;">
-            <div class="card-title" style="color:#3730a3;">
-                <span>🧠 端侧 AI 模型引擎监测与故障诊断</span>
-                <div style="display:flex; gap:6px;">
-                    <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="DocAI.clearCacheAndReload()">🧹 清除本地缓存重载</button>
-                    <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px; background:#4f46e5; color:#fff; border:none;" onclick="DocAI.init()">⚡ 重新诊断</button>
+                    <div class="driver-step-box" style="margin-bottom:0;">
+                        <div class="driver-step-title">📦 补充安装专有驱动与插件包</div>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="file" id="ppd-file-input" accept=".ppd" class="form-ctrl" style="flex:1; font-size:11px;">
+                                <button type="button" class="btn-submit-print" style="width:auto; padding:5px 12px; font-size:11px;" onclick="DashboardService.uploadPpd()">安装 PPD</button>
+                            </div>
+                            <div id="ppd-alert" class="status-alert" style="margin-top:0;"></div>
+
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="file" id="plugin-file-input" accept=".run" class="form-ctrl" style="flex:1; font-size:11px;">
+                                <button type="button" class="btn-submit-print" style="width:auto; padding:5px 12px; background:#059669; font-size:11px;" onclick="DashboardService.uploadPlugin()">安装 .run 插件</button>
+                            </div>
+                            <div id="plugin-alert" class="status-alert" style="margin-top:0;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-bottom:12px;">
-                <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">运算执行端</div>
-                    <b id="diag-metric-backend" style="font-size:12px; color:#1e293b;">检测中...</b>
-                </div>
-                <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">数据缓存源</div>
-                    <b id="diag-metric-cache" style="font-size:12px; color:#1e293b;">-</b>
-                </div>
-                <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">当前激活模型</div>
-                    <b id="diag-metric-model" style="font-size:12px; color:#1e293b;">-</b>
-                </div>
-                <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
-                    <div style="font-size:10px; color:#6b7280;">最新推理耗时</div>
-                    <b id="diag-metric-speed" style="font-size:12px; color:#16a34a;">-</b>
-                </div>
-            </div>
+            <!-- 右列：端侧 AI 引擎状态与排错日志终端 -->
+            <div class="col-right">
+                <div class="card-box" style="border:1px solid #c7d2fe; background:#f8faff;">
+                    <div class="card-title" style="color:#3730a3;">
+                        <span>🧠 端侧 AI 运算中枢与模型部署</span>
+                        <div style="display:flex; gap:4px;">
+                            <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="DocAI.clearCacheAndReload()">🧹 重置缓存</button>
+                            <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px; background:#4f46e5; color:#fff; border:none;" onclick="DocAI.init()">⚡ 重新诊断</button>
+                        </div>
+                    </div>
 
-            <div style="font-size:11px; font-weight:700; color:#4338ca; margin-bottom:4px;">📤 上传并热更新 .onnx 模型 (支持切边/展平/去笔迹模型)</div>
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-                <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1;">
-                <button type="button" class="btn-submit-print" style="width:auto; padding:6px 14px; background:#4f46e5; font-size:12px;" onclick="DocAI.uploadAndReloadModel('onnx-model-file-input', 'model-alert')">上传部署</button>
-            </div>
-            <div id="model-alert" class="status-alert"></div>
+                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-bottom:12px;">
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">运算后端</div>
+                            <b id="diag-metric-backend" style="font-size:11px; color:#1e293b;">检测中...</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">缓存介质</div>
+                            <b id="diag-metric-cache" style="font-size:11px; color:#1e293b;">-</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">当前模型</div>
+                            <b id="diag-metric-model" style="font-size:11px; color:#1e293b;">-</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:8px; border-radius:6px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">单次推理耗时</div>
+                            <b id="diag-metric-speed" style="font-size:11px; color:#16a34a;">-</b>
+                        </div>
+                    </div>
 
-            <div style="font-size:11px; font-weight:700; color:#475569; margin:10px 0 4px 0;">📋 引擎运行与异常排查日志:</div>
-            <div id="ai-diag-console" style="background:#0f172a; color:#e2e8f0; font-family:monospace; font-size:11px; padding:8px 10px; border-radius:6px; max-height:120px; overflow-y:auto; border:1px solid #1e293b;">
-                <div style="color:#64748b;">等待引擎启动...</div>
+                    <div style="font-size:11px; font-weight:700; color:#4338ca; margin-bottom:4px;">📤 热更新 .onnx 权重文件 (自动识别 WebGL 算子并推送)</div>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;">
+                        <button type="button" class="btn-submit-print" style="width:auto; padding:5px 14px; background:#4f46e5; font-size:11px;" onclick="DocAI.uploadAndReloadModel('onnx-model-file-input', 'model-alert')">部署模型</button>
+                    </div>
+                    <div id="model-alert" class="status-alert"></div>
+                </div>
+
+                <div class="card-box" style="padding:0; overflow:hidden; border:none; background:transparent;">
+                    <div class="console-tab-header">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <span style="font-size:12px; font-weight:700; color:#38bdf8;">📟 系统与引擎运行日志</span>
+                            <span style="font-size:10px; color:#64748b;">(自动捕获异常与降级原因)</span>
+                        </div>
+                        <button type="button" style="background:transparent; border:none; color:#94a3b8; font-size:11px; cursor:pointer;" onclick="document.getElementById('ai-diag-console').innerHTML='<div style=\'color:#64748b;\'>日志已清空</div>'">清屏</button>
+                    </div>
+                    <div id="ai-diag-console" class="console-body">
+                        <div style="color:#64748b;">等待引擎信号交互...</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
