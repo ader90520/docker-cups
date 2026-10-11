@@ -1,0 +1,51 @@
+name: Auto Slim ONNX Model
+
+on:
+  workflow_dispatch: # 支持在 GitHub 网页上点击按钮手动触发
+
+permissions:
+  contents: write # 赋予 Actions 提交修改到仓库的权限
+
+jobs:
+  slim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Tools
+        run: |
+          pip install --upgrade pip
+          pip install onnx onnxslim
+
+      - name: Slim and Dequantize ONNX
+        run: |
+          python -c "
+          import os, onnx, onnxslim
+          p = 'webapp/models/doc_corner.onnx'
+          if os.path.exists(p):
+              print('[+] 找到模型，开始脱量化转换...')
+              slim_m = onnxslim.slim(p)
+              onnx.save(slim_m, p)
+              print('[+] 脱量化完成，文件大小:', os.path.getsize(p) / 1024 / 1024, 'MB')
+          else:
+              print('[-] 未找到 webapp/models/doc_corner.onnx 文件')
+              exit(1)
+          "
+
+      - name: Commit and Push Model
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add webapp/models/doc_corner.onnx
+          if git diff --staged --quiet; then
+            echo "模型文件未发生变化，无需提交"
+          else
+            git commit -m "chore: auto slim and dequantize doc_corner.onnx to float32"
+            git push
+          fi
