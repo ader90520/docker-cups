@@ -124,20 +124,20 @@ class DocumentAIEngine {
                 this.log(`[成功] 模型已下载并永久存入 IndexedDB 数据库`, "success");
             }
 
-            // WebGL2 硬件配置：启用浮点纹理打包
+            // 启用标准 WebGL2 硬件管线配置
             const sessionOptions = {
                 executionProviders: [
                     {
                         name: 'webgl',
                         contextId: 'webgl2',
-                        pack: true
+                        pack: true  // 激活纹理打包，大幅降低显存带宽消耗
                     },
                     'wasm'
                 ],
                 graphOptimizationLevel: 'all'
             };
 
-            this.log("正在初始化 WebGL 硬件执行通道...", "info");
+            this.log("正在初始化 WebGL2 硬件执行通道...", "info");
             let session = null;
             try {
                 session = await ort.InferenceSession.create(buf, sessionOptions);
