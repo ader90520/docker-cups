@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     OPENCV_LOG_LEVEL=ERROR
 
-# 1. 基础系统环境、驱动与轻量 Python 运行库 (体积稳固在 140MB 级，无额外 C++ 编译链)
+# 1. 基础系统环境、驱动与轻量 Python 运行库 (补齐 cv2.so 必需的 libglib2.0-0 与 libgomp1，合计<2MB，保留 zh_CN locale)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -36,41 +36,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-numpy \
     libjpeg62-turbo \
     libpng16-16 \
+    libglib2.0-0 \
+    libgomp1 \
     xz-utils \
     dos2unix \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /root/.cache
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
 
-# 2. 拷贝代码与静态文件 (保留完整结构)
+# 2. 拷贝代码与静态文件
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 带有容错守护的注入逻辑，检测到 cv2.so 则注入环境，未生成时安全跳过避免 buildx exit code 1
+# 3. 动态注入并校验定制精简 cv2.so
 RUN if [ -f /opt/modules/cv2.so ]; then \
         cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
         chmod 755 /usr/lib/python3/dist-packages/cv2.so && \
-        echo "✔ cv2.so 成功注入 Python 环境"; \
+        echo "✔ 定制精简版 cv2.so 成功注入 Python 环境"; \
+    elif [ -f /opt/modules/cv2.tar.xz ]; then \
+        tar -xf /opt/modules/cv2.tar.xz -C /usr/lib/python3/dist-packages/ && \
+        echo "✔ 定制精简版 cv2.tar.xz 解压注入成功"; \
     else \
-        echo "⚠ 未检测到 /opt/modules/cv2.so，跳过注入"; \
+        echo "⚠ 未检测到 /opt/modules/cv2.so，将使用原生图像管道"; \
     fi
 
-# 3. 清洗换行符并赋权
+# 4. 清洗换行符并赋权
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 4. 固化 HPLIP 扫描插件
+# 5. 固化 HPLIP 扫描插件 (带超时与重试，防止外链网络波动熔断构建)
 ARG HPLIP_VER=3.22.10
 RUN cd /tmp && \
-    wget -q -c "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" && \
-    chmod +x hplip-${HPLIP_VER}-plugin.run && \
-    printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true && \
+    (wget -q -c --timeout=20 --tries=3 "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" || true) && \
+    if [ -f hplip-${HPLIP_VER}-plugin.run ]; then \
+        chmod +x hplip-${HPLIP_VER}-plugin.run && \
+        printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true; \
+    fi && \
     rm -rf /tmp/hplip*
 
-# 5. 执行驱动微码安装、主题美化与中文语言包/主页精准注入 (单层合并压减镜像体积)
+# 6. 执行驱动微码安装、主题美化与中文语言包/主页精准注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
@@ -102,7 +109,7 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     fi && \
     chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
 
-# 6. 初始化各持久化与锁目录
+# 7. 初始化各持久化与锁目录
 RUN mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
