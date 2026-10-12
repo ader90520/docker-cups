@@ -4,12 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>在线打印 - CUPS 智能工作台</title>
-    <!-- 样式库与模块化 CSS -->
     <link rel="stylesheet" href="/static/css/style.css">
-    <!-- PDF.js 与 ONNX 运行时 (升级至 1.20.1 原生兼容 HardSigmoid 与 WebGL2) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
-    <!-- 端侧 AI 诊断引擎与核心交互业务脚本 -->
     <script src="/static/js/client_ai.js"></script>
     <script src="/static/js/app.js" defer></script>
 </head>
@@ -38,7 +35,6 @@
             </div>
         </div>
 
-        <!-- 扁平双选项切换导航：移除发票单独项，合并至多图拼版 -->
         <div class="sub-type-nav">
             <div class="type-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档 / 试卷 / 多图发票排版</div>
             <div class="type-item" id="tab-sub-idcard" onclick="PrintManager.switchSubTab('idcard')">🪪 身份证专属打印</div>
@@ -52,12 +48,14 @@
                         <span>📁 上传文件 (文档 / 试卷 / 发票 / 图片)</span>
                         <button type="button" class="btn-del" onclick="PrintManager.clearFiles('normal')">清空列表</button>
                     </div>
-                    <div class="upload-drag-area" id="drag-drop-zone-normal" onclick="document.getElementById('file-input-normal').click()">
+                    <!-- 原生拖拽支持区 -->
+                    <div class="upload-drag-area" id="drag-drop-zone-normal">
                         <div class="upload-icon">📂</div>
                         <div class="upload-text"><b>点击选取</b> 或 <b>直接将文档/发票/图片拖拽至此处</b></div>
-                        <input type="file" id="file-input-normal" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected('normal', this.files)">
+                        <input type="file" id="file-input-normal" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected(this.files)">
                     </div>
-                    <div class="file-list" id="file-list-normal" style="display:none;"></div>
+                    <!-- 交互式可点击、可单独删除的文件列表 -->
+                    <div class="interactive-file-list" id="file-list-normal" style="display:none;"></div>
                     <div style="margin-top:10px; background:#f8fafc; padding:8px 10px; border-radius:6px; border:1px solid #e2e8f0;">
                         <label style="font-size:12px; font-weight:600; cursor:pointer; color:#0f172a; display:flex; align-items:center; gap:6px;">
                             <input type="checkbox" id="chk-normal-merge" onchange="PrintManager.onMergeChange()" style="width:15px; height:15px; cursor:pointer;">
@@ -66,7 +64,7 @@
                     </div>
                 </div>
 
-                <!-- 上传区：身份证专属打印 (85.6:54 黄金比例等比真实画幅) -->
+                <!-- 上传区：身份证专属打印 (85.6:54 真实比例大卡片) -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
@@ -76,12 +74,11 @@
                         </div>
                     </div>
                     
-                    <!-- 默认第 1 人标准身份证画幅 -->
                     <div class="idcard-person-card" id="idcard-person-default">
                         <div class="idcard-person-title">第 1 人身份证信息</div>
                         <div class="idcard-ratio-grid">
                             <!-- 正面 -->
-                            <div class="idcard-ratio-box" id="idcard-slot-front-0" onclick="document.getElementById('file-idcard-front-0').click()">
+                            <div class="idcard-ratio-box" id="idcard-slot-front-0">
                                 <div class="idcard-ratio-placeholder" id="placeholder-front-0">
                                     <div class="idcard-ratio-icon">👤</div>
                                     <div class="idcard-ratio-text">正面 (人像面)</div>
@@ -92,7 +89,7 @@
                             </div>
 
                             <!-- 反面 -->
-                            <div class="idcard-ratio-box" id="idcard-slot-back-0" onclick="document.getElementById('file-idcard-back-0').click()">
+                            <div class="idcard-ratio-box" id="idcard-slot-back-0">
                                 <div class="idcard-ratio-placeholder" id="placeholder-back-0">
                                     <div class="idcard-ratio-icon">🇨🇳</div>
                                     <div class="idcard-ratio-text">反面 (国徽面)</div>
@@ -104,7 +101,6 @@
                         </div>
                     </div>
 
-                    <!-- 动态增加更多人员的容器 -->
                     <div id="idcard-person-container"></div>
                 </div>
 
@@ -149,6 +145,7 @@
                                 <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
+                        <!-- 身份证打印时自动隐藏项：去黑底增强 -->
                         <div class="form-item" id="item-enhance-wrap">
                             <label>去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.invalidateCache(); EnhanceEngine.renderPreview();">
@@ -156,6 +153,7 @@
                                 <option value="false">关闭 (原图直打)</option>
                             </select>
                         </div>
+                        <!-- 身份证打印时自动隐藏项：页面范围 -->
                         <div class="form-item" id="item-pageranges-wrap" style="grid-column: span 2;">
                             <label>页面范围 (如: 1-5 8，留空打全部)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
@@ -169,13 +167,13 @@
                 </div>
             </div>
 
-            <!-- 右侧视窗预览与打印机状态看板 (高度紧凑精简 1/3) -->
+            <!-- 右侧视窗预览 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:13px; font-weight:700;">👁️ 实时预览</span>
                         <div class="preview-zoom-ctrl">
-                            <span id="preview-lock-badge" class="preview-lock-badge locked" title="点击解锁以进行鼠标缩放与拖拽">
+                            <span id="preview-lock-badge" class="preview-lock-badge locked" title="点击激活操作">
                                 <span id="lock-icon">🔒</span> <span id="lock-text">点击激活操作</span>
                             </span>
                             <span style="display:inline-block; width:1px; height:14px; background:#cbd5e1; margin:0 2px;"></span>
@@ -189,7 +187,6 @@
                         </div>
                     </div>
 
-                    <!-- 紧凑视口容器 (高度缩至 320px) -->
                     <div class="viewport-wrapper locked" id="viewport-box">
                         <div class="viewport-lock-hint" id="viewport-lock-hint">🔒 点击激活操作</div>
                         <div class="sheet-a4-viewport" id="a4-viewport">
