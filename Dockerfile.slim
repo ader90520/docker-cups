@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i -e 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /root/.cache
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /root/.cache
 
 # 2. 拷贝代码与静态文件
 COPY modules/ /opt/modules/
@@ -75,7 +75,7 @@ RUN cd /tmp && \
         chmod +x hplip-${HPLIP_VER}-plugin.run && \
         printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true; \
     fi && \
-    rm -rf /tmp/hplip*
+    rm -rf /tmp/hplip* /tmp/hp_* /tmp/.esudo* /var/tmp/*
 
 # 6. 执行驱动微码安装、主题美化与中文语言包/主页精准注入
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
@@ -107,7 +107,8 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
         ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true && \
         ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
     fi && \
-    chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true
+    chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true && \
+    rm -rf /opt/modules/*.run /opt/modules/*.tar* /tmp/* /root/.cache
 
 # 7. 初始化各持久化与锁目录
 RUN mkdir -p /opt/cups_data \
