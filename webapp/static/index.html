@@ -38,58 +38,73 @@
             </div>
         </div>
 
+        <!-- 扁平双选项切换导航：移除发票单独项，合并至多图拼版 -->
         <div class="sub-type-nav">
-            <div class="type-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档/试卷</div>
-            <div class="type-item" id="tab-sub-invoice" onclick="PrintManager.switchSubTab('invoice')">🧾 发票拼版打印</div>
+            <div class="type-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档 / 试卷 / 多图发票排版</div>
             <div class="type-item" id="tab-sub-idcard" onclick="PrintManager.switchSubTab('idcard')">🪪 身份证专属打印</div>
         </div>
 
         <div class="main-layout">
             <div class="col-left">
-                <!-- 上传区：标准文档/试卷 -->
+                <!-- 上传区：标准文档/试卷/多张发票 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
-                        <span>📁 上传文档/试卷</span>
+                        <span>📁 上传文件 (文档 / 试卷 / 发票 / 图片)</span>
                         <button type="button" class="btn-del" onclick="PrintManager.clearFiles('normal')">清空列表</button>
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-normal" onclick="document.getElementById('file-input-normal').click()">
                         <div class="upload-icon">📂</div>
-                        <div class="upload-text"><b>点击选取</b> 或 <b>直接将文档/图片拖拽至此处</b></div>
+                        <div class="upload-text"><b>点击选取</b> 或 <b>直接将文档/发票/图片拖拽至此处</b></div>
                         <input type="file" id="file-input-normal" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected('normal', this.files)">
                     </div>
                     <div class="file-list" id="file-list-normal" style="display:none;"></div>
-                    <div style="margin-top:8px;">
-                        <label style="font-size:12px; font-weight:600; cursor:pointer;">
-                            <input type="checkbox" id="chk-normal-merge" onchange="PrintManager.onMergeChange()"> 多张图片合并在单张 A4 纸上输出 (网格拼版)
+                    <div style="margin-top:10px; background:#f8fafc; padding:8px 10px; border-radius:6px; border:1px solid #e2e8f0;">
+                        <label style="font-size:12px; font-weight:600; cursor:pointer; color:#0f172a; display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" id="chk-normal-merge" onchange="PrintManager.onMergeChange()" style="width:15px; height:15px; cursor:pointer;">
+                            <span>📑 多图同页智能拼版 (多张发票/照片自动合打在单张 A4 纸上)</span>
                         </label>
                     </div>
                 </div>
 
-                <!-- 上传区：发票 -->
-                <div class="card-box" id="sec-upload-invoice" style="display:none;">
-                    <div class="card-title">
-                        <span>🧾 上传发票文件</span>
-                        <button type="button" class="btn-del" onclick="PrintManager.clearFiles('invoice')">清空发票</button>
-                    </div>
-                    <div class="upload-drag-area" id="drag-drop-zone-invoice" onclick="document.getElementById('file-input-invoice').click()">
-                        <div class="upload-icon">🧾</div>
-                        <div class="upload-text"><b>点击选取</b> 或 <b>拖拽发票文件 (支持同时上传多张)</b></div>
-                        <input type="file" id="file-input-invoice" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected('invoice', this.files)">
-                    </div>
-                    <div class="file-list" id="file-list-invoice" style="display:none;"></div>
-                    <div style="margin-top:8px;">
-                        <label style="font-size:12px; font-weight:600; cursor:pointer;">
-                            <input type="checkbox" id="chk-invoice-merge" checked onchange="PrintManager.onMergeChange()"> 多张发票合并在单张 A4 纸输出 (N-up 拼版)
-                        </label>
-                    </div>
-                </div>
-
-                <!-- 上传区：身份证 -->
+                <!-- 上传区：身份证专属打印 (85.6:54 黄金比例等比真实画幅) -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
-                        <button type="button" class="nav-btn" style="padding:3px 8px; font-size:11px;" onclick="IdCardManager.addPerson()">➕ 增加一人</button>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="nav-btn" style="padding:3px 8px; font-size:11px;" onclick="IdCardManager.addPerson()">➕ 增加一人</button>
+                            <button type="button" class="btn-del" onclick="IdCardManager.clearAll()">清空照片</button>
+                        </div>
                     </div>
+                    
+                    <!-- 默认第 1 人标准身份证画幅 -->
+                    <div class="idcard-person-card" id="idcard-person-default">
+                        <div class="idcard-person-title">第 1 人身份证信息</div>
+                        <div class="idcard-ratio-grid">
+                            <!-- 正面 -->
+                            <div class="idcard-ratio-box" id="idcard-slot-front-0" onclick="document.getElementById('file-idcard-front-0').click()">
+                                <div class="idcard-ratio-placeholder" id="placeholder-front-0">
+                                    <div class="idcard-ratio-icon">👤</div>
+                                    <div class="idcard-ratio-text">正面 (人像面)</div>
+                                    <div class="idcard-ratio-sub">点击或拖拽上传正面</div>
+                                </div>
+                                <img id="preview-front-0" class="idcard-ratio-img" style="display:none;" alt="正面">
+                                <input type="file" id="file-idcard-front-0" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(0, 'front', this.files)">
+                            </div>
+
+                            <!-- 反面 -->
+                            <div class="idcard-ratio-box" id="idcard-slot-back-0" onclick="document.getElementById('file-idcard-back-0').click()">
+                                <div class="idcard-ratio-placeholder" id="placeholder-back-0">
+                                    <div class="idcard-ratio-icon">🇨🇳</div>
+                                    <div class="idcard-ratio-text">反面 (国徽面)</div>
+                                    <div class="idcard-ratio-sub">点击或拖拽上传反面</div>
+                                </div>
+                                <img id="preview-back-0" class="idcard-ratio-img" style="display:none;" alt="反面">
+                                <input type="file" id="file-idcard-back-0" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(0, 'back', this.files)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 动态增加更多人员的容器 -->
                     <div id="idcard-person-container"></div>
                 </div>
 
@@ -154,13 +169,12 @@
                 </div>
             </div>
 
-            <!-- 右侧视窗预览与打印机状态看板 -->
+            <!-- 右侧视窗预览与打印机状态看板 (高度紧凑精简 1/3) -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:13px; font-weight:700;">👁️ 实时预览</span>
                         <div class="preview-zoom-ctrl">
-                            <!-- 专属操作锁切换按钮 -->
                             <span id="preview-lock-badge" class="preview-lock-badge locked" title="点击解锁以进行鼠标缩放与拖拽">
                                 <span id="lock-icon">🔒</span> <span id="lock-text">点击激活操作</span>
                             </span>
@@ -175,9 +189,9 @@
                         </div>
                     </div>
 
-                    <!-- 视口容器，默认带有锁定态 -->
+                    <!-- 紧凑视口容器 (高度缩至 320px) -->
                     <div class="viewport-wrapper locked" id="viewport-box">
-                        <div class="viewport-lock-hint" id="viewport-lock-hint">🔒 点击视口内部激活缩放与拖拽</div>
+                        <div class="viewport-lock-hint" id="viewport-lock-hint">🔒 点击激活操作</div>
                         <div class="sheet-a4-viewport" id="a4-viewport">
                             <div class="sheet-placeholder-text" id="viewport-empty-tip">上传文件后实时呈现效果</div>
                             <canvas id="canvas-preview"></canvas>
@@ -187,7 +201,7 @@
                     </div>
                 </div>
 
-                <div class="card-box" style="margin-top:14px;">
+                <div class="card-box" style="margin-top:12px;">
                     <div class="card-title">
                         <span style="display:flex; align-items:center; gap:6px;">📈 打印机状态</span>
                         <button type="button" class="btn-refresh-icon" style="width:24px; height:24px; font-size:11px; background:transparent; color:#64748b; border:1px solid #cbd5e1;" onclick="DashboardService.loadPrinters(true)">🔄</button>
@@ -202,7 +216,7 @@
                     </div>
                     <div style="margin-top:8px; border-top:1px dashed #e2e8f0; padding-top:8px;">
                         <span style="font-size:11px; font-weight:700; color:#475569;">最近打印记录</span>
-                        <div id="dash-completed-history" style="max-height:90px; overflow-y:auto; margin-top:4px; font-size:11px; color:#64748b;">暂无打印记录</div>
+                        <div id="dash-completed-history" style="max-height:85px; overflow-y:auto; margin-top:4px; font-size:11px; color:#64748b;">暂无打印记录</div>
                     </div>
                 </div>
             </div>
@@ -248,7 +262,7 @@
                             <a id="scan-download-anchor" href="#" download style="display:none; font-size:12px; color:var(--primary); font-weight:700; text-decoration:none;">💾 下载原件</a>
                         </div>
                     </div>
-                    <div class="sheet-a4-viewport" id="scan-a4-viewport" style="background:#fff; position:relative; width:300px; height:424px;">
+                    <div class="sheet-a4-viewport" id="scan-a4-viewport" style="background:#fff; position:relative; width:212px; height:300px;">
                         <div class="sheet-placeholder-text" id="scan-empty-tip">点击左侧启动扫描后在此预览</div>
                         <img id="scan-live-img" style="max-width:100%; max-height:100%; object-fit:contain; display:none;" alt="扫描图">
                     </div>
@@ -257,9 +271,8 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 (双列对称排版 + 诊断控制台) -->
+    <!-- 3. 设备管理面板 -->
     <div id="panel-devices" class="tab-panel-container">
-        <!-- 运维顶栏 -->
         <div class="card-box" style="margin-bottom:14px; border-left: 4px solid var(--primary);">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -279,7 +292,6 @@
         </div>
 
         <div class="device-dashboard-grid">
-            <!-- 左列：硬件设备管理与驱动安装中心 -->
             <div class="col-left">
                 <div class="card-box">
                     <div class="card-title">
@@ -331,7 +343,6 @@
                 </div>
             </div>
 
-            <!-- 右列：端侧 AI 引擎状态与排错日志终端 -->
             <div class="col-right">
                 <div class="card-box" style="border:1px solid #c7d2fe; background:#f8faff;">
                     <div class="card-title" style="color:#3730a3;">
