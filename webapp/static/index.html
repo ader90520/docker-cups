@@ -48,13 +48,11 @@
                         <span>📁 上传文件 (文档 / 试卷 / 发票 / 图片)</span>
                         <button type="button" class="btn-del" onclick="PrintManager.clearFiles('normal')">清空列表</button>
                     </div>
-                    <!-- 原生拖拽支持区 -->
                     <div class="upload-drag-area" id="drag-drop-zone-normal">
                         <div class="upload-icon">📂</div>
                         <div class="upload-text"><b>点击选取</b> 或 <b>直接将文档/发票/图片拖拽至此处</b></div>
                         <input type="file" id="file-input-normal" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected(this.files)">
                     </div>
-                    <!-- 交互式可点击、可单独删除的文件列表 -->
                     <div class="interactive-file-list" id="file-list-normal" style="display:none;"></div>
                     <div style="margin-top:10px; background:#f8fafc; padding:8px 10px; border-radius:6px; border:1px solid #e2e8f0;">
                         <label style="font-size:12px; font-weight:600; cursor:pointer; color:#0f172a; display:flex; align-items:center; gap:6px;">
@@ -64,7 +62,7 @@
                     </div>
                 </div>
 
-                <!-- 上传区：身份证专属打印 (85.6:54 真实比例大卡片) -->
+                <!-- 上传区：身份证专属打印 (85.6:54 黄金比例) -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
                         <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
@@ -77,7 +75,6 @@
                     <div class="idcard-person-card" id="idcard-person-default">
                         <div class="idcard-person-title">第 1 人身份证信息</div>
                         <div class="idcard-ratio-grid">
-                            <!-- 正面 -->
                             <div class="idcard-ratio-box" id="idcard-slot-front-0">
                                 <div class="idcard-ratio-placeholder" id="placeholder-front-0">
                                     <div class="idcard-ratio-icon">👤</div>
@@ -88,7 +85,6 @@
                                 <input type="file" id="file-idcard-front-0" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(0, 'front', this.files)">
                             </div>
 
-                            <!-- 反面 -->
                             <div class="idcard-ratio-box" id="idcard-slot-back-0">
                                 <div class="idcard-ratio-placeholder" id="placeholder-back-0">
                                     <div class="idcard-ratio-icon">🇨🇳</div>
@@ -145,7 +141,6 @@
                                 <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
-                        <!-- 身份证打印时自动隐藏项：去黑底增强 -->
                         <div class="form-item" id="item-enhance-wrap">
                             <label>去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="EnhanceEngine.invalidateCache(); EnhanceEngine.renderPreview();">
@@ -153,7 +148,6 @@
                                 <option value="false">关闭 (原图直打)</option>
                             </select>
                         </div>
-                        <!-- 身份证打印时自动隐藏项：页面范围 -->
                         <div class="form-item" id="item-pageranges-wrap" style="grid-column: span 2;">
                             <label>页面范围 (如: 1-5 8，留空打全部)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
@@ -268,7 +262,7 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 -->
+    <!-- 3. 设备管理面板 (含模型自动嗅探与在线参数适配器) -->
     <div id="panel-devices" class="tab-panel-container">
         <div class="card-box" style="margin-bottom:14px; border-left: 4px solid var(--primary);">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -369,12 +363,49 @@
                         </div>
                     </div>
 
-                    <div style="font-size:11px; font-weight:700; color:#4338ca; margin-bottom:4px;">📤 热更新 .onnx 权重文件 (自动识别 WebGL 算子并推送)</div>
+                    <div style="font-size:11px; font-weight:700; color:#4338ca; margin-bottom:4px;">📤 选择 .onnx 权重文件 (自动读取输入输出并提示兼容性)</div>
                     <div style="display:flex; gap:6px; align-items:center;">
-                        <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;">
-                        <button type="button" class="btn-submit-print" style="width:auto; padding:5px 14px; background:#4f46e5; font-size:11px;" onclick="DocAI.uploadAndReloadModel('onnx-model-file-input', 'model-alert')">部署模型</button>
+                        <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;" onchange="DocAI.inspectAndLoadModel('onnx-model-file-input')">
+                        <button type="button" class="btn-submit-print" style="width:auto; padding:5px 14px; background:#4f46e5; font-size:11px;" onclick="DocAI.inspectAndLoadModel('onnx-model-file-input')">解析模型</button>
                     </div>
                     <div id="model-alert" class="status-alert"></div>
+
+                    <!-- 模型动态参数在线适配器 -->
+                    <div id="model-config-panel" style="margin-top:12px; background:#ffffff; border:1px solid #cbd5e1; border-radius:6px; padding:10px; display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px dashed #e2e8f0; padding-bottom:6px;">
+                            <b style="font-size:12px; color:#1e293b;">🛠️ 模型输入输出参数适配器</b>
+                            <span id="model-match-status" style="font-size:11px; font-weight:700;">检测中</span>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:11px;">
+                            <div>
+                                <label style="font-weight:600; color:#475569; display:block; margin-bottom:2px;">输入节点名称</label>
+                                <input type="text" id="cfg-input-name" class="form-ctrl" style="padding:4px 6px; font-size:11px;">
+                            </div>
+                            <div>
+                                <label style="font-weight:600; color:#475569; display:block; margin-bottom:2px;">输入分辨率 (宽 × 高)</label>
+                                <div style="display:flex; gap:4px;">
+                                    <input type="number" id="cfg-input-w" class="form-ctrl" placeholder="宽" style="padding:4px 6px; font-size:11px;">
+                                    <input type="number" id="cfg-input-h" class="form-ctrl" placeholder="高" style="padding:4px 6px; font-size:11px;">
+                                </div>
+                            </div>
+                            <div>
+                                <label style="font-weight:600; color:#475569; display:block; margin-bottom:2px;">输出节点名称</label>
+                                <input type="text" id="cfg-output-name" class="form-ctrl" style="padding:4px 6px; font-size:11px;">
+                            </div>
+                            <div>
+                                <label style="font-weight:600; color:#475569; display:block; margin-bottom:2px;">后处理算法模式</label>
+                                <select id="cfg-algo-mode" class="form-ctrl" style="padding:4px 6px; font-size:11px;">
+                                    <option value="uvdoc_grid">UVDoc 控制网格拉平 (Grid Mesh)</option>
+                                    <option value="corner_homography">四角透视变换 (DocCorner)</option>
+                                    <option value="dense_remap">密集反向位移场 (Dense Remap)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
+                            <button type="button" class="nav-btn" style="padding:3px 10px; font-size:11px;" onclick="DocAI.resetModelConfig()">恢复预设</button>
+                            <button type="button" class="btn-submit-print" style="width:auto; margin-top:0; padding:4px 12px; font-size:11px; background:#0284c7;" onclick="DocAI.saveModelConfig()">💾 保存参数并激活推理</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="card-box" style="padding:0; overflow:hidden; border:none; background:transparent;">
