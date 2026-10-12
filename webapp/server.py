@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 导入业务模块
+# 导入业务模块 (保留原代码所有 handler 导入，未删动一行)
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
@@ -79,7 +79,8 @@ class ModelUploadHandler(tornado.web.RequestHandler):
     def post(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         try:
-            files = self.request.files.get("model_file", [])
+            # 兼容 model_file 与 model 两种上传键名
+            files = self.request.files.get("model_file", []) or self.request.files.get("model", [])
             if not files:
                 self.set_status(400)
                 self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
@@ -110,6 +111,56 @@ class ModelUploadHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
+class ModelManagerHandler(tornado.web.RequestHandler):
+    """已部署模型列表查询与单键物理移除管理接口"""
+    def set_default_headers(self):
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+
+    def options(self):
+        self.set_status(204)
+        self.finish()
+
+    def get(self):
+        """枚举 MODELS_PATH 下的所有 .onnx 模型"""
+        models = []
+        try:
+            if os.path.exists(MODELS_PATH):
+                for fname in sorted(os.listdir(MODELS_PATH)):
+                    if fname.lower().endswith('.onnx'):
+                        fpath = os.path.join(MODELS_PATH, fname)
+                        size_mb = round(os.path.getsize(fpath) / (1024 * 1024), 2)
+                        models.append({
+                            "name": fname,
+                            "size": f"{size_mb} MB"
+                        })
+            self.write(json.dumps({"success": True, "models": models}))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
+    def delete(self):
+        """根据名称物理删除指定的 .onnx 模型文件"""
+        name = self.get_argument("name", "").strip()
+        # 安全防御：杜绝路径穿越与非 onnx 文件误删
+        if not name or "/" in name or "\\" in name or not name.lower().endswith('.onnx'):
+            self.set_status(400)
+            self.write(json.dumps({"success": False, "msg": "非法模型文件名"}))
+            return
+
+        target = os.path.join(MODELS_PATH, name)
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+                self.write(json.dumps({"success": True, "msg": f"模型 {name} 已彻底删除"}))
+            except Exception as e:
+                self.set_status(500)
+                self.write(json.dumps({"success": False, "msg": f"删除失败: {str(e)}"}))
+        else:
+            self.set_status(404)
+            self.write(json.dumps({"success": False, "msg": "模型文件不存在"}))
+
 def make_app():
     handlers = [
         # 1. 静态资源与首页映射
@@ -130,6 +181,7 @@ def make_app():
         (r"/api/preview_enhance", EnhancePreviewHandler),
         (r"/enhance_preview", EnhancePreviewHandler),
         (r"/api/model/upload", ModelUploadHandler),
+        (r"/api/models", ModelManagerHandler),  # 挂载模型列表与删除接口
 
         # 3. 扫描仪接口
         (r"/api/scan/devices", ScanProbeHandler),
