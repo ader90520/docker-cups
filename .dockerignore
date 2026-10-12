@@ -1,0 +1,26 @@
+# 1. 忽略 Git 版本控制与自动化配置
+.git
+.gitignore
+.github
+
+# 2. 忽略原始训练权重与压缩分卷（彻底拦截 weights 目录打进镜像）
+weights/
+*.rar
+*.zip
+*.tar.gz
+*.pth
+*.pt
+
+# 3. 忽略根目录临时模型文件（严格只保留 webapp/models 下的模型）
+*.onnx
+!webapp/models/doc_corner.onnx
+
+# 4. 忽略 Python 缓存与系统临时文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+.DS_Store
+Thumbs.db
