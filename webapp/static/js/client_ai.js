@@ -1,6 +1,5 @@
 /**
- * CUPS 智能工作台 - 通用端侧 AI 引擎与模型自适应适配器 (client_ai.js)
- * 适配移动端/iOS Safari，支持任意 ONNX 模型元数据自动嗅探、参数在线配置热持久化与网格/透视双重拉平
+ * CUPS 智能工作台 - 端侧多模型调度引擎与在线参数适配器 (client_ai.js)
  */
 
 const DocAI = {
@@ -13,7 +12,6 @@ const DocAI = {
     },
     currentBackend: 'none',
 
-    // 默认自适应配置项 (优先从 localStorage 读取)
     customConfig: {
         inputName: 'input',
         inputW: 496,
@@ -40,7 +38,6 @@ const DocAI = {
         } catch (e) {}
     },
 
-    // 引擎初始化入口
     init: async function() {
         this.loadPersistedConfig();
         this.log('端侧 AI 诊断守护启动...');
@@ -56,14 +53,14 @@ const DocAI = {
             pill.innerText = 'AI 引擎初始化中...';
         }
 
-        // 核心防线：解决 iOS Safari / 移动端 SIMD 与多线程不支持报错
+        // 规避 iOS Safari SIMD 报错，强制单线程标准 WASM
         if (typeof ort !== 'undefined' && ort.env) {
             if (ort.env.wasm) {
-                ort.env.wasm.simd = false; // 严禁绑定 SIMD，使用标准通用 WASM
-                ort.env.wasm.numThreads = 1; // 严禁多线程避免跨域 SharedArrayBuffer 阻塞
+                ort.env.wasm.simd = false;
+                ort.env.wasm.numThreads = 1;
             }
         } else {
-            this.log('❌ 未检测到 onnxruntime-web 运行库，跳过端侧推理初始化');
+            this.log('❌ 未检测到 onnxruntime-web 运行库');
             this.updateUiFallback(pill, metricBackend);
             return;
         }
@@ -75,31 +72,32 @@ const DocAI = {
 
         let t0 = performance.now();
 
-        // 1. 尝试加载四角透视切边模型
+        // 1. 加载透视切边模型
         try {
             this.cornerSession = await ort.InferenceSession.create('/models/doc_corner.onnx?v=' + Date.now(), sessionOptions);
             this.readyStatus.corner = true;
-            this.log('✔ [成功] 透视切边模型 doc_corner.onnx 已挂载');
+            this.log('✔ [成功] doc_corner.onnx 加载就绪');
         } catch (e) {
             this.log(`ℹ 透视切边模型未加载: ${e.message}`);
         }
 
-        // 2. 尝试加载弯曲拉平模型
+        // 2. 加载弯曲展平模型
         try {
             this.unwarpSession = await ort.InferenceSession.create('/models/uvdoc_grid.onnx?v=' + Date.now(), sessionOptions);
             this.readyStatus.unwarp = true;
-            this.log('✔ [成功] 弯曲展平模型 uvdoc_grid.onnx 已挂载');
+            this.log('✔ [成功] uvdoc_grid.onnx 加载就绪');
         } catch (e) {
-            this.log(`ℹ 弯曲展平模型未加载: ${e.message}`);
+            this.log(`ℹ 弯曲拉平模型未加载: ${e.message}`);
         }
 
         const totalCost = (performance.now() - t0).toFixed(0);
 
         if (this.readyStatus.corner || this.readyStatus.unwarp) {
+            const count = (this.readyStatus.corner ? 1 : 0) + (this.readyStatus.unwarp ? 1 : 0);
             if (pill) {
                 pill.style.background = '#dcfce7';
                 pill.style.color = '#166534';
-                pill.innerText = '端侧 AI 就绪';
+                pill.innerText = `端侧 AI 就绪 (${count} 个模型)`;
             }
             if (metricBackend) metricBackend.innerText = 'WebGL/WASM 双通道';
             if (metricCache) metricCache.innerText = '浏览器内存';
@@ -108,6 +106,8 @@ const DocAI = {
         } else {
             this.updateUiFallback(pill, metricBackend);
         }
+
+        this.fetchDeployedModels();
     },
 
     updateUiFallback: function(pill, metricBackend) {
@@ -121,8 +121,8 @@ const DocAI = {
         if (metricBackend) metricBackend.innerText = '主机端代理';
     },
 
-    // 模型自动嗅探与在线参数适配核心
-    inspectAndLoadModel: async function(fileInputId) {
+    // 模型上传、嗅探与在线参数适配核心
+    inspectAndUploadModel: async function(fileInputId) {
         const fileInput = document.getElementById(fileInputId);
         if (!fileInput || fileInput.files.length === 0) {
             alert('请先选择 .onnx 模型文件！');
@@ -131,10 +131,9 @@ const DocAI = {
         const file = fileInput.files[0];
         const modelUrl = URL.createObjectURL(file);
 
-        this.log(`🔍 正在深度解析 ${file.name} 的拓扑结构与输入输出节点...`);
+        this.log(`🔍 正在深度解析 ${file.name} 的模型拓扑结构...`);
 
         try {
-            // 使用标准单线程 WASM 建立临时会话进行反射探测
             const tempSession = await ort.InferenceSession.create(modelUrl, {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'basic'
@@ -152,7 +151,6 @@ const DocAI = {
             document.getElementById('cfg-input-name').value = detectedInputName;
             document.getElementById('cfg-output-name').value = detectedOutputName;
 
-            // 智能启发式特征匹配
             const lowerName = file.name.toLowerCase();
             const lowerOut = detectedOutputName.toLowerCase();
 
@@ -161,31 +159,42 @@ const DocAI = {
                 document.getElementById('cfg-input-h').value = 720;
                 document.getElementById('cfg-algo-mode').value = 'uvdoc_grid';
                 statusLbl.innerHTML = '<span style="color:#16a34a;">✔ 匹配 UVDoc 控制网格拉平架构</span>';
-                this.log(`✔ 结构判定：匹配 UVDoc 控制网格输出 (推荐 496×720)`);
-            } else if (lowerName.includes('corner') || lowerOut.includes('corner') || lowerOut.includes('pts')) {
+            } else if (lowerName.includes('corner') || lowerOut.includes('corner')) {
                 document.getElementById('cfg-input-w').value = 256;
                 document.getElementById('cfg-input-h').value = 256;
                 document.getElementById('cfg-algo-mode').value = 'corner_homography';
-                statusLbl.innerHTML = '<span style="color:#16a34a;">✔ 匹配 DocCorner 四角透视变换架构</span>';
-                this.log(`✔ 结构判定：匹配角点回归输出 (推荐 256×256)`);
+                statusLbl.innerHTML = '<span style="color:#16a34a;">✔ 匹配 DocCorner 四角透视架构</span>';
             } else {
                 document.getElementById('cfg-input-w').value = 512;
                 document.getElementById('cfg-input-h').value = 512;
                 document.getElementById('cfg-algo-mode').value = 'uvdoc_grid';
-                statusLbl.innerHTML = '<span style="color:#d97706;">⚠ 未知拓扑架构，请在下方确认输入分辨率与算法</span>';
-                this.log(`⚠ 未能精准判定模型类型，输入输出节点已自动填入，请核对尺寸后保存`);
+                statusLbl.innerHTML = '<span style="color:#d97706;">⚠ 未知拓扑架构，请手动核对尺寸</span>';
             }
 
             this.tempLoadedSession = tempSession;
-            this.log(`模型元数据解析成功：输入节点 [${detectedInputName}]，输出节点 [${detectedOutputName}]`);
+            this.log(`元数据提取成功：输入节点 [${detectedInputName}]，输出节点 [${detectedOutputName}]`);
+
+            // 同时将该模型同步上传至机顶盒持久化保存
+            const fd = new FormData();
+            fd.append('model', file);
+            const alertBox = document.getElementById('model-alert');
+            if (alertBox) alertBox.innerHTML = '<span style="color:#0284c7;">正在持久化保存模型至机顶盒...</span>';
+            
+            const upResp = await fetch('/api/models', { method: 'POST', body: fd });
+            const upRes = await upResp.json();
+            if (upRes.success) {
+                if (alertBox) alertBox.innerHTML = `<span style="color:#10b981;">✔ ${upRes.msg}</span>`;
+                this.fetchDeployedModels();
+            } else {
+                if (alertBox) alertBox.innerHTML = `<span style="color:#ef4444;">上传错误: ${upRes.msg}</span>`;
+            }
 
         } catch (err) {
             this.log(`❌ 模型解析阻断: ${err.message}`);
-            alert('模型解析失败！可能是 opset 算子版本不兼容或文件已损坏。');
+            alert('模型解析失败！可能是 opset 版本不兼容或文件已损坏。');
         }
     },
 
-    // 保存参数并在前端热生效
     saveModelConfig: function() {
         this.customConfig = {
             inputName: document.getElementById('cfg-input-name').value.trim() || 'input',
@@ -196,7 +205,7 @@ const DocAI = {
         };
 
         localStorage.setItem('cups_ai_model_config', JSON.stringify(this.customConfig));
-        this.log(`✔ 新配置已持久化：${this.customConfig.inputW}x${this.customConfig.inputH}，算法模式：${this.customConfig.algoMode}`);
+        this.log(`✔ 参数已热更新：${this.customConfig.inputW}x${this.customConfig.inputH}，算法模式：${this.customConfig.algoMode}`);
 
         if (this.tempLoadedSession) {
             if (this.customConfig.algoMode === 'uvdoc_grid') {
@@ -215,6 +224,7 @@ const DocAI = {
             pill.innerText = '端侧新模型已激活';
         }
         alert('模型参数配置成功并立即生效！');
+        this.fetchDeployedModels();
     },
 
     resetModelConfig: function() {
@@ -231,10 +241,64 @@ const DocAI = {
         document.getElementById('cfg-input-h').value = this.customConfig.inputH;
         document.getElementById('cfg-output-name').value = this.customConfig.outputName;
         document.getElementById('cfg-algo-mode').value = this.customConfig.algoMode;
-        this.log('参数已重置为系统默认规格');
+        this.log('参数已重置为默认规格');
     },
 
-    // 动态尺寸预处理：根据配置缩放为指定 (1, 3, H, W) Tensor
+    fetchDeployedModels: async function() {
+        const container = document.getElementById('deployed-models-container');
+        if (!container) return;
+
+        try {
+            const resp = await fetch('/api/models');
+            const res = await resp.json();
+            if (res.success && res.models && res.models.length > 0) {
+                container.innerHTML = res.models.map(m => {
+                    let badge = '<span style="background:#fee2e2; color:#991b1b; padding:1px 6px; border-radius:4px; font-size:10px;">🔴 未挂载</span>';
+                    if ((m.name.includes('corner') && this.readyStatus.corner) || 
+                        (m.name.includes('uvdoc') && this.readyStatus.unwarp)) {
+                        badge = '<span style="background:#dcfce7; color:#166534; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:700;">🟢 已加载就绪</span>';
+                    }
+
+                    return `
+                        <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; border:1px solid #e0e7ff; padding:6px 10px; border-radius:6px; font-size:11px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-weight:700; color:#1e293b;">🧠 ${m.name}</span>
+                                <span style="color:#64748b;">(${m.size})</span>
+                                ${badge}
+                            </div>
+                            <button type="button" class="btn-del" style="background:#fee2e2; color:#ef4444; padding:2px 8px; border-radius:4px;" onclick="DocAI.deleteModel('${m.name}')">🗑️ 删除模型</button>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                container.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未安装任何 .onnx 模型</div>';
+            }
+        } catch (e) {
+            container.innerHTML = '<div style="font-size:11px; color:#ef4444;">获取模型列表失败</div>';
+        }
+    },
+
+    deleteModel: async function(modelName) {
+        if (!confirm(`确认删除模型文件 [${modelName}] 吗？删除后将无法恢复。`)) return;
+
+        try {
+            const resp = await fetch(`/api/models?name=${encodeURIComponent(modelName)}`, {
+                method: 'DELETE'
+            });
+            const res = await resp.json();
+            if (res.success) {
+                this.log(`✔ [成功] ${modelName} 已删除`);
+                alert(res.msg);
+                this.clearCacheAndReload();
+                this.fetchDeployedModels();
+            } else {
+                alert(`删除失败: ${res.msg}`);
+            }
+        } catch (e) {
+            alert(`网络异常: ${e.message}`);
+        }
+    },
+
     preprocessDynamic: function(imgElement, targetW, targetH) {
         const canvas = document.createElement('canvas');
         canvas.width = targetW;
@@ -247,15 +311,14 @@ const DocAI = {
         const floatData = new Float32Array(3 * channelSize);
 
         for (let i = 0; i < channelSize; i++) {
-            floatData[i] = imgData[i * 4] / 255.0;                      // R
-            floatData[channelSize + i] = imgData[i * 4 + 1] / 255.0;      // G
-            floatData[2 * channelSize + i] = imgData[i * 4 + 2] / 255.0;  // B
+            floatData[i] = imgData[i * 4] / 255.0;
+            floatData[channelSize + i] = imgData[i * 4 + 1] / 255.0;
+            floatData[2 * channelSize + i] = imgData[i * 4 + 2] / 255.0;
         }
 
         return new ort.Tensor('float32', floatData, [1, 3, targetH, targetW]);
     },
 
-    // UVDoc 网格拉直流水线
     unwarpDocument: async function(imageInput) {
         if (!this.readyStatus.unwarp || !this.unwarpSession) {
             return (imageInput instanceof Blob) ? imageInput : null;
@@ -277,7 +340,6 @@ const DocAI = {
                         return;
                     }
 
-                    // 默认 45x31 控制网格重构
                     const unwarpedBlob = await this.remapGridToImage(img, outputGrid.data, 45, 31);
                     this.log('✔ [成功] 文档弯曲拉直处理完毕');
                     resolve(unwarpedBlob);
@@ -298,7 +360,6 @@ const DocAI = {
         });
     },
 
-    // 轻量化分块网格插值展平 (Piecewise Bilinear Mesh Warp)
     remapGridToImage: function(sourceImg, gridData, gridH, gridW) {
         return new Promise((resolve) => {
             const origW = sourceImg.naturalWidth || sourceImg.width;
@@ -338,15 +399,12 @@ const DocAI = {
         });
     },
 
-    // 综合预处理入口：优先根据激活的算法拉直或切边
     processDocument: async function(file) {
         let currentPayload = file;
-
         if (this.readyStatus.unwarp && this.customConfig.algoMode === 'uvdoc_grid') {
             const unwarped = await this.unwarpDocument(currentPayload);
             if (unwarped) currentPayload = unwarped;
         }
-
         return currentPayload;
     },
 
@@ -357,7 +415,7 @@ const DocAI = {
         if (window.localStorage) {
             localStorage.removeItem('cups_ai_model_config');
         }
-        this.log('🧹 浏览器端模型缓存与自定义参数已清空，正在重置...');
+        this.log('🧹 浏览器端模型缓存与自定义参数已清空');
         this.init();
     }
 };
