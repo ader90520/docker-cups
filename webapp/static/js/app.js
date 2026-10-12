@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心交互逻辑 (精简收敛版)
+ * CUPS 智能工作台前端核心交互逻辑 (增强多文件管理、拖拽与条件控制版)
  */
 
 const AppConfig = {
@@ -9,7 +9,7 @@ const AppConfig = {
     activePrinter: ''
 };
 
-// 顶栏面板切换
+// 顶栏导航切换
 function switchNavTab(tabName) {
     document.querySelectorAll('.nav-tabs .nav-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-panel-container').forEach(panel => panel.classList.remove('active'));
@@ -25,12 +25,13 @@ function switchNavTab(tabName) {
     }
 }
 
-// 打印业务管理器 (收敛发票独立逻辑，统一由 normal 队列与智能拼版调度)
+// 打印业务管理器
 const PrintManager = {
     files: {
         normal: []
     },
 
+    // 切换普通文档与身份证模式 (精准控制参数项显隐)
     switchSubTab: function(tabKey) {
         AppConfig.currentSubTab = tabKey;
         document.querySelectorAll('.sub-type-nav .type-item').forEach(el => el.classList.remove('active'));
@@ -39,12 +40,22 @@ const PrintManager = {
 
         const secNormal = document.getElementById('sec-upload-normal');
         const secIdCard = document.getElementById('sec-upload-idcard');
-        if (secNormal) secNormal.style.display = (tabKey === 'normal') ? 'block' : 'none';
-        if (secIdCard) secIdCard.style.display = (tabKey === 'idcard') ? 'block' : 'none';
+        const itemEnhance = document.getElementById('item-enhance-wrap');
+        const itemPageRanges = document.getElementById('item-pageranges-wrap');
 
         if (tabKey === 'idcard') {
+            if (secNormal) secNormal.style.display = 'none';
+            if (secIdCard) secIdCard.style.display = 'block';
+            // 身份证专属：隐藏去黑底与页面范围
+            if (itemEnhance) itemEnhance.style.display = 'none';
+            if (itemPageRanges) itemPageRanges.style.display = 'none';
             IdCardManager.renderPreview();
         } else {
+            if (secNormal) secNormal.style.display = 'block';
+            if (secIdCard) secIdCard.style.display = 'none';
+            // 恢复普通文档参数
+            if (itemEnhance) itemEnhance.style.display = 'flex';
+            if (itemPageRanges) itemPageRanges.style.display = 'flex';
             EnhanceEngine.renderPreview();
         }
     },
@@ -78,31 +89,73 @@ const PrintManager = {
         EnhanceEngine.renderPreview();
     },
 
-    onFilesSelected: function(type, fileList) {
+    // 接收文件（支持多选追加或拖拽存入）
+    onFilesSelected: function(fileList) {
         if (!fileList || fileList.length === 0) return;
-        this.files.normal = Array.from(fileList);
-        const listContainer = document.getElementById('file-list-normal');
-        if (listContainer) {
-            listContainer.style.display = 'block';
-            listContainer.innerHTML = this.files.normal.map(f => `<div style="font-size:11px; padding:2px 0;">📄 ${f.name} (${Math.round(f.size/1024)} KB)</div>`).join('');
-        }
-        EnhanceEngine.currentPage = 0;
+        const newFiles = Array.from(fileList);
+        this.files.normal = this.files.normal.concat(newFiles);
+        this.renderFileList();
+        EnhanceEngine.currentPage = this.files.normal.length - 1; // 默认跳至最新选取的图片
         EnhanceEngine.renderPreview();
     },
 
+    // 渲染带有单独删除、点击直接预览的交互式列表
+    renderFileList: function() {
+        const listContainer = document.getElementById('file-list-normal');
+        if (!listContainer) return;
+
+        if (this.files.normal.length === 0) {
+            listContainer.style.display = 'none';
+            listContainer.innerHTML = '';
+            EnhanceEngine.clearViewport();
+            return;
+        }
+
+        listContainer.style.display = 'flex';
+        listContainer.innerHTML = this.files.normal.map((f, idx) => {
+            const isActive = (idx === EnhanceEngine.currentPage) ? 'active' : '';
+            return `
+                <div class="file-item-row ${isActive}">
+                    <span class="file-item-name" onclick="PrintManager.previewFileByIndex(${idx})" title="点击预览此文件">
+                        📄 [${idx + 1}] ${f.name} (${Math.round(f.size / 1024)} KB)
+                    </span>
+                    <button type="button" class="btn-file-remove" onclick="PrintManager.removeSingleFile(${idx})" title="删除此文件">✖</button>
+                </div>
+            `;
+        }).join('');
+    },
+
+    // 点击某文件名字直接切换到对应预览图
+    previewFileByIndex: function(idx) {
+        if (idx >= 0 && idx < this.files.normal.length) {
+            EnhanceEngine.currentPage = idx;
+            this.renderFileList();
+            EnhanceEngine.renderPreview();
+        }
+    },
+
+    // 单个文件删除逻辑
+    removeSingleFile: function(idx) {
+        if (idx >= 0 && idx < this.files.normal.length) {
+            this.files.normal.splice(idx, 1);
+            if (EnhanceEngine.currentPage >= this.files.normal.length) {
+                EnhanceEngine.currentPage = Math.max(0, this.files.normal.length - 1);
+            }
+            this.renderFileList();
+            EnhanceEngine.renderPreview();
+        }
+    },
+
+    // 全部清空
     clearFiles: function(type) {
         if (type === 'idcard') {
             IdCardManager.clearAll();
             return;
         }
         this.files.normal = [];
-        const listContainer = document.getElementById('file-list-normal');
-        if (listContainer) {
-            listContainer.style.display = 'none';
-            listContainer.innerHTML = '';
-        }
         const fileInput = document.getElementById('file-input-normal');
         if (fileInput) fileInput.value = '';
+        this.renderFileList();
         EnhanceEngine.clearViewport();
     },
 
@@ -128,12 +181,12 @@ const PrintManager = {
         fd.append('duplex', document.getElementById('p-duplex').value || 'none');
         fd.append('color_mode', AppConfig.currentColorMode);
         fd.append('media', document.getElementById('p-media').value || 'A4');
-        fd.append('enhance', document.getElementById('p-enhance').value || 'true');
-        fd.append('page_ranges', document.getElementById('p-page-ranges').value || '');
 
         let fileQueue = [];
         if (AppConfig.currentSubTab === 'normal') {
             fileQueue = this.files.normal;
+            fd.append('enhance', document.getElementById('p-enhance').value || 'true');
+            fd.append('page_ranges', document.getElementById('p-page-ranges').value || '');
             const isMerge = document.getElementById('chk-normal-merge').checked;
             fd.append('multi_merge', isMerge ? 'true' : 'false');
         } else if (AppConfig.currentSubTab === 'idcard') {
@@ -143,6 +196,8 @@ const PrintManager = {
                 return;
             }
             fileQueue = [new File([idCardBlob], 'idcard_merged.jpg', { type: 'image/jpeg' })];
+            fd.append('enhance', 'false'); // 身份证固定不走破坏性去黑底
+            fd.append('page_ranges', '');
             fd.append('multi_merge', 'false');
         }
 
@@ -169,7 +224,7 @@ const PrintManager = {
     }
 };
 
-// 身份证管理对象 (等比例 85.6:54 卡片画幅管理与合成)
+// 身份证专属业务对象
 const IdCardManager = {
     persons: [
         { front: null, back: null }
@@ -217,7 +272,7 @@ const IdCardManager = {
                 <button type="button" class="btn-del" onclick="IdCardManager.removePerson(${index})">删除此人</button>
             </div>
             <div class="idcard-ratio-grid">
-                <div class="idcard-ratio-box" id="idcard-slot-front-${index}" onclick="document.getElementById('file-idcard-front-${index}').click()">
+                <div class="idcard-ratio-box" id="idcard-slot-front-${index}">
                     <div class="idcard-ratio-placeholder" id="placeholder-front-${index}">
                         <div class="idcard-ratio-icon">👤</div>
                         <div class="idcard-ratio-text">正面 (人像面)</div>
@@ -227,7 +282,7 @@ const IdCardManager = {
                     <input type="file" id="file-idcard-front-${index}" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(${index}, 'front', this.files)">
                 </div>
 
-                <div class="idcard-ratio-box" id="idcard-slot-back-${index}" onclick="document.getElementById('file-idcard-back-${index}').click()">
+                <div class="idcard-ratio-box" id="idcard-slot-back-${index}">
                     <div class="idcard-ratio-placeholder" id="placeholder-back-${index}">
                         <div class="idcard-ratio-icon">🇨🇳</div>
                         <div class="idcard-ratio-text">反面 (国徽面)</div>
@@ -239,6 +294,40 @@ const IdCardManager = {
             </div>
         `;
         container.appendChild(card);
+        this.bindBoxDragDrop(index);
+    },
+
+    bindBoxDragDrop: function(index) {
+        ['front', 'back'].forEach(side => {
+            const box = document.getElementById(`idcard-slot-${side}-${index}`);
+            const input = document.getElementById(`file-idcard-${side}-${index}`);
+            if (!box || !input) return;
+
+            box.onclick = () => input.click();
+
+            ['dragenter', 'dragover'].forEach(name => {
+                box.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    box.classList.add('drag-over');
+                });
+            });
+
+            ['dragleave', 'drop'].forEach(name => {
+                box.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    box.classList.remove('drag-over');
+                });
+            });
+
+            box.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                if (dt && dt.files && dt.files.length > 0) {
+                    this.onSideUploaded(index, side, dt.files);
+                }
+            });
+        });
     },
 
     removePerson: function(index) {
@@ -327,7 +416,7 @@ const IdCardManager = {
     }
 };
 
-// 视窗渲染与图像增强调度引擎
+// 视窗渲染与增强引擎
 const EnhanceEngine = {
     currentPage: 0,
     totalPages: 0,
@@ -353,7 +442,6 @@ const EnhanceEngine = {
 
         const isMerge = document.getElementById('chk-normal-merge').checked;
 
-        // 如果开启了多图智能拼版且上传了超过1张图片，直接走前端网格多图拼接预览
         if (isMerge && files.length > 1) {
             this.totalPages = 1;
             document.getElementById('page-counter-lbl').innerText = '1 / 1';
@@ -436,8 +524,8 @@ const EnhanceEngine = {
 
         const count = files.length;
         let cols = 1, rows = 2;
-        if (count in [3, 4]) { cols = 2; rows = 2; }
-        else if (count in [5, 6]) { cols = 2; rows = 3; }
+        if (count === 3 || count === 4) { cols = 2; rows = 2; }
+        else if (count === 5 || count === 6) { cols = 2; rows = 3; }
         else if (count > 6) { cols = 2; rows = 4; }
 
         const cellW = canvas.width / cols;
@@ -469,6 +557,7 @@ const EnhanceEngine = {
     changePage: function(delta) {
         if (this.totalPages <= 1) return;
         this.currentPage = Math.max(0, Math.min(this.totalPages - 1, this.currentPage + delta));
+        PrintManager.renderFileList();
         this.renderPreview();
     },
 
@@ -476,7 +565,42 @@ const EnhanceEngine = {
     resetZoom: function() {}
 };
 
-// 状态看板与设备通信服务
+// 拖拽注入全局绑定
+function setupGlobalDragDrop() {
+    const dropZone = document.getElementById('drag-drop-zone-normal');
+    const fileInput = document.getElementById('file-input-normal');
+
+    if (dropZone && fileInput) {
+        dropZone.onclick = () => fileInput.click();
+
+        ['dragenter', 'dragover'].forEach(name => {
+            dropZone.addEventListener(name, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('drag-over');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(name => {
+            dropZone.addEventListener(name, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('drag-over');
+            });
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length > 0) {
+                PrintManager.onFilesSelected(dt.files);
+            }
+        });
+    }
+
+    IdCardManager.bindBoxDragDrop(0);
+}
+
+// 打印机状态与运维控制服务
 const DashboardService = {
     loadPrinters: async function(isManual) {
         try {
@@ -551,15 +675,15 @@ const DashboardService = {
     }
 };
 
-// 硬件扫描模块
 const ScanService = {
     startScan: async function() {},
     printCurrentFile: async function() {}
 };
 
-// 初始化
+// 页面加载触发
 document.addEventListener('DOMContentLoaded', () => {
     DashboardService.loadPrinters(false);
+    setupGlobalDragDrop();
     if (window.DocAI && window.DocAI.init) {
         window.DocAI.init();
     }
