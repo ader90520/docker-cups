@@ -9,7 +9,7 @@ export OMP_NUM_THREADS=1
 export MALLOC_ARENA_MAX=2
 export OPENCV_LOG_LEVEL=ERROR
 
-locale-gen zh_CN.UTF-8 2>/dev/null || true
+# 时区秒级同步（跳过重复的耗时 locale-gen）
 [ -n "$TZ" ] && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # ================= 1. 宿主机环境自动打补丁与自愈 =================
@@ -52,7 +52,7 @@ if [ -f /etc/sane.d/dll.conf ]; then
     grep -q "^hpaio" /etc/sane.d/dll.conf || echo "hpaio" >> /etc/sane.d/dll.conf
 fi
 
-# ================= 4. 断电残留清理与全量目录结构自愈 =================
+# ================= 4. 断电残留清理与目录自愈 =================
 rm -rf /var/run/dbus/* \
        /var/run/avahi-daemon/* \
        /var/lock/sane/* \
@@ -61,7 +61,6 @@ rm -rf /var/run/dbus/* \
        /run/cups/cups.sock \
        /run/cups/cupsd.pid 2>/dev/null || true
 
-# 严格保证四项持久化目录及运行时临时目录存在
 mkdir -p /opt/cups_data \
          /scans \
          /var/lock/sane \
@@ -107,7 +106,7 @@ sleep 1
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 sleep 1
 
-# ================= 6. 常驻后台守护进程 (带防语法越界防护) =================
+# ================= 6. 常驻后台守护进程 =================
 auto_usb_daemon() {
     echo ">>> [Hotplug] 自动热插拔与设备恢复守护已上线..."
     while true; do
@@ -283,7 +282,7 @@ div.body > h2 {
 EOF
 fi
 
-# ================= 10. 启动服务 =================
+# ================= 10. 启动核心服务 =================
 echo ">>> [1/2] 启动 CUPS 核心引擎 (631)..."
 /usr/sbin/cupsd
 sleep 2
