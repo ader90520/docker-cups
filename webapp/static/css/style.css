@@ -1,14 +1,14 @@
 :root {
-    --primary: #0284c7;
-    --primary-hover: #0369a1;
-    --success: #10b981;
-    --danger: #ef4444;
-    --bg-main: #f1f5f9;
+    --primary-green: #10b981;
+    --primary-green-hover: #059669;
+    --primary-blue: #0284c7;
+    --primary-blue-hover: #0369a1;
+    --bg-page: #f1f5f9;
     --card-bg: #ffffff;
     --border-color: #e2e8f0;
     --text-main: #0f172a;
     --text-sub: #64748b;
-    --radius: 8px;
+    --radius-main: 8px;
 }
 
 * {
@@ -21,36 +21,36 @@
 html, body {
     width: 100%;
     min-height: 100%;
-    overflow-x: hidden; /* 彻底根除移动端横向撑破 */
+    overflow-x: hidden;
+    background-color: var(--bg-page);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background-color: var(--bg-main);
-    color: var(--text-main);
-    line-height: 1.5;
-    font-size: 13px;
     padding: 10px;
 }
 
 .wrapper {
     width: 100%;
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
 }
 
-/* 顶栏与导航 */
+/* 顶部品牌与主导航 */
 .top-navbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-main);
+    padding: 10px 16px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
     gap: 8px;
-    background: var(--card-bg);
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border-color);
-    margin-bottom: 10px;
 }
 
 .nav-brand {
@@ -65,134 +65,126 @@ body {
 .nav-tabs {
     display: flex;
     gap: 6px;
-    flex-wrap: wrap;
 }
 
 .nav-btn {
     background: transparent;
     border: 1px solid var(--border-color);
-    padding: 5px 10px;
+    padding: 6px 12px;
     border-radius: 6px;
-    cursor: pointer;
     font-size: 12px;
     color: var(--text-sub);
+    cursor: pointer;
     font-weight: 600;
     transition: all 0.2s;
     white-space: nowrap;
 }
 
-.nav-btn:hover {
-    background: #f8fafc;
-    color: var(--text-main);
-}
-
 .nav-btn.active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
+    background: var(--primary-blue);
+    color: #ffffff;
+    border-color: var(--primary-blue);
 }
 
-/* 打印子切换栏 */
-.print-header-bar {
+/* 打印机与 AI 标签条 */
+.printer-bar-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-main);
+    padding: 8px 14px;
+    margin-bottom: 10px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    flex-wrap: wrap;
     gap: 8px;
-    background: var(--card-bg);
-    padding: 8px 12px;
-    border-radius: var(--radius) var(--radius) 0 0;
-    border: 1px solid var(--border-color);
-    border-bottom: none;
+    flex-wrap: wrap;
 }
 
-.printer-select-wrap {
+.printer-bar-left {
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1;
+    min-width: 240px;
 }
 
-.select-ctrl {
-    padding: 4px 8px;
+.printer-select-ctrl {
+    flex: 1;
+    padding: 5px 8px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     font-size: 12px;
-    background: #fff;
-    max-width: 100%;
+    background: #ffffff;
 }
 
-.btn-refresh-icon {
+.btn-icon-refresh {
     background: none;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 4px 6px;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .ai-engine-tag {
     font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 4px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: #dcfce7;
+    color: #166534;
     font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
-.sub-type-nav {
+/* 子业务切换 Tab */
+.sub-nav-tabs {
     display: flex;
     background: #e2e8f0;
-    border-left: 1px solid var(--border-color);
-    border-right: 1px solid var(--border-color);
+    border-radius: var(--radius-main);
+    padding: 3px;
+    margin-bottom: 10px;
+    gap: 4px;
 }
 
-.type-item {
+.sub-nav-item {
     flex: 1;
     text-align: center;
-    padding: 8px 4px;
+    padding: 8px 0;
     font-size: 12px;
     font-weight: 600;
-    cursor: pointer;
     color: var(--text-sub);
-    transition: all 0.2s;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s;
 }
 
-.type-item.active {
+.sub-nav-item.active {
     background: var(--card-bg);
-    color: var(--primary);
-    border-top: 2px solid var(--primary);
+    color: var(--primary-blue);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* 主面板网格布局（默认桌面端） */
-.tab-panel-container {
-    display: none;
-    width: 100%;
-}
-
-.tab-panel-container.active {
-    display: block;
-}
-
-.main-layout, .device-dashboard-grid {
+/* PC 端双列网格布局 (对齐图13) */
+.pc-double-layout {
     display: grid;
-    grid-template-columns: 1.15fr 0.85fr;
+    grid-template-columns: 0.95fr 1.05fr;
     gap: 12px;
-    background: var(--card-bg);
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 0 0 var(--radius) var(--radius);
     width: 100%;
 }
 
 .col-left, .col-right {
-    min-width: 0; /* 阻断 Grid 容器溢流 */
+    min-width: 0;
     width: 100%;
 }
 
+/* 经典卡片定义 */
 .card-box {
-    background: #ffffff;
+    background: var(--card-bg);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius);
-    padding: 12px;
+    border-radius: var(--radius-main);
+    padding: 14px;
     margin-bottom: 12px;
     width: 100%;
 }
@@ -204,100 +196,98 @@ body {
     font-size: 13px;
     font-weight: 700;
     color: var(--text-main);
-    margin-bottom: 10px;
-    border-bottom: 1px dashed var(--border-color);
+    margin-bottom: 12px;
     padding-bottom: 6px;
-    flex-wrap: wrap;
-    gap: 6px;
+    border-bottom: 1px dashed var(--border-color);
 }
 
-.btn-del {
-    background: transparent;
+.btn-text-danger {
+    background: none;
     border: none;
-    color: var(--danger);
-    cursor: pointer;
+    color: #ef4444;
     font-size: 11px;
     font-weight: 600;
+    cursor: pointer;
 }
 
-/* 上传拖拽盒 */
+/* 拖拽上传区域 */
 .upload-drag-area {
     border: 2px dashed #94a3b8;
-    border-radius: var(--radius);
-    padding: 20px 12px;
+    border-radius: var(--radius-main);
+    padding: 30px 14px;
     text-align: center;
-    cursor: pointer;
     background: #f8fafc;
+    cursor: pointer;
     transition: all 0.2s;
     width: 100%;
 }
 
 .upload-drag-area.drag-over {
-    border-color: var(--primary) !important;
-    background: #e0f2fe !important;
+    border-color: var(--primary-blue) !important;
+    background: #f0f9ff !important;
 }
 
-.upload-icon {
-    font-size: 28px;
-    margin-bottom: 4px;
+.upload-drag-icon {
+    font-size: 32px;
+    margin-bottom: 6px;
 }
 
-.upload-text {
+.upload-drag-text {
     font-size: 12px;
     color: var(--text-sub);
-    word-break: break-all;
 }
 
-/* 交互式多文件列表 */
-.interactive-file-list {
-    margin-top: 8px;
-    max-height: 140px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+/* 身份证 85.6 : 54 黄金双列网格 */
+.idcard-ratio-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
 }
 
-.file-item-row {
+.idcard-ratio-box {
+    width: 100%;
+    aspect-ratio: 85.6 / 54;
+    border: 1.5px dashed #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 5px 8px;
-    background: #f8fafc;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    font-size: 11px;
-    transition: all 0.15s;
-}
-
-.file-item-row.active {
-    background: #eff6ff;
-    border-color: var(--primary);
-    color: var(--primary);
-    font-weight: 600;
-}
-
-.file-item-name {
-    flex: 1;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
-    padding-right: 6px;
 }
 
-.btn-file-remove {
-    background: transparent;
-    border: none;
-    color: #94a3b8;
-    cursor: pointer;
+.idcard-ratio-box.drag-over {
+    border-color: var(--primary-blue) !important;
+    background: #f0f9ff !important;
+}
+
+.idcard-ratio-placeholder {
+    text-align: center;
+    pointer-events: none;
+}
+
+.idcard-ratio-placeholder .icon {
+    font-size: 24px;
+    margin-bottom: 2px;
+}
+
+.idcard-ratio-placeholder .title {
     font-size: 12px;
     font-weight: 700;
-    padding: 0 4px;
+    color: var(--text-main);
 }
 
-.btn-file-remove:hover {
-    color: var(--danger);
+.idcard-ratio-placeholder .sub {
+    font-size: 10px;
+    color: var(--text-sub);
+}
+
+.idcard-ratio-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 /* 扁平交互单选组 */
@@ -311,36 +301,33 @@ body {
 
 .flat-radio-btn {
     flex: 1;
-    background: #f8fafc;
     border: none;
+    background: #f8fafc;
     padding: 7px 0;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-sub);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all 0.15s;
 }
 
 .flat-radio-btn.active {
-    background: #10b981 !important;
+    background: var(--primary-green) !important;
     color: #ffffff !important;
-    box-shadow: 0 1px 3px rgba(16, 185, 129, 0.3);
 }
 
-/* 参数表单网格 */
+/* 表单参数网格 */
 .param-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-top: 8px;
-    width: 100%;
+    gap: 10px;
+    margin-top: 10px;
 }
 
 .form-item {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    min-width: 0;
 }
 
 .form-item label {
@@ -354,35 +341,38 @@ body {
     border: 1px solid var(--border-color);
     border-radius: 6px;
     font-size: 12px;
-    background: #fff;
+    background: #ffffff;
     width: 100%;
-    max-width: 100%;
 }
 
-.btn-submit-print {
+.btn-submit-green {
     width: 100%;
-    background: #10b981;
-    color: #fff;
+    background: var(--primary-green);
+    color: #ffffff;
     border: none;
-    padding: 10px 0;
+    padding: 11px 0;
     font-size: 14px;
     font-weight: 700;
     border-radius: 6px;
     cursor: pointer;
-    margin-top: 10px;
-    transition: background 0.2s;
+    margin-top: 12px;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
 }
 
-.btn-submit-print:hover {
-    background: #059669;
+.btn-submit-green:hover {
+    background: var(--primary-green-hover);
 }
 
-/* ================= 核心视窗与纸张物理画幅规范 ================= */
+/* 预览视窗卡片 */
 .preview-container {
-    background: #ffffff;
+    background: var(--card-bg);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius);
-    padding: 10px;
+    border-radius: var(--radius-main);
+    padding: 12px;
     width: 100%;
     overflow: hidden;
 }
@@ -391,33 +381,17 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
     gap: 6px;
 }
 
-.preview-zoom-ctrl {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-}
-
-.zoom-btn {
-    background: #f1f5f9;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 11px;
-    cursor: pointer;
-}
-
 .preview-lock-badge {
     font-size: 11px;
-    padding: 2px 6px;
+    padding: 3px 8px;
     border-radius: 4px;
-    cursor: pointer;
     font-weight: 600;
+    cursor: pointer;
     user-select: none;
 }
 
@@ -433,53 +407,38 @@ body {
 
 .viewport-wrapper {
     position: relative;
-    background: #334155;
+    background: #1e293b; /* 深色视窗衬底 */
     border-radius: 6px;
-    height: 380px !important;
-    max-width: 100%;
+    min-height: 480px;
+    height: 520px;
+    width: 100%;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
-    user-select: none;
 }
 
-.viewport-lock-hint {
-    position: absolute;
-    bottom: 8px;
-    background: rgba(0,0,0,0.7);
-    color: #fff;
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    z-index: 20;
-    pointer-events: none;
-}
-
-/* 纵向 A4 (210 : 297) */
 .sheet-a4-viewport {
     background: #ffffff;
-    width: 240px;
+    width: 320px;
     max-width: 90%;
     aspect-ratio: 210 / 297;
     height: auto;
-    max-height: 350px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+    max-height: 450px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.55);
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 4px;
     box-sizing: border-box;
-    transition: aspect-ratio 0.2s ease, width 0.2s ease;
+    padding: 2px;
+    transition: aspect-ratio 0.2s, width 0.2s;
 }
 
-/* 横向打印模式 */
 .sheet-a4-viewport.landscape {
     aspect-ratio: 297 / 210 !important;
-    width: 320px !important;
-    max-width: 95% !important;
-    max-height: 250px !important;
+    width: 440px !important;
+    max-height: 310px !important;
 }
 
 .sheet-a4-viewport.media-a5 { aspect-ratio: 148 / 210; }
@@ -487,151 +446,29 @@ body {
 .sheet-a4-viewport.media-b5 { aspect-ratio: 176 / 250; }
 .sheet-a4-viewport.media-b5.landscape { aspect-ratio: 250 / 176 !important; }
 
-.sheet-placeholder-text {
-    font-size: 11px;
-    color: #94a3b8;
-    text-align: center;
-    padding: 0 10px;
-}
-
-/* Canvas 显示边界锁定，杜绝物理像素溢出父级容器 */
 #canvas-preview {
     width: 100% !important;
     height: 100% !important;
     max-width: 100% !important;
     max-height: 100% !important;
     object-fit: contain;
-    background: #fff;
     display: block;
 }
 
-/* 身份证 85.6:54 黄金比例专属卡片 */
-.idcard-person-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 10px;
-    margin-top: 8px;
-}
-
-.idcard-person-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: #334155;
-    margin-bottom: 8px;
-}
-
-.idcard-ratio-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-}
-
-.idcard-ratio-box {
-    width: 100%;
-    aspect-ratio: 85.6 / 54;
-    border: 2px dashed #cbd5e1;
-    border-radius: 6px;
-    background: #ffffff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
-}
-
-.idcard-ratio-box.drag-over {
-    border-color: var(--primary) !important;
-    background: #f0f9ff !important;
-}
-
-.idcard-ratio-placeholder {
-    text-align: center;
-    pointer-events: none;
-}
-
-.idcard-ratio-icon {
-    font-size: 20px;
-    margin-bottom: 2px;
-}
-
-.idcard-ratio-text {
-    font-size: 12px;
-    font-weight: 700;
-    color: #1e293b;
-}
-
-.idcard-ratio-sub {
-    font-size: 10px;
-    color: #64748b;
-}
-
-.idcard-ratio-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-/* 设备诊断与系统运维 */
-.status-metric-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0;
-    font-size: 12px;
-}
-
-.status-badge-pill {
-    background: #dcfce7;
-    color: #166534;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.status-alert {
-    margin-top: 6px;
-    font-size: 11px;
-    word-break: break-all;
-}
-
-.driver-step-box {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    padding: 8px;
-    margin-bottom: 10px;
-}
-
-.driver-step-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #334155;
-    margin-bottom: 6px;
-}
-
-.console-tab-header {
-    background: #0f172a;
-    padding: 6px 10px;
-    border-radius: 6px 6px 0 0;
+/* 状态监视微卡片 (对齐图13右下角) */
+.printer-status-bar {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-main);
+    padding: 10px 14px;
+    margin-top: 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    font-size: 12px;
 }
 
-.console-body {
-    background: #1e293b;
-    color: #e2e8f0;
-    font-family: monospace;
-    font-size: 11px;
-    padding: 8px;
-    height: 180px;
-    overflow-y: auto;
-    border-radius: 0 0 6px 6px;
-}
-
-/* ================= 移动端流式自适应核心断点 ================= */
+/* 移动端流式自适应 (对齐图14) */
 @media (max-width: 900px) {
     body {
         padding: 6px;
@@ -653,44 +490,24 @@ body {
         font-size: 11px;
     }
 
-    /* 强制主视图转为垂直单列堆叠 */
-    .main-layout, .device-dashboard-grid {
+    /* 强制主区域转为垂直单列堆叠 */
+    .pc-double-layout {
         grid-template-columns: 1fr !important;
         gap: 10px;
-        padding: 8px;
-    }
-
-    /* 移动端排版：预览视窗前置，让用户先看到图 */
-    .main-layout .col-right {
-        order: -1;
     }
 
     .viewport-wrapper {
-        height: 310px !important;
+        min-height: 360px !important;
+        height: 380px !important;
     }
 
     .sheet-a4-viewport {
-        width: 200px !important;
-        max-height: 285px !important;
+        width: 220px !important;
+        max-height: 310px !important;
     }
 
     .sheet-a4-viewport.landscape {
-        width: 280px !important;
-        max-height: 198px !important;
-    }
-
-    .param-grid {
-        grid-template-columns: 1fr 1fr;
-        gap: 6px;
-    }
-
-    /* 针对小屏幕单行展示长输入项 */
-    #item-pageranges-wrap {
-        grid-column: span 2;
-    }
-
-    .idcard-ratio-grid {
-        grid-template-columns: 1fr; /* 手机端身份证正面反面上下分列 */
-        gap: 8px;
+        width: 300px !important;
+        max-height: 210px !important;
     }
 }
