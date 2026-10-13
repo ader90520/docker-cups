@@ -39,7 +39,7 @@ body {
     margin: 0 auto;
 }
 
-/* 顶部品牌与主导航 */
+/* 顶部导航 */
 .top-navbar {
     display: flex;
     justify-content: space-between;
@@ -86,7 +86,7 @@ body {
     border-color: var(--primary-blue);
 }
 
-/* 打印机与 AI 标签条 */
+/* 打印机与状态指示条 */
 .printer-bar-card {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -106,6 +106,13 @@ body {
     gap: 8px;
     flex: 1;
     min-width: 240px;
+}
+
+.printer-bar-right-tags {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .printer-select-ctrl {
@@ -138,6 +145,30 @@ body {
     gap: 4px;
 }
 
+.printer-status-badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+}
+
+.badge-idle {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.badge-busy {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.badge-offline {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
 /* 子业务切换 Tab */
 .sub-nav-tabs {
     display: flex;
@@ -166,7 +197,7 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* PC 端双列网格布局 (对齐图13) */
+/* PC 端双列网格布局 */
 .pc-double-layout {
     display: grid;
     grid-template-columns: 0.95fr 1.05fr;
@@ -179,7 +210,6 @@ body {
     width: 100%;
 }
 
-/* 经典卡片定义 */
 .card-box {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -210,11 +240,11 @@ body {
     cursor: pointer;
 }
 
-/* 拖拽上传区域 */
+/* 拖拽上传区 */
 .upload-drag-area {
     border: 2px dashed #94a3b8;
     border-radius: var(--radius-main);
-    padding: 30px 14px;
+    padding: 24px 14px;
     text-align: center;
     background: #f8fafc;
     cursor: pointer;
@@ -228,8 +258,8 @@ body {
 }
 
 .upload-drag-icon {
-    font-size: 32px;
-    margin-bottom: 6px;
+    font-size: 30px;
+    margin-bottom: 4px;
 }
 
 .upload-drag-text {
@@ -367,7 +397,7 @@ body {
     background: var(--primary-green-hover);
 }
 
-/* 预览视窗卡片 */
+/* 紧凑优化的实时预览容器 */
 .preview-container {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -405,40 +435,42 @@ body {
     color: #166534;
 }
 
+/* 优化视窗高度与内边距，消除空旷黑框感 */
 .viewport-wrapper {
     position: relative;
-    background: #1e293b; /* 深色视窗衬底 */
+    background: #1e293b;
     border-radius: 6px;
-    min-height: 480px;
-    height: 520px;
+    height: 440px; /* 从 520px 收缩至 440px，比例更紧凑 */
     width: 100%;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 12px; /* 留出适度呼吸边距 */
 }
 
 .sheet-a4-viewport {
     background: #ffffff;
-    width: 320px;
-    max-width: 90%;
+    width: auto;
+    height: 100%;
+    max-height: 416px;
     aspect-ratio: 210 / 297;
-    height: auto;
-    max-height: 450px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.55);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.5);
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
     padding: 2px;
-    transition: aspect-ratio 0.2s, width 0.2s;
+    transition: aspect-ratio 0.2s, max-height 0.2s;
 }
 
 .sheet-a4-viewport.landscape {
     aspect-ratio: 297 / 210 !important;
-    width: 440px !important;
-    max-height: 310px !important;
+    width: 100%;
+    max-width: 580px;
+    height: auto;
+    max-height: 380px;
 }
 
 .sheet-a4-viewport.media-a5 { aspect-ratio: 148 / 210; }
@@ -455,7 +487,7 @@ body {
     display: block;
 }
 
-/* 状态监视微卡片 (对齐图13右下角) */
+/* 底部队列任务数条 */
 .printer-status-bar {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -468,7 +500,7 @@ body {
     font-size: 12px;
 }
 
-/* 移动端流式自适应 (对齐图14) */
+/* 移动端紧凑自适应 */
 @media (max-width: 900px) {
     body {
         padding: 6px;
@@ -490,24 +522,21 @@ body {
         font-size: 11px;
     }
 
-    /* 强制主区域转为垂直单列堆叠 */
     .pc-double-layout {
         grid-template-columns: 1fr !important;
         gap: 10px;
     }
 
     .viewport-wrapper {
-        min-height: 360px !important;
-        height: 380px !important;
+        height: 340px !important; /* 手机端紧凑高度 */
+        padding: 8px;
     }
 
     .sheet-a4-viewport {
-        width: 220px !important;
-        max-height: 310px !important;
+        max-height: 324px !important;
     }
 
     .sheet-a4-viewport.landscape {
-        width: 300px !important;
-        max-height: 210px !important;
+        max-height: 220px !important;
     }
 }
