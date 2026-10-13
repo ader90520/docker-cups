@@ -5,14 +5,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANGUAGE=zh_CN:zh \
     LC_ALL=zh_CN.UTF-8 \
     TZ=Asia/Shanghai \
-    OPENCV_LOG_LEVEL=ERROR
+    OPENCV_LOG_LEVEL=ERROR \
+    OMP_NUM_THREADS=1 \
+    MALLOC_ARENA_MAX=2
 
-# 1. 基础系统环境、驱动与轻量 Python 运行库 (补齐 cv2.so 必需的 libglib2.0-0 与 libgomp1，合计<2MB，保留 zh_CN locale)
+# 1. 基础系统环境、驱动底层、中文字体与轻量 Python 运行库 (合并清理，体积控制在最小)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     cups-filters \
     cups-browsed \
+    foomatic-db-engine \
+    poppler-data \
     fonts-wqy-microhei \
     avahi-daemon \
     dbus \
@@ -45,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /root/.cache
 
-# 2. 拷贝代码与静态文件
+# 2. 拷贝代码与静态文件资产
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
@@ -63,21 +67,11 @@ RUN if [ -f /opt/modules/cv2.so ]; then \
         echo "⚠ 未检测到 /opt/modules/cv2.so，将使用原生图像管道"; \
     fi
 
-# 4. 清洗换行符并赋权
+# 4. 清洗换行符并赋予执行权限
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true && \
     chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true
 
-# 5. 固化 HPLIP 扫描插件 (带超时与重试，防止外链网络波动熔断构建)
-ARG HPLIP_VER=3.22.10
-RUN cd /tmp && \
-    (wget -q -c --timeout=20 --tries=3 "https://downloads.sourceforge.net/project/hplip/hplip-plugins/${HPLIP_VER}/hplip-${HPLIP_VER}-plugin.run" || true) && \
-    if [ -f hplip-${HPLIP_VER}-plugin.run ]; then \
-        chmod +x hplip-${HPLIP_VER}-plugin.run && \
-        printf "y\na\ny\n" | hp-plugin -i -p /tmp 2>&1 || true; \
-    fi && \
-    rm -rf /tmp/hplip* /tmp/hp_* /tmp/.esudo* /var/tmp/*
-
-# 6. 执行驱动微码安装、主题美化与中文语言包/主页精准注入
+# 5. 执行底层驱动固化、主题汉化模板注入与持久化目录结构预建
 RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
     /bin/bash /opt/modules/drivers/install_hp_plugin.sh || true && \
     /bin/bash /opt/modules/theme/patch_cups_theme.sh || true && \
@@ -108,20 +102,19 @@ RUN /bin/bash /opt/modules/drivers/install_foo2zjs.sh || true && \
         ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true; \
     fi && \
     chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true && \
-    rm -rf /opt/modules/*.run /opt/modules/*.tar* /tmp/* /root/.cache
-
-# 7. 初始化各持久化与锁目录
-RUN mkdir -p /opt/cups_data \
+    mkdir -p /opt/cups_data \
              /scans \
              /opt/webapp/data \
              /opt/webapp/static \
+             /opt/webapp/models \
              /tmp/cups_web_uploads \
              /tmp/mail_print_tasks \
              /etc/cups/ssl \
              /var/lock/sane \
              /var/run/dbus && \
-    chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
-    chmod 700 /etc/cups/ssl
+    chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /opt/webapp/models /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus && \
+    chmod 700 /etc/cups/ssl && \
+    rm -rf /opt/modules/*.run /opt/modules/*.tar* /tmp/* /root/.cache
 
 EXPOSE 631 8088
 ENTRYPOINT ["/entrypoint.sh"]
