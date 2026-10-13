@@ -24,54 +24,56 @@
         </div>
     </div>
 
-    <!-- 智能打印面板 -->
+    <!-- 1. 智能打印面板 -->
     <div id="panel-print" class="tab-panel-container" style="display:block;">
-        <!-- 打印机选择栏与 AI 状态指示 -->
         <div class="printer-bar-card">
             <div class="printer-bar-left">
                 <span style="font-weight:700; font-size:13px; color:#1e293b;">🖨️ 打印机</span>
                 <select id="printer-select" class="printer-select-ctrl" onchange="DashboardService.onPrinterChange()"></select>
                 <button type="button" class="btn-icon-refresh" onclick="DashboardService.loadPrinters(false)" title="刷新状态">🔄</button>
             </div>
-            <span id="ai-engine-pill" class="ai-engine-tag">⚡ 端侧 AI 就绪 (WASM 兼容模式)</span>
+            <!-- 状态标签迁移至顶部红圈位置 -->
+            <div class="printer-bar-right-tags">
+                <span id="ai-engine-pill" class="ai-engine-tag">⚡ 端侧 AI 就绪 (WASM 兼容模式)</span>
+                <span id="printer-status-tag" class="printer-status-badge badge-idle">打印机状态: 空闲</span>
+            </div>
         </div>
 
-        <!-- 模式子导航 -->
         <div class="sub-nav-tabs">
             <div class="sub-nav-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档/试卷</div>
             <div class="sub-nav-item" id="tab-sub-idcard" onclick="PrintManager.switchSubTab('idcard')">🪪 身份证专属打印</div>
         </div>
 
-        <!-- 响应式主布局网格 -->
         <div class="pc-double-layout">
-            <!-- 左列：文件输入与参数配置 -->
+            <!-- 左列：文件与参数配置 -->
             <div class="col-left">
-                <!-- 1. 标准文档上传卡片 -->
+                <!-- 标准文档上传区 -->
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
-                        <span>📁 上传文档/试卷</span>
+                        <span>📁 上传文档/试卷 (支持多次追加多选)</span>
                         <button type="button" class="btn-text-danger" onclick="PrintManager.clearFiles('normal')">清空列表</button>
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-normal">
                         <div class="upload-drag-icon">📂</div>
-                        <div class="upload-drag-text"><b>点击选取</b> 或 直接将文档/图片拖拽至此处</div>
+                        <div class="upload-drag-text"><b>点击选取</b> 或 直接将文档/图片拖拽至此处 (可多次追加)</div>
                         <input type="file" id="file-input-normal" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.bmp" style="display:none;" onchange="PrintManager.onFilesSelected(this.files)">
                     </div>
                     <div id="file-list-normal" style="margin-top:8px; display:none; flex-direction:column; gap:4px;"></div>
                     <div style="margin-top:10px; background:#f8fafc; padding:8px 10px; border-radius:6px; border:1px solid #e2e8f0;">
                         <label style="font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px;">
                             <input type="checkbox" id="chk-normal-merge" onchange="PrintManager.onMergeChange()" style="width:15px; height:15px; cursor:pointer;">
-                            <span>📑 多张图片合并在单张 A4 纸上输出 (网格拼版)</span>
+                            <span>📑 多张图片自动在单张 A4 纸上输出 (独立网格排版不重叠)</span>
                         </label>
                     </div>
                 </div>
 
-                <!-- 2. 身份证专属上传卡片 -->
+                <!-- 身份证专属上传区 -->
                 <div class="card-box" id="sec-upload-idcard" style="display:none;">
                     <div class="card-title">
-                        <span>🪪 上传身份证照片 (支持 1~3 人合并打在单张 A4)</span>
+                        <span>🪪 身份证规范排版 (单人上下 / 多人左右并排)</span>
                         <div style="display:flex; gap:6px;">
                             <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.addPerson()">➕ 增加一人</button>
+                            <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.removePerson()">➖ 减少一人</button>
                             <button type="button" class="btn-text-danger" onclick="IdCardManager.clearAll()">清空照片</button>
                         </div>
                     </div>
@@ -82,7 +84,7 @@
                                 <div class="idcard-ratio-placeholder" id="placeholder-front-0">
                                     <div class="icon">👤</div>
                                     <div class="title">正面 (人像面)</div>
-                                    <div class="sub">点击或拖拽上传正面</div>
+                                    <div class="sub">点击上传</div>
                                 </div>
                                 <img id="preview-front-0" class="idcard-ratio-img" style="display:none;" alt="正面">
                                 <input type="file" id="file-idcard-front-0" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(0, 'front', this.files)">
@@ -91,7 +93,7 @@
                                 <div class="idcard-ratio-placeholder" id="placeholder-back-0">
                                     <div class="icon">🇨🇳</div>
                                     <div class="title">反面 (国徽面)</div>
-                                    <div class="sub">点击或拖拽上传反面</div>
+                                    <div class="sub">点击上传</div>
                                 </div>
                                 <img id="preview-back-0" class="idcard-ratio-img" style="display:none;" alt="反面">
                                 <input type="file" id="file-idcard-back-0" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(0, 'back', this.files)">
@@ -101,7 +103,7 @@
                     <div id="idcard-person-container"></div>
                 </div>
 
-                <!-- 3. 打印参数面板 -->
+                <!-- 打印参数面板 -->
                 <div class="card-box">
                     <div class="card-title">⚙️ 打印参数</div>
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:8px;">
@@ -142,14 +144,16 @@
                                 <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
-                        <div class="form-item">
+                        <!-- 动态隐藏表单项：去黑底增强 -->
+                        <div class="form-item" id="item-enhance-box">
                             <label>去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="PrintManager.onEnhanceChange()">
                                 <option value="true" selected>开启 (视窗实时白底)</option>
                                 <option value="false">关闭 (原图直打)</option>
                             </select>
                         </div>
-                        <div class="form-item" style="grid-column: span 2;">
+                        <!-- 动态隐藏表单项：页面范围 -->
+                        <div class="form-item" id="item-page-ranges-box" style="grid-column: span 2;">
                             <label>页面范围 (如: 1-5 8，留空打全部)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
                         </div>
@@ -160,13 +164,16 @@
                 </div>
             </div>
 
-            <!-- 右列：实时 A4 画幅预览视窗与状态栏 -->
+            <!-- 右列：紧凑居中实时预览视窗 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
                         <span style="font-size:13px; font-weight:700;">👁️ 实时预览</span>
-                        <div style="display:flex; align-items:center; gap:4px;">
-                            <span id="preview-lock-badge" class="preview-lock-badge unlocked" onclick="EnhanceEngine.toggleLock()" title="点击切换锁定/缩放手势">
+                        <div style="display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
+                            <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px;" onclick="EnhanceEngine.rotate(-90)" title="逆时针旋转90度">↺ 左旋</button>
+                            <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px;" onclick="EnhanceEngine.rotate(90)" title="顺时针旋转90度">↻ 右旋</button>
+                            <span style="display:inline-block; width:1px; height:12px; background:#cbd5e1; margin:0 2px;"></span>
+                            <span id="preview-lock-badge" class="preview-lock-badge unlocked" onclick="EnhanceEngine.toggleLock()">
                                 🔒 <span id="lock-text">点击激活操作</span>
                             </span>
                             <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px;" onclick="EnhanceEngine.changePage(-1)">‹</button>
@@ -186,26 +193,238 @@
                     </div>
                 </div>
 
-                <!-- 打印机实时工作状态指标 -->
+                <!-- 底部保留队列任务数 -->
                 <div class="printer-status-bar">
                     <div style="display:flex; align-items:center; gap:8px;">
-                        <span>📈 打印机状态:</span>
-                        <b id="dash-status-pill" style="color:#10b981;">空闲</b>
+                        <span>📋 队列等待任务数:</span>
+                        <b id="dash-queue-count" style="color:#0f172a; font-size:13px;">0</b>
                     </div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span>队列任务数:</span>
-                        <b id="dash-queue-count" style="color:#0f172a;">0</b>
-                        <button type="button" class="btn-icon-refresh" onclick="DashboardService.loadPrinters(true)">🔄</button>
+                    <button type="button" class="btn-icon-refresh" onclick="DashboardService.loadPrinters(true)">🔄</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. 在线扫描面板 -->
+    <div id="panel-scan" class="tab-panel-container" style="display:none;">
+        <div class="pc-double-layout">
+            <div class="col-left">
+                <div class="card-box">
+                    <div class="card-title">📷 硬件扫描控制</div>
+                    <div class="form-item" style="margin-bottom:10px;">
+                        <label>扫描设备</label>
+                        <select id="scan-dev-select" class="form-ctrl"></select>
+                    </div>
+                    <div class="param-grid" style="margin-bottom:12px;">
+                        <div class="form-item">
+                            <label>分辨率 (DPI)</label>
+                            <select id="scan-res" class="form-ctrl">
+                                <option value="150" selected>150 DPI (常规快速)</option>
+                                <option value="300">300 DPI (高清文档)</option>
+                            </select>
+                        </div>
+                        <div class="form-item">
+                            <label>色彩模式</label>
+                            <select id="scan-mode" class="form-ctrl">
+                                <option value="Color" selected>彩色 (Color)</option>
+                                <option value="Gray">灰度 (Gray)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-submit-green" id="btn-start-scan" onclick="ScanService.startScan()">📷 启动硬件扫描并呈现图像</button>
+                    <div id="scan-alert" style="margin-top:6px; font-size:11px;"></div>
+                </div>
+
+                <div class="card-box">
+                    <div class="card-title">
+                        <span>📁 扫描历史存档</span>
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="ScanService.loadScanList()">🔄 刷新</button>
+                    </div>
+                    <div id="scan-file-list" style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto;">
+                        <div style="font-size:11px; color:#94a3b8;">暂无扫描文件</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-right">
+                <div class="preview-container">
+                    <div class="preview-toolbar">
+                        <span style="font-size:13px; font-weight:700;">👁️ 扫描实时预览视窗</span>
+                    </div>
+                    <div class="viewport-wrapper">
+                        <div class="sheet-a4-viewport" id="scan-a4-viewport">
+                            <div style="font-size:12px; color:#94a3b8; text-align:center;" id="scan-empty-tip">点击启动扫描后在此呈现原图</div>
+                            <img id="scan-live-img" style="max-width:100%; max-height:100%; object-fit:contain; display:none;" alt="扫描图">
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 其余运维面板维持完整路由支撑 -->
-    <div id="panel-scan" class="tab-panel-container" style="display:none;"></div>
-    <div id="panel-devices" class="tab-panel-container" style="display:none;"></div>
-    <div id="panel-mail" class="tab-panel-container" style="display:none;"></div>
+    <!-- 3. 设备管理面板 -->
+    <div id="panel-devices" class="tab-panel-container" style="display:none;">
+        <div class="pc-double-layout">
+            <div class="col-left">
+                <div class="card-box">
+                    <div class="card-title">
+                        <span>🖨️ 当前已配置的打印队列</span>
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.loadPrinters(true)">🔄 刷新</button>
+                    </div>
+                    <div id="device-card-list" style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="font-size:11px; color:#94a3b8;">正在加载设备...</div>
+                    </div>
+                </div>
+
+                <div class="card-box">
+                    <div class="card-title">
+                        <span>➕ 检索硬件与添加打印机</span>
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.loadDiscoveredDevices()">🔍 扫描端口</button>
+                    </div>
+                    <div class="form-item" style="margin-bottom:8px;">
+                        <label>选择物理直连端口 / 设备 URI</label>
+                        <select id="discovered-device-select" class="form-ctrl" onchange="DashboardService.onDiscoveredDeviceSelect(this)">
+                            <option value="">点击【扫描端口】检测 USB 打印机...</option>
+                        </select>
+                    </div>
+                    <div class="param-grid" style="margin-bottom:8px;">
+                        <div class="form-item">
+                            <label>打印机标识名称 (英文字母/下划线)</label>
+                            <input type="text" id="add-printer-name" class="form-ctrl" placeholder="例: HP_1020">
+                        </div>
+                        <div class="form-item">
+                            <label>驱动关键字检索</label>
+                            <div style="display:flex; gap:4px;">
+                                <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="如: 1020 / m126 / foo2zjs">
+                                <button type="button" class="nav-btn" style="background:#0284c7; color:#fff; border:none; padding:4px 8px;" onclick="DashboardService.searchDrivers()">搜</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="driver-search-results" style="display:none; max-height:120px; overflow-y:auto; background:#fff; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; margin-bottom:8px;"></div>
+                    <div class="form-item" style="margin-bottom:8px;">
+                        <label>选定驱动 ID / PPD 标识</label>
+                        <input type="text" id="driver-input-val" class="form-ctrl" readonly style="background:#f1f5f9;">
+                    </div>
+                    <button type="button" class="btn-submit-green" onclick="DashboardService.submitAddPrinter()">✔ 一键添加打印机并上线</button>
+                    <div id="add-printer-alert" style="margin-top:6px; font-size:11px;"></div>
+                </div>
+
+                <div class="card-box">
+                    <div class="card-title"><span>🛠️ 官方插件与应急运维</span></div>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:6px;">
+                        <button type="button" class="nav-btn" style="color:#d97706; border-color:#fed7aa;" onclick="DashboardService.resetUsb()">⚡ USB复位</button>
+                        <button type="button" class="nav-btn" style="color:#ef4444; border-color:#fecaca;" onclick="DashboardService.cleanJobs()">🗑️ 清空队列</button>
+                        <button type="button" class="nav-btn" style="color:#0284c7; border-color:#bae6fd;" onclick="DashboardService.cleanDisk()">🧹 清理闪存</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-right">
+                <div class="card-box" style="border:1px solid #c7d2fe; background:#f8faff;">
+                    <div class="card-title" style="color:#3730a3;">
+                        <span>🧠 端侧 AI 模型中枢 (ONNX)</span>
+                        <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="DocAI.clearCacheAndReload()">🧹 清空缓存</button>
+                    </div>
+                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; margin-bottom:10px;">
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">运算后端</div>
+                            <b id="diag-metric-backend" style="font-size:11px;">检测中...</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">缓存介质</div>
+                            <b id="diag-metric-cache" style="font-size:11px;">-</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">当前模型</div>
+                            <b id="diag-metric-model" style="font-size:11px;">-</b>
+                        </div>
+                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#6b7280;">单次推理</div>
+                            <b id="diag-metric-speed" style="font-size:11px; color:#16a34a;">-</b>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;">
+                        <button type="button" class="btn-submit-green" style="width:auto; margin-top:0; padding:6px 12px; font-size:11px;" onclick="DocAI.inspectAndUploadModel('onnx-model-file-input')">上传部署</button>
+                    </div>
+                    <div id="model-alert" style="margin-top:6px; font-size:11px;"></div>
+                </div>
+
+                <div class="card-box" style="padding:0; overflow:hidden;">
+                    <div style="background:#0f172a; padding:6px 10px; display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-size:12px; font-weight:700; color:#38bdf8;">📟 引擎诊断日志</span>
+                        <button type="button" style="background:none; border:none; color:#94a3b8; font-size:11px; cursor:pointer;" onclick="document.getElementById('ai-diag-console').innerHTML=''">清屏</button>
+                    </div>
+                    <div id="ai-diag-console" style="background:#1e293b; color:#e2e8f0; font-family:monospace; font-size:11px; padding:8px; height:240px; overflow-y:auto;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. 云邮箱设置面板 -->
+    <div id="panel-mail" class="tab-panel-container" style="display:none;">
+        <div class="card-box" style="max-width:760px; margin:0 auto;">
+            <div class="card-title">
+                <span>⚙ 云邮箱极速自动打印与微信通知设置</span>
+                <span style="font-size:11px; color:#64748b;">IMAP 常驻守护</span>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin-bottom:12px;">
+                <label style="display:flex; align-items:center; gap:8px; font-weight:700; font-size:13px; cursor:pointer;">
+                    <input type="checkbox" id="mail-enable" style="width:16px; height:16px;">
+                    <span>启用云邮箱自动轮询打印服务</span>
+                </label>
+                <div style="font-size:11px; color:#64748b; margin-top:4px;">
+                    邮箱收到包含附件（PDF / 照片）的未读邮件时，自动拉取直达 CUPS 队列出纸。主题包含“原图”时自动跳过算法增强。
+                </div>
+            </div>
+
+            <div class="param-grid" style="grid-template-columns: 2fr 1fr;">
+                <div class="form-item">
+                    <label>IMAP 服务器地址</label>
+                    <input type="text" id="mail-server" class="form-ctrl" placeholder="imap.qq.com">
+                </div>
+                <div class="form-item">
+                    <label>SSL 端口</label>
+                    <input type="number" id="mail-port" class="form-ctrl" value="993">
+                </div>
+            </div>
+
+            <div class="param-grid" style="margin-top:8px;">
+                <div class="form-item">
+                    <label>邮箱账号</label>
+                    <input type="text" id="mail-user" class="form-ctrl" placeholder="example@qq.com">
+                </div>
+                <div class="form-item">
+                    <label>授权码 / 专用密码</label>
+                    <input type="password" id="mail-pwd" class="form-ctrl" placeholder="16位授权码">
+                </div>
+            </div>
+
+            <div class="param-grid" style="margin-top:8px;">
+                <div class="form-item">
+                    <label>暗号关键词 (选填)</label>
+                    <input type="text" id="mail-keyword" class="form-ctrl" placeholder="例如：打印">
+                </div>
+                <div class="form-item">
+                    <label>发件人白名单 (逗号分隔)</label>
+                    <input type="text" id="mail-whitelist" class="form-ctrl" placeholder="例如：boss@qq.com">
+                </div>
+            </div>
+
+            <div class="param-grid" style="margin-top:8px;">
+                <div class="form-item">
+                    <label>默认出纸打印机</label>
+                    <select id="mail-default-printer" class="form-ctrl"></select>
+                </div>
+                <div class="form-item">
+                    <label>PushPlus 微信通知 Token (选填)</label>
+                    <input type="text" id="mail-pushplus-token" class="form-ctrl" placeholder="微信推送 Token">
+                </div>
+            </div>
+
+            <button type="button" class="btn-submit-green" style="margin-top:16px;" onclick="MailService.saveConfig()">💾 保存配置并立即生效</button>
+            <div id="mail-alert" style="margin-top:6px; font-size:11px;"></div>
+        </div>
+    </div>
 </div>
 
 </body>
