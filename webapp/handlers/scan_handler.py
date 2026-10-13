@@ -8,10 +8,13 @@ import json
 import time
 import threading
 import subprocess
+import tornado.web
 from handlers.base_handler import BaseHandler
 
 SCANS_DIR = "/scans"
 os.makedirs(SCANS_DIR, exist_ok=True)
+
+# 全局硬件扫描互斥锁，杜绝多端并发导致的 Device I/O 锁死
 SCAN_LOCK = threading.Lock()
 
 def run_cmd(cmd, env=None, timeout=12):
@@ -27,9 +30,11 @@ def run_cmd(cmd, env=None, timeout=12):
         return False, "", str(e)
 
 def enumerate_all_scanners():
+    """通用动态多机型嗅探：优先嗅探 hpaio 专用一体机通道，再降级 scanimage 与通用 USB"""
     devices = []
     seen = set()
 
+    # 1. 优先使用注入了动态库路径的 scanimage -L
     ok, out, _ = run_cmd(["scanimage", "-L"], timeout=8)
     if ok and out:
         for line in out.splitlines():
@@ -43,6 +48,7 @@ def enumerate_all_scanners():
                         devices.append({"id": dev_id, "name": dev_name})
                         seen.add(dev_id)
 
+    # 2. 如果标准扫描未扫出（针对 HP M126a 等一体机），执行 hp-probe 提取底层 hpaio URI
     if not devices:
         ok_hp, out_hp, _ = run_cmd(["hp-probe", "-busb"], timeout=8)
         if ok_hp and out_hp:
@@ -56,6 +62,7 @@ def enumerate_all_scanners():
                             devices.append({"id": hpaio_id, "name": "HP 多功能一体机 (HPLIP 扫描引擎)"})
                             seen.add(hpaio_id)
 
+    # 3. 兜底通用 USB 识别
     if not devices:
         ok_ls, out_ls = run_cmd(["lsusb"])
         if ok_ls and out_ls:
@@ -74,6 +81,7 @@ def enumerate_all_scanners():
     return devices
 
 def validate_safe_file_path(filename):
+    """防路径遍历安全校验工具"""
     if not filename:
         return None
     safe_name = os.path.basename(filename)
@@ -89,41 +97,7 @@ def validate_safe_file_path(filename):
 class ScanProbeHandler(BaseHandler):
     def get(self):
         devices = enumerate_all_scanners()
-        self.write_json(True, "扫描设备列表已刷新", data={"devices": devices})
-
-class ScanListHandler(tornado.web.RequestHandler):
-    def get(self):
-        files = []
-        scan_files = sorted(glob.glob(os.path.join(SCANS_DIR, "*.*")), key=os.path.getmtime, reverse=True)
-        for f in scan_files:
-            fname = os.path.basename(f)
-            files.append({
-                "filename": fname,
-                "url": f"/scans/{fname}",
-                "download_url": f"/api/scan/download?file={fname}",
-                "size": f"{round(os.path.getsize(f) / 1024, 1)} KB",
-                "is_pdf": fname.lower().endswith(".pdf"),
-                "mtime": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(f)))
-            })
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        self.write(json.dumps({"success": True, "files": files}))
-
-class ScanDeleteHandler(tornado.web.RequestHandler):
-    def post(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        try:
-            data = json.loads(self.request.body.decode('utf-8'))
-            fname = os.path.basename(data.get("filename", ""))
-            target = os.path.join(SCANS_DIR, fname)
-            if fname and os.path.exists(target):
-                os.remove(target)
-                self.write(json.dumps({"success": True, "msg": f"文件 {fname} 已删除"}))
-            else:
-                self.set_status(404)
-                self.write(json.dumps({"success": False, "msg": "文件不存在"}))
-        except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
+        self.write_json(True, "扫描设备列表已更新", data={"devices": devices})
 
 class ScanHandler(BaseHandler):
     def post(self):
@@ -133,19 +107,21 @@ class ScanHandler(BaseHandler):
 
         if resolution not in ["75", "100", "150", "200", "300", "600"]:
             resolution = "150"
+        
         if mode not in ["Color", "Gray", "Lineart"]:
             mode = "Color"
+
         if device.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:/=?&]+$', device):
             device = ""
 
         if not SCAN_LOCK.acquire(blocking=False):
-            self.write_json(False, "扫描仪当前正在执行任务，请稍后再试！")
+            self.write_json(False, "扫描仪当前正在执行任务，请等待上一个任务完成后再试！")
             return
 
         try:
             available_devices = enumerate_all_scanners()
             if not available_devices:
-                self.write_json(False, "未检测到可用扫描仪，请确认 USB 通信正常！")
+                self.write_json(False, "未检测到可用扫描仪，请确认设备已开机并插紧 USB 数据线！")
                 return
 
             valid_ids = [d["id"] for d in available_devices]
@@ -161,13 +137,22 @@ class ScanHandler(BaseHandler):
             env["SANE_CONFIG_DIR"] = "/etc/sane.d"
             env["LD_LIBRARY_PATH"] = f"/usr/lib/sane:/usr/lib/arm-linux-gnueabihf/sane:/usr/share/hplip/scan/plugins:{env.get('LD_LIBRARY_PATH', '')}"
 
-            cmd_jpeg = ["scanimage", "-d", device, f"--resolution={resolution}", f"--mode={mode}", "--format=jpeg"]
-            is_success = False
+            cmd_jpeg = [
+                "scanimage",
+                "-d", device,
+                f"--resolution={resolution}",
+                f"--mode={mode}",
+                "--format=jpeg"
+            ]
 
+            print(f"[ScanHandler] 执行硬件扫描作业: {' '.join(cmd_jpeg)}", flush=True)
+
+            is_success = False
             try:
                 with open(final_jpg, "wb") as f_out:
                     p = subprocess.Popen(cmd_jpeg, stdout=f_out, stderr=subprocess.PIPE, env=env)
                     _, stderr_data = p.communicate(timeout=60)
+
                 if p.returncode == 0 and os.path.exists(final_jpg) and os.path.getsize(final_jpg) > 0:
                     is_success = True
             except Exception:
@@ -178,20 +163,33 @@ class ScanHandler(BaseHandler):
                     try: os.remove(final_jpg)
                     except Exception: pass
 
-                cmd_pnm = ["scanimage", "-d", device, f"--resolution={resolution}", f"--mode={mode}", "--format=pnm"]
+                cmd_pnm = [
+                    "scanimage",
+                    "-d", device,
+                    f"--resolution={resolution}",
+                    f"--mode={mode}",
+                    "--format=pnm"
+                ]
                 try:
                     with open(temp_pnm, "wb") as f_out:
                         p = subprocess.Popen(cmd_pnm, stdout=f_out, stderr=subprocess.PIPE, env=env)
                         _, stderr_data = p.communicate(timeout=60)
 
                     if p.returncode == 0 and os.path.exists(temp_pnm) and os.path.getsize(temp_pnm) > 0:
-                        from PIL import Image
-                        with Image.open(temp_pnm) as img:
-                            img.save(final_jpg, format="JPEG", quality=95)
+                        try:
+                            subprocess.run(["convert", temp_pnm, "-quality", "95", final_jpg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                        except Exception:
+                            pass
+
+                        if not os.path.exists(final_jpg):
+                            from PIL import Image
+                            with Image.open(temp_pnm) as img:
+                                img.save(final_jpg, format="JPEG", quality=95)
+
                         is_success = (os.path.exists(final_jpg) and os.path.getsize(final_jpg) > 0)
                     else:
                         err_msg = stderr_data.decode("utf-8", errors="ignore").strip()
-                        self.write_json(False, f"硬件通信受阻: {err_msg or '设备握手未响应'}")
+                        self.write_json(False, f"扫描硬件通信失败: {err_msg or '设备握手未响应'}")
                         return
                 except Exception as e:
                     self.write_json(False, f"扫描执行异常: {str(e)}")
@@ -202,7 +200,7 @@ class ScanHandler(BaseHandler):
                         except Exception: pass
 
             if not is_success or not os.path.exists(final_jpg) or os.path.getsize(final_jpg) == 0:
-                self.write_json(False, "未能从扫描仪获取到图像数据")
+                self.write_json(False, "未能从扫描仪获取到图像数据，请检查 USB 连通状态。")
                 return
 
             out_filename = f"scan_{timestamp}.jpg"
@@ -220,7 +218,7 @@ class PreviewScanHandler(BaseHandler):
         file_path = validate_safe_file_path(self.get_argument("file", "").strip())
         if not file_path:
             self.set_status(404)
-            self.write("预览文件不存在")
+            self.write("预览文件不存在或请求非法")
             return
 
         self.set_header("Content-Type", "image/jpeg")
@@ -235,10 +233,11 @@ class PreviewScanHandler(BaseHandler):
 
 class DownloadScanHandler(BaseHandler):
     def get(self):
-        file_path = validate_safe_file_path(self.get_argument("file", "").strip())
+        filename = self.get_argument("file", "").strip()
+        file_path = validate_safe_file_path(filename)
         if not file_path:
             self.set_status(404)
-            self.write("文件不存在")
+            self.write("文件不存在或请求非法")
             return
 
         self.set_header("Content-Type", "application/octet-stream")
@@ -260,7 +259,7 @@ class ScanPrintHandler(BaseHandler):
 
             file_path = validate_safe_file_path(filename)
             if not file_path:
-                self.write_json(False, "扫描文件不存在")
+                self.write_json(False, "指定的扫描文件不存在或路径非法")
                 return
 
             try:
@@ -288,7 +287,7 @@ class ScanPrintHandler(BaseHandler):
                     printer = lines[0].split()[0].strip()
 
             if not printer:
-                self.write_json(False, "未找到可用打印机")
+                self.write_json(False, "系统内未发现可用打印机，请先添加打印机")
                 return
 
             cmd = [
@@ -299,6 +298,7 @@ class ScanPrintHandler(BaseHandler):
                 "-o", "PageSize=A4",
                 "-o", "fit-to-page",
                 "-o", "scaling=100",
+                "-o", "natural-scaling=100",
                 "-o", "position=center",
                 file_path
             ]
@@ -308,5 +308,44 @@ class ScanPrintHandler(BaseHandler):
                 self.write_json(True, f"扫描件已直接下发至【{printer}】！", job=res.stdout.strip())
             else:
                 self.write_json(False, f"CUPS 拒绝打印: {res.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            self.write_json(False, "打印任务派发超时，请检查打印机连接状态")
         except Exception as e:
-            self.write_json(False, f"直打异常: {str(e)}")
+            self.write_json(False, f"直接打印异常: {str(e)}")
+
+class ScanListHandler(BaseHandler):
+    def get(self):
+        files = []
+        scan_files = sorted(glob.glob(os.path.join(SCANS_DIR, "*.*")), key=os.path.getmtime, reverse=True)
+        for f in scan_files:
+            fname = os.path.basename(f)
+            files.append({
+                "filename": fname,
+                "url": f"/scans/{fname}",
+                "download_url": f"/api/scan/download?file={fname}",
+                "size": f"{round(os.path.getsize(f) / 1024, 1)} KB",
+                "is_pdf": fname.lower().endswith(".pdf"),
+                "mtime": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(f)))
+            })
+        self.write_json(True, "扫描文件列表获取成功", files=files)
+
+class ScanDeleteHandler(BaseHandler):
+    def post(self):
+        try:
+            body_data = {}
+            if self.request.body:
+                try:
+                    body_data = json.loads(self.request.body.decode('utf-8'))
+                except Exception:
+                    pass
+            fname = os.path.basename(body_data.get("filename", "") or self.get_argument("filename", ""))
+            target = validate_safe_file_path(fname)
+            if target and os.path.exists(target):
+                os.remove(target)
+                self.write_json(True, f"文件 {fname} 已删除")
+            else:
+                self.set_status(404)
+                self.write_json(False, "文件不存在或路径非法")
+        except Exception as e:
+            self.set_status(500)
+            self.write_json(False, f"删除异常: {str(e)}")
