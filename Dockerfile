@@ -7,15 +7,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     OPENCV_LOG_LEVEL=ERROR \
     QT_QPA_PLATFORM=offscreen \
-    OMP_NUM_THREADS=4 \
-    OPENBLAS_NUM_THREADS=4
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MALLOC_ARENA_MAX=2
 
-# 1. 安装基础驱动、原生 Python 图像库与系统运行时
+# 1. 基础打印底座、SANE 扫描驱动、无头 Python 及 CJK 字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     cups-filters \
     cups-browsed \
+    foomatic-db-engine \
+    poppler-data \
     fonts-wqy-microhei \
     avahi-daemon \
     dbus \
@@ -47,13 +50,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /root/.cache
 
-# 2. 拷贝核心项目资产
+# 2. 拷贝核心代码与资产
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 3. 固化驱动插件、中文国际化模板注入与运行目录初始化 (单层聚合构建，规避镜像层体积膨胀)
+# 3. 驱动固化、汉化模板注入、目录初始化与单层极速收敛 (零临时碎片)
 ARG HPLIP_VER=3.22.10
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true \
     && chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true \
@@ -72,8 +75,16 @@ RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2
                 /usr/share/cups/locale/zh_CN \
                 /usr/share/cups/locale/zh \
                 /usr/share/cups/doc-root/zh_CN \
-                /opt/cups_data /scans /opt/webapp/data /opt/webapp/static \
-                /tmp/cups_web_uploads /tmp/mail_print_tasks /etc/cups/ssl /var/lock/sane /var/run/dbus \
+                /opt/cups_data \
+                /scans \
+                /opt/webapp/data \
+                /opt/webapp/static \
+                /opt/webapp/models \
+                /tmp/cups_web_uploads \
+                /tmp/mail_print_tasks \
+                /etc/cups/ssl \
+                /var/lock/sane \
+                /var/run/dbus \
     && if [ -f /opt/i18/cups_zh.po ]; then \
         msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po && \
         cp /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo || true; \
@@ -94,7 +105,7 @@ RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2
     && ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true \
     && ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true \
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true \
-    && chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus \
+    && chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /opt/webapp/models /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus \
     && chmod 700 /etc/cups/ssl \
     && rm -rf /tmp/* /root/.cache /var/tmp/* /opt/modules/*.run /opt/modules/*.tar*
 
