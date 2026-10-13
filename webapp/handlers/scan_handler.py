@@ -3,18 +3,15 @@
 
 import os
 import re
-import glob
-import json
 import time
 import threading
 import subprocess
-import tornado.web
 from handlers.base_handler import BaseHandler
 
 SCANS_DIR = "/scans"
 os.makedirs(SCANS_DIR, exist_ok=True)
 
-# 全局硬件扫描互斥锁，杜绝多端并发导致的 Device I/O 锁死
+# 全局硬件扫描互斥锁，彻底杜绝多端并发导致的 Device I/O 锁死
 SCAN_LOCK = threading.Lock()
 
 def run_cmd(cmd, env=None, timeout=12):
@@ -158,6 +155,7 @@ class ScanHandler(BaseHandler):
             except Exception:
                 is_success = False
 
+            # 回退通用 PNM 格式
             if not is_success:
                 if os.path.exists(final_jpg):
                     try: os.remove(final_jpg)
@@ -312,40 +310,3 @@ class ScanPrintHandler(BaseHandler):
             self.write_json(False, "打印任务派发超时，请检查打印机连接状态")
         except Exception as e:
             self.write_json(False, f"直接打印异常: {str(e)}")
-
-class ScanListHandler(BaseHandler):
-    def get(self):
-        files = []
-        scan_files = sorted(glob.glob(os.path.join(SCANS_DIR, "*.*")), key=os.path.getmtime, reverse=True)
-        for f in scan_files:
-            fname = os.path.basename(f)
-            files.append({
-                "filename": fname,
-                "url": f"/scans/{fname}",
-                "download_url": f"/api/scan/download?file={fname}",
-                "size": f"{round(os.path.getsize(f) / 1024, 1)} KB",
-                "is_pdf": fname.lower().endswith(".pdf"),
-                "mtime": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(f)))
-            })
-        self.write_json(True, "扫描文件列表获取成功", files=files)
-
-class ScanDeleteHandler(BaseHandler):
-    def post(self):
-        try:
-            body_data = {}
-            if self.request.body:
-                try:
-                    body_data = json.loads(self.request.body.decode('utf-8'))
-                except Exception:
-                    pass
-            fname = os.path.basename(body_data.get("filename", "") or self.get_argument("filename", ""))
-            target = validate_safe_file_path(fname)
-            if target and os.path.exists(target):
-                os.remove(target)
-                self.write_json(True, f"文件 {fname} 已删除")
-            else:
-                self.set_status(404)
-                self.write_json(False, "文件不存在或路径非法")
-        except Exception as e:
-            self.set_status(500)
-            self.write_json(False, f"删除异常: {str(e)}")
