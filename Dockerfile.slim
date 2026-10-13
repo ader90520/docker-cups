@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MALLOC_ARENA_MAX=1 \
     PYTHONMALLOC=malloc
 
-# 1. 安装基础打印/扫描底层、无头 Python 运行库与 CJK 编码支持
+# 1. 系统底层、打印/扫描驱动、无头 Python 运行库与 CJK 编码支持
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
@@ -51,23 +51,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /root/.cache
 
-# 2. 拷贝核心资产
+# 2. 拷贝代码与静态文件资产
 COPY modules/ /opt/modules/
 COPY webapp/ /opt/webapp/
 COPY entrypoint.sh /entrypoint.sh
 COPY i18/ /opt/i18/
 
-# 3. 动态注入并校验定制精简 cv2.so (无任何 GUI 依赖)
+# 3. 动态注入轻量 cv2.so 并清除源码包
 RUN if [ -f /opt/modules/cv2.so ]; then \
         cp /opt/modules/cv2.so /usr/lib/python3/dist-packages/cv2.so && \
-        chmod 755 /usr/lib/python3/dist-packages/cv2.so && \
-        echo "✔ 定制精简版 cv2.so 注入成功"; \
+        chmod 755 /usr/lib/python3/dist-packages/cv2.so; \
     elif [ -f /opt/modules/cv2.tar.xz ]; then \
         tar -xf /opt/modules/cv2.tar.xz -C /usr/lib/python3/dist-packages/ && \
-        echo "✔ 定制精简版 cv2.tar.xz 解压成功"; \
+        rm -f /opt/modules/cv2.tar.xz; \
     fi
 
-# 4. 固化驱动、汉化模板注入、目录结构预置与清理 (单层收敛)
+# 4. 固化驱动、汉化模板注入、目录结构预置与清理
 ARG HPLIP_VER=3.22.10
 RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2>/dev/null || true \
     && chmod -R +x /opt/modules/ /opt/webapp/ /entrypoint.sh 2>/dev/null || true \
@@ -118,7 +117,13 @@ RUN find /opt/modules/ /opt/webapp/ /entrypoint.sh -type f -exec dos2unix {} + 2
     && chmod -R 755 /usr/share/cups/templates/zh* /usr/share/cups/locale/zh* 2>/dev/null || true \
     && chmod -R 777 /scans /opt/webapp/data /opt/webapp/static /opt/webapp/models /tmp/mail_print_tasks /tmp/cups_web_uploads /var/lock/sane /var/run/dbus \
     && chmod 700 /etc/cups/ssl \
-    && rm -rf /tmp/* /root/.cache /var/tmp/* /opt/modules/*.run /opt/modules/*.tar*
+    && rm -rf /opt/webapp/models/* \
+              /tmp/* \
+              /var/tmp/* \
+              /root/.cache \
+              /root/.hplip \
+              /opt/modules/*.run \
+              /opt/modules/*.tar*
 
 EXPOSE 631 8088
 ENTRYPOINT ["/entrypoint.sh"]
