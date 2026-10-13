@@ -19,7 +19,6 @@ IGNORED_BACKENDS = {
 MODEL_DIR = "/usr/share/cups/model"
 
 def perform_cleanup():
-    """静默清理过期临时文件"""
     try:
         if os.path.exists(UPLOAD_DIR):
             for item in os.listdir(UPLOAD_DIR):
@@ -61,8 +60,6 @@ class PrinterAdminHandler(BaseHandler):
                     if not line:
                         continue
 
-                    # lpinfo -v 标准格式: direct uri "MAKE MODEL" "INFO"
-                    # 正则捕获类别、完整 URI 以及双引号中的厂商型号信息
                     m = re.match(r'^([a-zA-Z0-9_\-]+)\s+(\S+)(?:\s+"([^"]+)")?(?:\s+"([^"]+)")?', line)
                     if not m:
                         continue
@@ -72,14 +69,12 @@ class PrinterAdminHandler(BaseHandler):
                     desc_model = m.group(3) or ""
                     desc_info = m.group(4) or ""
 
-                    # 严格过滤虚拟设备与非物理协议
                     scheme = uri.split("://")[0].split(":")[0].lower()
                     if scheme in IGNORED_BACKENDS or uri.endswith("://") or uri.endswith(":/"):
                         continue
                     if any(uri.startswith(bad) for bad in ["cups-brf:", "hp-fax:", "beh:", "implicitclass:"]):
                         continue
 
-                    # 锁定真实 USB 或 HP 通信端口
                     if uri.startswith("hp:/usb/") or uri.startswith("usb://") or dev_type in ["direct"]:
                         friendly_name = desc_info or desc_model
                         if not friendly_name:
@@ -100,8 +95,6 @@ class PrinterAdminHandler(BaseHandler):
                             friendly_name = urllib.parse.unquote(uri)
 
                         friendly_name = friendly_name.strip()
-
-                        # 过滤掉协议短词 "hp", "usb", "direct" 假值
                         if uri not in seen_uris and uri not in ["hp", "usb", "direct"]:
                             devices.append({"uri": uri, "name": friendly_name})
                             seen_uris.add(uri)
@@ -147,7 +140,6 @@ class PrinterAdminHandler(BaseHandler):
         action = self.get_argument("action", "").strip()
         printer = self.get_argument("printer", "").strip()
 
-        # 防参数注入
         if printer and (printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', printer)):
             self.write_json(False, "非法打印机设备名称")
             return
@@ -201,7 +193,7 @@ class PrinterAdminHandler(BaseHandler):
                 res = subprocess.run(["lpadmin", "-p", printer, "-o", f"printer-is-shared={flag}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
                 subprocess.run(["service", "avahi-daemon", "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if res.returncode == 0:
-                    self.write_json(True, f"已{'开启' if is_share else '关闭'} [{printer}] 的局域网与隔空打印(AirPrint)共享！")
+                    self.write_json(True, f"已{'开启' if is_share else '关闭'} [{printer}] 的 AirPrint 局域网共享！")
                 else:
                     self.write_json(False, f"设置共享失败: {res.stderr.strip()}")
             except Exception as e:
@@ -215,7 +207,7 @@ class PrinterAdminHandler(BaseHandler):
             try:
                 res = subprocess.run(["lpadmin", "-d", printer], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
                 if res.returncode == 0:
-                    self.write_json(True, f"已将 [{printer}] 设置为系统默认打印机")
+                    self.write_json(True, f"已将 [{printer}] 设为默认打印机")
                 else:
                     self.write_json(False, f"设置默认失败: {res.stderr.strip()}")
             except Exception as e:
@@ -233,7 +225,7 @@ class PrinterAdminHandler(BaseHandler):
                 if res.returncode == 0:
                     self.write_json(True, f"测试页已发送至 {printer}")
                 else:
-                    self.write_json(False, f"下发测试页失败: {res.stderr.strip()}")
+                    self.write_json(False, f"测试页发送失败: {res.stderr.strip()}")
             except Exception as e:
                 self.write_json(False, f"测试页异常: {str(e)}")
             return
@@ -241,7 +233,7 @@ class PrinterAdminHandler(BaseHandler):
         elif action == "cancel_all":
             try:
                 subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-                self.write_json(True, "等待中的打印队列已全部清空")
+                self.write_json(True, "所有打印队列已清空")
             except Exception as e:
                 self.write_json(False, f"清空队列异常: {str(e)}")
             return
@@ -249,12 +241,12 @@ class PrinterAdminHandler(BaseHandler):
         elif action == "upload_ppd":
             files = self.request.files.get("ppd_file", [])
             if not files:
-                self.write_json(False, "未收到上传的 PPD 驱动文件")
+                self.write_json(False, "未收到 PPD 驱动文件")
                 return
             ppd = files[0]
             fname = os.path.basename(ppd["filename"])
             if not re.match(r'^[a-zA-Z0-9_\.\-]+\.ppd$', fname, re.I):
-                self.write_json(False, "仅支持标准 .ppd 格式驱动文件，且文件名不能包含特殊字符")
+                self.write_json(False, "仅支持标准 .ppd 格式驱动文件")
                 return
             try:
                 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -263,7 +255,7 @@ class PrinterAdminHandler(BaseHandler):
                     f.write(ppd["body"])
                 os.chmod(save_path, 0o644)
                 subprocess.run(["cupsfilter", "-m", "application/vnd.cups-raw", save_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.write_json(True, f"驱动 [{fname}] 已成功安装到系统驱动库！")
+                self.write_json(True, f"驱动 [{fname}] 安装成功！")
             except Exception as e:
                 self.write_json(False, f"安装驱动异常: {str(e)}")
             return
@@ -271,12 +263,12 @@ class PrinterAdminHandler(BaseHandler):
         elif action == "upload_scanner_plugin":
             files = self.request.files.get("plugin_file", [])
             if not files:
-                self.write_json(False, "未收到上传的插件安装包")
+                self.write_json(False, "未收到插件安装包")
                 return
             upload_file = files[0]
             fname = os.path.basename(upload_file["filename"])
             if not re.match(r'^[a-zA-Z0-9_\.\-]+\.run$', fname, re.I):
-                self.write_json(False, "仅支持 HP 官方扫描插件包 (*-plugin.run)")
+                self.write_json(False, "仅支持 HP 插件包 (*-plugin.run)")
                 return
             
             tmp_plugin_path = f"/tmp/{fname}"
@@ -315,11 +307,10 @@ class PrinterAdminHandler(BaseHandler):
                     sf.write("[plugin]\ninstalled = 1\neula = 1\nversion = 3.22.10\n\n[installation]\nversion = 3.22.10\n")
 
                 subprocess.run(["ldconfig"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
                 if installed_count > 0:
-                    self.write_json(True, f"扫描插件 [{fname}] 已成功安装并完成动态库注册！({installed_count}个组件生效)")
+                    self.write_json(True, f"扫描插件 [{fname}] 已注册成功！({installed_count}个组件生效)")
                 else:
-                    self.write_json(False, "未能从插件包中找到对应架构二进制文件。")
+                    self.write_json(False, "未从安装包解析出匹配当前架构的二进制库。")
             except Exception as e:
                 self.write_json(False, f"安装插件异常: {str(e)}")
             finally:
@@ -331,10 +322,10 @@ class PrinterAdminHandler(BaseHandler):
 
         elif action == "clean_disk":
             perform_cleanup()
-            self.write_json(True, "临时打印缓存与垃圾文件已成功清理完成！已同步开启后台每日自动静默清理。")
+            self.write_json(True, "临时缓存与碎片清理完成！已同步激活后台静默自洁。")
             return
 
-        # ================= 核心添加打印机逻辑（双向兼容全部前端传参） =================
+        # 添加新打印机
         try:
             uri = self.get_argument("uri", "").strip() or self.get_argument("device_uri", "").strip()
             name = self.get_argument("name", "").strip() or self.get_argument("printer_name", "").strip()
@@ -342,13 +333,12 @@ class PrinterAdminHandler(BaseHandler):
             description = self.get_argument("description", "").strip()
             ppd_file = self.request.files.get("ppd_file", [])
 
-            # 严格防止把截断的短词 "hp" 或 "usb" 传给系统
             if not uri or uri in ["hp", "usb", "direct"]:
-                self.write_json(False, "无效的设备 URI！请确认物理打印机已插紧并开机。")
+                self.write_json(False, "设备端口 URI 非法，请确认物理连接正常。")
                 return
 
             if not name:
-                self.write_json(False, "打印机物理端口与名称不能为空！")
+                self.write_json(False, "打印机名称不能为空！")
                 return
 
             clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', urllib.parse.unquote(name)).strip('_') or "Printer_Device"
@@ -368,24 +358,21 @@ class PrinterAdminHandler(BaseHandler):
             else:
                 cmd.extend(["-m", "raw"])
 
-            # 执行系统 lpadmin 调用
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=15)
             if ppd_tmp and os.path.exists(ppd_tmp):
                 try: os.remove(ppd_tmp)
                 except Exception: pass
 
-            # 关键修复：过滤 CUPS 2.4+ 弃用警告。只有 returncode != 0 时才真正判定为失败
             if res.returncode != 0:
-                self.write_json(False, f"CUPS 631 拒绝添加: {res.stderr.strip()}")
+                self.write_json(False, f"CUPS 核心拒绝配置: {res.stderr.strip()}")
                 return
 
-            # 双向互通保障：立即激活打印机状态并通知 CUPS 接收作业
             subprocess.run(["cupsenable", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             subprocess.run(["cupsaccept", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             subprocess.run(["lpadmin", "-d", clean_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
 
-            self.write_json(True, f"✔ 打印机【{clean_name}】已成功安装并同步至 631！")
+            self.write_json(True, f"✔ 打印机【{clean_name}】安装成功并同步上线！")
         except subprocess.TimeoutExpired:
-            self.write_json(False, "CUPS 系统通信超时，请检查服务状态")
+            self.write_json(False, "CUPS 系统通信超时")
         except Exception as e:
-            self.write_json(False, f"添加打印机异常: {str(e)}")
+            self.write_json(False, f"配置打印机异常: {str(e)}")
