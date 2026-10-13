@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-echo ">>> [Host] 正在配置宿主机热插拔规则..."
+echo ">>> [Host Hotplug] 正在配置宿主机物理设备透传与热插拔规则..."
 
 if [ -d "/etc/hotplug.d/usb" ]; then
-    echo ">>> 检测到 iStoreOS / OpenWrt 系统..."
+    echo ">>> 检测到 OpenWrt / iStoreOS 路由系统..."
     cat << 'EOF' > /etc/hotplug.d/usb/20-printer-autofix
 #!/bin/sh
 if [ "$ACTION" = "add" ] || [ "$ACTION" = "bind" ]; then
@@ -16,7 +16,7 @@ EOF
     chmod +x /etc/hotplug.d/usb/20-printer-autofix
 
 elif [ -d "/etc/udev/rules.d" ]; then
-    echo ">>> 检测到 海纳思 / Debian / Ubuntu / x86 系统..."
+    echo ">>> 检测到 Debian / Ubuntu / 海纳思 / x86 系统..."
     mkdir -p /etc/modprobe.d
     echo "blacklist usblp" > /etc/modprobe.d/blacklist-usblp.conf
     cat << 'EOF' > /etc/udev/rules.d/99-printer-hotplug.rules
@@ -30,4 +30,4 @@ rmmod usblp 2>/dev/null || true
 chmod -R 666 /dev/bus/usb 2>/dev/null || true
 docker exec cups chmod -R 666 /dev/bus/usb 2>/dev/null || true
 
-echo ">>> 宿主机热插拔规则配置完毕。"
+echo ">>> 宿主机热插拔规则注入完毕。"
