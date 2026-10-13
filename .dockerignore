@@ -1,26 +1,54 @@
 # 1. 忽略 Git 版本控制与自动化配置
-.git
+.git/
 .gitignore
-.github
+.gitattributes
+.github/
 
-# 2. 忽略原始训练权重与压缩分卷（彻底拦截 weights 目录打进镜像）
+# 2. 彻底拦截所有 AI 深度学习模型与原始权重（严格交由宿主机持久化挂载）
 weights/
-*.rar
-*.zip
-*.tar.gz
+models/*.onnx
+webapp/models/*.onnx
+webapp/models/*.bin
+*.onnx
 *.pth
 *.pt
+*.tflite
+*.engine
+*.bin
 
-# 3. 忽略根目录临时模型文件（严格只保留 webapp/models 下的模型）
-*.onnx
-!webapp/models/doc_corner.onnx
+# 3. 忽略各种压缩包与临时驱动微码（防止 modules 目录下的冗余大包打进镜像）
+*.rar
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.run
+modules/*.run
+modules/drivers/*.run
 
-# 4. 忽略 Python 缓存与系统临时文件
+# 4. 忽略 Python 字节码、环境与运行时缓存
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 .Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 5. 忽略日志、测试扫描文件与开发调试垃圾
 *.log
+scans/
+tmp/
+temp/
+tests/
+test_*.py
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+ehthumbs.db
+desktop.ini
