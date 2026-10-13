@@ -1,690 +1,754 @@
 /**
- * CUPS 智能工作台前端核心交互逻辑 (增强多文件管理、拖拽与条件控制版)
+ * CUPS 智能工作台前端核心驱动
+ * 闭环参数与预览联动、端侧 AI 兼容加载与运维控制
  */
 
-const AppConfig = {
-    currentColorMode: 'monochrome',
-    currentOrientation: 'portrait',
-    currentSubTab: 'normal',
-    activePrinter: ''
-};
+// 全局日志推送函数
+function logToConsole(msg, level = "info") {
+    const consoleBox = document.getElementById("ai-diag-console");
+    if (!consoleBox) return;
+    const time = new Date().toTimeString().split(' ')[0];
+    let color = "#38bdf8";
+    if (level === "error") color = "#f87171";
+    if (level === "warn") color = "#fbbf24";
+    if (level === "success") color = "#4ade80";
+    
+    const row = document.createElement("div");
+    row.style.marginBottom = "3px";
+    row.innerHTML = `<span style="color:#64748b;">[${time}]</span> <span style="color:${color};">${msg}</span>`;
+    consoleBox.appendChild(row);
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+}
 
-// 顶栏导航切换
+// 标签页切换
 function switchNavTab(tabName) {
-    document.querySelectorAll('.nav-tabs .nav-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-panel-container').forEach(panel => panel.classList.remove('active'));
-
-    const btn = event.currentTarget;
-    if (btn) btn.classList.add('active');
-
+    document.querySelectorAll(".tab-panel-container").forEach(el => el.style.display = "none");
+    document.querySelectorAll(".top-navbar .nav-btn").forEach(btn => btn.classList.remove("active"));
+    
     const targetPanel = document.getElementById(`panel-${tabName}`);
-    if (targetPanel) targetPanel.classList.add('active');
-
-    if (tabName === 'devices') {
-        DashboardService.loadPrinters(true);
+    if (targetPanel) targetPanel.style.display = "block";
+    
+    const navBtns = document.querySelectorAll(".top-navbar .nav-btn");
+    const map = { "print": 0, "scan": 1, "devices": 2, "mail": 3 };
+    if (navBtns[map[tabName]]) navBtns[map[tabName]].classList.add("active");
+    
+    if (tabName === "devices") {
+        DashboardService.loadPrinters(false);
+        DocAI.fetchDeployedModels();
     }
 }
 
-// 打印业务管理器
-const PrintManager = {
-    files: {
-        normal: []
+// ==================== 1. 核心渲染与参数实时联动引擎 ====================
+window.EnhanceEngine = {
+    canvas: null,
+    ctx: null,
+    currentRawImage: null,
+    pdfDoc: null,
+    currentPage: 1,
+    totalPages: 0,
+    zoomScale: 1.0,
+    isLocked: true,
+
+    init: function() {
+        this.canvas = document.getElementById("canvas-preview");
+        if (this.canvas) {
+            this.ctx = this.canvas.getContext("2d");
+        }
     },
 
-    // 切换普通文档与身份证模式 (精准控制参数项显隐)
-    switchSubTab: function(tabKey) {
-        AppConfig.currentSubTab = tabKey;
-        document.querySelectorAll('.sub-type-nav .type-item').forEach(el => el.classList.remove('active'));
-        const tabEl = document.getElementById(`tab-sub-${tabKey}`);
-        if (tabEl) tabEl.classList.add('active');
+    toggleLock: function() {
+        this.isLocked = !this.isLocked;
+        const badge = document.getElementById("preview-lock-badge");
+        const lockText = document.getElementById("lock-text");
+        if (badge) {
+            badge.className = `preview-lock-badge ${this.isLocked ? "locked" : "unlocked"}`;
+        }
+        if (lockText) {
+            lockText.innerText = this.isLocked ? "点击激活操作" : "缩放已解锁";
+        }
+    },
 
-        const secNormal = document.getElementById('sec-upload-normal');
-        const secIdCard = document.getElementById('sec-upload-idcard');
-        const itemEnhance = document.getElementById('item-enhance-wrap');
-        const itemPageRanges = document.getElementById('item-pageranges-wrap');
+    onViewportClick: function() {
+        if (this.isLocked) {
+            this.toggleLock();
+        }
+    },
 
-        if (tabKey === 'idcard') {
-            if (secNormal) secNormal.style.display = 'none';
-            if (secIdCard) secIdCard.style.display = 'block';
-            // 身份证专属：隐藏去黑底与页面范围
-            if (itemEnhance) itemEnhance.style.display = 'none';
-            if (itemPageRanges) itemPageRanges.style.display = 'none';
-            IdCardManager.renderPreview();
+    adjustZoom: function(delta) {
+        this.zoomScale = Math.max(0.5, Math.min(2.5, this.zoomScale + delta));
+        this.render();
+    },
+
+    resetZoom: function() {
+        this.zoomScale = 1.0;
+        this.render();
+    },
+
+    changePage: function(delta) {
+        if (!this.pdfDoc) return;
+        const target = this.currentPage + delta;
+        if (target >= 1 && target <= this.totalPages) {
+            this.currentPage = target;
+            this.renderPdfPage();
+        }
+    },
+
+    // 响应所有参数切换的核心重绘函数
+    render: function() {
+        if (!this.canvas || !this.ctx) return;
+        if (!this.currentRawImage && !this.pdfDoc) return;
+
+        const tip = document.getElementById("viewport-empty-tip");
+        if (tip) tip.style.display = "none";
+
+        const media = (document.getElementById("p-media")?.value || "A4").toUpperCase();
+        const orientation = PrintManager.orientation;
+        const colorMode = PrintManager.colorMode;
+        const enhance = (document.getElementById("p-enhance")?.value === "true");
+
+        // 1. 调整外层 A4 视窗的 CSS aspect-ratio 与画幅形态
+        const viewport = document.getElementById("a4-viewport");
+        if (viewport) {
+            viewport.className = `sheet-a4-viewport media-${media.toLowerCase()} ${orientation === 'landscape' ? 'landscape' : ''}`;
+        }
+
+        if (this.pdfDoc) {
+            this.renderPdfPage();
+            return;
+        }
+
+        // 2. 图像渲染与实时算法滤镜
+        const img = this.currentRawImage;
+        const canvas = this.canvas;
+        const ctx = this.ctx;
+
+        // 根据纸张标准设置物理像素尺寸
+        let targetW = 1240;
+        let targetH = 1754;
+        if (media === "A5") { targetW = 874; targetH = 1240; }
+        if (media === "B5") { targetW = 1037; targetH = 1476; }
+
+        if (orientation === "landscape") {
+            const tmp = targetW; targetW = targetH; targetH = tmp;
+        }
+
+        canvas.width = targetW;
+        canvas.height = targetH;
+
+        // 白底铺满
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, targetW, targetH);
+
+        // 计算居中自适应
+        const scale = Math.min((targetW * 0.95) / img.width, (targetH * 0.95) / img.height) * this.zoomScale;
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+        const posX = (targetW - drawW) / 2;
+        const posY = (targetH - drawH) / 2;
+
+        // 离屏渲染并提取像素做实时算法滤镜
+        const offCanvas = document.createElement("canvas");
+        offCanvas.width = drawW;
+        offCanvas.height = drawH;
+        const offCtx = offCanvas.getContext("2d");
+        offCtx.drawImage(img, 0, 0, drawW, drawH);
+
+        const imgData = offCtx.getImageData(0, 0, drawW, drawH);
+        const data = imgData.data;
+
+        // 3. 算法流水线：去黑底背景增强与黑白/彩色色彩映射
+        for (let i = 0; i < data.length; i += 4) {
+            let r = data[i];
+            let g = data[i + 1];
+            let b = data[i + 2];
+
+            // 去黑底全能王白底算法 (局部线性增益)
+            if (enhance) {
+                const maxVal = Math.max(r, g, b);
+                const bgFactor = maxVal > 110 ? 255 / (maxVal + 15) : 1.0;
+                r = Math.min(255, r * bgFactor);
+                g = Math.min(255, g * bgFactor);
+                b = Math.min(255, b * bgFactor);
+            }
+
+            // 黑白模式像素折算
+            if (colorMode === "monochrome") {
+                const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                const ink = gray < 185 ? Math.max(0, gray * 0.7 - 10) : 255;
+                data[i] = ink;
+                data[i + 1] = ink;
+                data[i + 2] = ink;
+            } else {
+                data[i] = r;
+                data[i + 1] = g;
+                data[i + 2] = b;
+            }
+        }
+
+        offCtx.putImageData(imgData, 0, 0);
+        ctx.drawImage(offCanvas, posX, posY);
+    },
+
+    renderPdfPage: function() {
+        if (!this.pdfDoc) return;
+        this.pdfDoc.getPage(this.currentPage).then(page => {
+            const orientation = PrintManager.orientation;
+            const viewportDef = page.getViewport({ scale: 1.5 });
+            const canvas = this.canvas;
+            const ctx = this.ctx;
+
+            canvas.width = viewportDef.width;
+            canvas.height = viewportDef.height;
+
+            const renderContext = { canvasContext: ctx, viewport: viewportDef };
+            page.render(renderContext).promise.then(() => {
+                // 如果是黑白模式，将 PDF 渲染结果灰度化
+                if (PrintManager.colorMode === "monochrome") {
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imgData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                        data[i] = gray;
+                        data[i + 1] = gray;
+                        data[i + 2] = gray;
+                    }
+                    ctx.putImageData(imgData, 0, 0);
+                }
+            });
+
+            const counter = document.getElementById("page-counter-lbl");
+            if (counter) counter.innerText = `${this.currentPage} / ${this.totalPages}`;
+        });
+    }
+};
+
+// ==================== 2. 打印交互与参数管理 ====================
+window.PrintManager = {
+    colorMode: "monochrome",
+    orientation: "portrait",
+    selectedFiles: [],
+    currentSubTab: "normal",
+
+    init: function() {
+        const dropZone = document.getElementById("drag-drop-zone-normal");
+        if (dropZone) {
+            dropZone.addEventListener("click", () => document.getElementById("file-input-normal").click());
+            dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+            dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+            dropZone.addEventListener("drop", (e) => {
+                e.preventDefault();
+                dropZone.classList.remove("drag-over");
+                this.onFilesSelected(e.dataTransfer.files);
+            });
+        }
+    },
+
+    switchSubTab: function(tab) {
+        this.currentSubTab = tab;
+        document.getElementById("tab-sub-normal")?.classList.toggle("active", tab === "normal");
+        document.getElementById("tab-sub-idcard")?.classList.toggle("active", tab === "idcard");
+        document.getElementById("sec-upload-normal").style.display = (tab === "normal" ? "block" : "none");
+        document.getElementById("sec-upload-idcard").style.display = (tab === "idcard" ? "block" : "none");
+        if (tab === "idcard") {
+            IdCardManager.updateCanvasPreview();
         } else {
-            if (secNormal) secNormal.style.display = 'block';
-            if (secIdCard) secIdCard.style.display = 'none';
-            // 恢复普通文档参数
-            if (itemEnhance) itemEnhance.style.display = 'flex';
-            if (itemPageRanges) itemPageRanges.style.display = 'flex';
-            EnhanceEngine.renderPreview();
+            EnhanceEngine.render();
         }
     },
 
     setColorMode: function(mode) {
-        AppConfig.currentColorMode = mode;
-        const btnMono = document.getElementById('btn-color-mono');
-        const btnRgb = document.getElementById('btn-color-rgb');
-        if (mode === 'monochrome') {
-            btnMono.classList.add('active');
-            btnRgb.classList.remove('active');
-        } else {
-            btnRgb.classList.add('active');
-            btnMono.classList.remove('active');
-        }
-        EnhanceEngine.invalidateCache();
-        EnhanceEngine.renderPreview();
+        this.colorMode = mode;
+        document.getElementById("btn-color-mono")?.classList.toggle("active", mode === "monochrome");
+        document.getElementById("btn-color-rgb")?.classList.toggle("active", mode === "color");
+        logToConsole(`颜色模式切换为: ${mode === "monochrome" ? "黑白" : "彩色"}`);
+        EnhanceEngine.render();
     },
 
     setOrientation: function(orient) {
-        AppConfig.currentOrientation = orient;
-        const btnPort = document.getElementById('btn-orient-port');
-        const btnLand = document.getElementById('btn-orient-land');
-        if (orient === 'portrait') {
-            btnPort.classList.add('active');
-            btnLand.classList.remove('active');
-        } else {
-            btnLand.classList.add('active');
-            btnPort.classList.remove('active');
-        }
-        EnhanceEngine.renderPreview();
-    },
-
-    // 接收文件（支持多选追加或拖拽存入）
-    onFilesSelected: function(fileList) {
-        if (!fileList || fileList.length === 0) return;
-        const newFiles = Array.from(fileList);
-        this.files.normal = this.files.normal.concat(newFiles);
-        this.renderFileList();
-        EnhanceEngine.currentPage = this.files.normal.length - 1; // 默认跳至最新选取的图片
-        EnhanceEngine.renderPreview();
-    },
-
-    // 渲染带有单独删除、点击直接预览的交互式列表
-    renderFileList: function() {
-        const listContainer = document.getElementById('file-list-normal');
-        if (!listContainer) return;
-
-        if (this.files.normal.length === 0) {
-            listContainer.style.display = 'none';
-            listContainer.innerHTML = '';
-            EnhanceEngine.clearViewport();
-            return;
-        }
-
-        listContainer.style.display = 'flex';
-        listContainer.innerHTML = this.files.normal.map((f, idx) => {
-            const isActive = (idx === EnhanceEngine.currentPage) ? 'active' : '';
-            return `
-                <div class="file-item-row ${isActive}">
-                    <span class="file-item-name" onclick="PrintManager.previewFileByIndex(${idx})" title="点击预览此文件">
-                        📄 [${idx + 1}] ${f.name} (${Math.round(f.size / 1024)} KB)
-                    </span>
-                    <button type="button" class="btn-file-remove" onclick="PrintManager.removeSingleFile(${idx})" title="删除此文件">✖</button>
-                </div>
-            `;
-        }).join('');
-    },
-
-    // 点击某文件名字直接切换到对应预览图
-    previewFileByIndex: function(idx) {
-        if (idx >= 0 && idx < this.files.normal.length) {
-            EnhanceEngine.currentPage = idx;
-            this.renderFileList();
-            EnhanceEngine.renderPreview();
-        }
-    },
-
-    // 单个文件删除逻辑
-    removeSingleFile: function(idx) {
-        if (idx >= 0 && idx < this.files.normal.length) {
-            this.files.normal.splice(idx, 1);
-            if (EnhanceEngine.currentPage >= this.files.normal.length) {
-                EnhanceEngine.currentPage = Math.max(0, this.files.normal.length - 1);
-            }
-            this.renderFileList();
-            EnhanceEngine.renderPreview();
-        }
-    },
-
-    // 全部清空
-    clearFiles: function(type) {
-        if (type === 'idcard') {
-            IdCardManager.clearAll();
-            return;
-        }
-        this.files.normal = [];
-        const fileInput = document.getElementById('file-input-normal');
-        if (fileInput) fileInput.value = '';
-        this.renderFileList();
-        EnhanceEngine.clearViewport();
-    },
-
-    onMergeChange: function() {
-        EnhanceEngine.renderPreview();
+        this.orientation = orient;
+        document.getElementById("btn-orient-port")?.classList.toggle("active", orient === "portrait");
+        document.getElementById("btn-orient-land")?.classList.toggle("active", orient === "landscape");
+        logToConsole(`打印排版方向切换为: ${orient === "portrait" ? "纵向" : "横向"}`);
+        EnhanceEngine.render();
     },
 
     onPaperSizeChange: function() {
-        EnhanceEngine.renderPreview();
+        const size = document.getElementById("p-media")?.value;
+        logToConsole(`纸张介质切换为: ${size}`);
+        EnhanceEngine.render();
+    },
+
+    onEnhanceChange: function() {
+        const state = document.getElementById("p-enhance")?.value;
+        logToConsole(`去黑底全能王增强: ${state === "true" ? "开启" : "关闭"}`);
+        EnhanceEngine.render();
+    },
+
+    onMergeChange: function() {
+        const merge = document.getElementById("chk-normal-merge")?.checked;
+        logToConsole(`多图同页拼版模式: ${merge ? "开启" : "关闭"}`);
+    },
+
+    onFilesSelected: function(files) {
+        if (!files || files.length === 0) return;
+        this.selectedFiles = Array.from(files);
+        this.updateFileListUI();
+
+        const firstFile = files[0];
+        const ext = firstFile.name.split('.').pop().toLowerCase();
+
+        logToConsole(`已加载文件: ${firstFile.name} (${(firstFile.size/1024).toFixed(1)} KB)`);
+
+        if (ext === "pdf") {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                    EnhanceEngine.pdfDoc = pdf;
+                    EnhanceEngine.currentPage = 1;
+                    EnhanceEngine.totalPages = pdf.numPages;
+                    EnhanceEngine.currentRawImage = null;
+                    EnhanceEngine.renderPdfPage();
+                });
+            };
+            reader.readAsArrayBuffer(firstFile);
+        } else {
+            EnhanceEngine.pdfDoc = null;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    EnhanceEngine.currentRawImage = img;
+                    EnhanceEngine.render();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(firstFile);
+        }
+    },
+
+    updateFileListUI: function() {
+        const box = document.getElementById("file-list-normal");
+        if (!box) return;
+        if (this.selectedFiles.length === 0) {
+            box.style.display = "none";
+            box.innerHTML = "";
+            return;
+        }
+        box.style.display = "flex";
+        box.innerHTML = this.selectedFiles.map((f, i) => `
+            <div class="file-item-row ${i === 0 ? 'active' : ''}">
+                <div class="file-item-name">📄 ${f.name}</div>
+                <button type="button" class="btn-file-remove" onclick="PrintManager.removeFile(${i})">×</button>
+            </div>
+        `).join('');
+    },
+
+    removeFile: function(idx) {
+        this.selectedFiles.splice(idx, 1);
+        this.updateFileListUI();
+        if (this.selectedFiles.length > 0) {
+            this.onFilesSelected(this.selectedFiles);
+        } else {
+            EnhanceEngine.currentRawImage = null;
+            EnhanceEngine.pdfDoc = null;
+            const ctx = EnhanceEngine.ctx;
+            if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+            document.getElementById("viewport-empty-tip").style.display = "block";
+        }
+    },
+
+    clearFiles: function() {
+        this.selectedFiles = [];
+        this.updateFileListUI();
+        EnhanceEngine.currentRawImage = null;
+        EnhanceEngine.pdfDoc = null;
+        const ctx = EnhanceEngine.ctx;
+        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+        document.getElementById("viewport-empty-tip").style.display = "block";
     },
 
     submitJob: async function() {
-        const printer = document.getElementById('printer-select').value;
-        const alertBox = document.getElementById('print-alert');
+        const printer = document.getElementById("printer-select")?.value;
+        const alertBox = document.getElementById("print-alert");
+        const btn = document.getElementById("btn-submit");
+
         if (!printer) {
-            alertBox.innerHTML = '<span style="color:#ef4444;">请先选择可用打印机！</span>';
+            alertBox.innerHTML = '<span style="color:#ef4444;">未选择可用打印机</span>';
             return;
         }
 
         const fd = new FormData();
-        fd.append('printer', printer);
-        fd.append('copies', document.getElementById('p-copies').value || '1');
-        fd.append('duplex', document.getElementById('p-duplex').value || 'none');
-        fd.append('color_mode', AppConfig.currentColorMode);
-        fd.append('media', document.getElementById('p-media').value || 'A4');
+        fd.append("printer", printer);
+        fd.append("copies", document.getElementById("p-copies")?.value || "1");
+        fd.append("duplex", document.getElementById("p-duplex")?.value || "none");
+        fd.append("color_mode", this.colorMode);
+        fd.append("media", document.getElementById("p-media")?.value || "A4");
+        fd.append("enhance", document.getElementById("p-enhance")?.value || "true");
+        fd.append("page_ranges", document.getElementById("p-page-ranges")?.value || "");
+        fd.append("multi_merge", document.getElementById("chk-normal-merge")?.checked ? "true" : "false");
 
-        let fileQueue = [];
-        if (AppConfig.currentSubTab === 'normal') {
-            fileQueue = this.files.normal;
-            fd.append('enhance', document.getElementById('p-enhance').value || 'true');
-            fd.append('page_ranges', document.getElementById('p-page-ranges').value || '');
-            const isMerge = document.getElementById('chk-normal-merge').checked;
-            fd.append('multi_merge', isMerge ? 'true' : 'false');
-        } else if (AppConfig.currentSubTab === 'idcard') {
-            const idCardBlob = await IdCardManager.generateA4CanvasBlob();
-            if (!idCardBlob) {
-                alertBox.innerHTML = '<span style="color:#ef4444;">请至少上传一张身份证人像面或国徽面！</span>';
+        if (this.currentSubTab === "normal") {
+            if (this.selectedFiles.length === 0) {
+                alertBox.innerHTML = '<span style="color:#ef4444;">请选取待打印文档或图片</span>';
                 return;
             }
-            fileQueue = [new File([idCardBlob], 'idcard_merged.jpg', { type: 'image/jpeg' })];
-            fd.append('enhance', 'false'); // 身份证固定不走破坏性去黑底
-            fd.append('page_ranges', '');
-            fd.append('multi_merge', 'false');
+            this.selectedFiles.forEach(f => fd.append("file", f));
+        } else {
+            const blob = await IdCardManager.getMergedBlob();
+            if (!blob) {
+                alertBox.innerHTML = '<span style="color:#ef4444;">身份证正反面尚未准备齐全</span>';
+                return;
+            }
+            fd.append("file", blob, "idcard_merged.jpg");
         }
 
-        if (fileQueue.length === 0) {
-            alertBox.innerHTML = '<span style="color:#ef4444;">请先选取待打印文档或图片！</span>';
-            return;
-        }
-
-        fileQueue.forEach(f => fd.append('file', f));
-        alertBox.innerHTML = '<span style="color:#0284c7;">正在提交任务至 CUPS 队列...</span>';
+        btn.disabled = true;
+        btn.innerText = "⏳ 正在传输打印作业...";
+        alertBox.innerHTML = "";
+        logToConsole("正在下发打印作业到 CUPS 管道...");
 
         try {
-            const resp = await fetch('/api/print', { method: 'POST', body: fd });
+            const resp = await fetch("/api/print", { method: "POST", body: fd });
             const res = await resp.json();
             if (res.success) {
-                alertBox.innerHTML = `<span style="color:#10b981;">✔ 打印任务已下发 (作业 ID: ${res.job || '已就绪'})</span>`;
-                DashboardService.loadPrinters(false);
+                alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
+                logToConsole(`✔ 作业派发成功: ${res.job || res.msg}`, "success");
             } else {
-                alertBox.innerHTML = `<span style="color:#ef4444;">下发失败: ${res.msg}</span>`;
+                alertBox.innerHTML = `<span style="color:#ef4444;">❌ 失败: ${res.msg}</span>`;
+                logToConsole(`❌ CUPS 拒绝: ${res.msg}`, "error");
             }
         } catch (e) {
-            alertBox.innerHTML = `<span style="color:#ef4444;">通信异常: ${e.message}</span>`;
+            alertBox.innerHTML = `<span style="color:#ef4444;">网络异常: ${e.message}</span>`;
+            logToConsole(`通讯异常: ${e.message}`, "error");
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "🖨️ 提交打印";
         }
     }
 };
 
-// 身份证专属业务对象
-const IdCardManager = {
-    persons: [
-        { front: null, back: null }
-    ],
-
-    onSideUploaded: function(index, side, files) {
-        if (!files || files.length === 0) return;
-        const file = files[0];
-        if (!this.persons[index]) {
-            this.persons[index] = { front: null, back: null };
-        }
-        this.persons[index][side] = file;
-
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = document.getElementById(`preview-${side}-${index}`);
-            const ph = document.getElementById(`placeholder-${side}-${index}`);
-            if (img && ph) {
-                img.src = e.target.result;
-                img.style.display = 'block';
-                ph.style.display = 'none';
-            }
-            IdCardManager.renderPreview();
-        };
-        reader.readAsDataURL(file);
-    },
+// ==================== 3. 身份证双面排版引擎 ====================
+window.IdCardManager = {
+    persons: [{ front: null, back: null }],
 
     addPerson: function() {
         if (this.persons.length >= 3) {
-            alert('单张 A4 纸最多支持合并打印 3 人身份证！');
+            alert("单张 A4 纸最多排版 3 人身份证！");
             return;
         }
-        const index = this.persons.length;
+        const idx = this.persons.length;
         this.persons.push({ front: null, back: null });
 
-        const container = document.getElementById('idcard-person-container');
-        if (!container) return;
-
-        const card = document.createElement('div');
-        card.className = 'idcard-person-card';
-        card.id = `idcard-person-${index}`;
+        const container = document.getElementById("idcard-person-container");
+        const card = document.createElement("div");
+        card.className = "idcard-person-card";
+        card.id = `idcard-person-${idx}`;
         card.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <div class="idcard-person-title">第 ${index + 1} 人身份证信息</div>
-                <button type="button" class="btn-del" onclick="IdCardManager.removePerson(${index})">删除此人</button>
-            </div>
+            <div class="idcard-person-title">第 ${idx + 1} 人身份证信息</div>
             <div class="idcard-ratio-grid">
-                <div class="idcard-ratio-box" id="idcard-slot-front-${index}">
-                    <div class="idcard-ratio-placeholder" id="placeholder-front-${index}">
-                        <div class="idcard-ratio-icon">👤</div>
-                        <div class="idcard-ratio-text">正面 (人像面)</div>
-                        <div class="idcard-ratio-sub">点击或拖拽上传正面</div>
+                <div class="idcard-ratio-box" id="idcard-slot-front-${idx}">
+                    <div class="idcard-ratio-placeholder" id="placeholder-front-${idx}">
+                        <div class="icon">👤</div>
+                        <div class="title">正面 (人像面)</div>
+                        <div class="sub">点击上传</div>
                     </div>
-                    <img id="preview-front-${index}" class="idcard-ratio-img" style="display:none;" alt="正面">
-                    <input type="file" id="file-idcard-front-${index}" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(${index}, 'front', this.files)">
+                    <img id="preview-front-${idx}" class="idcard-ratio-img" style="display:none;" alt="正面">
+                    <input type="file" id="file-idcard-front-${idx}" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(${idx}, 'front', this.files)">
                 </div>
-
-                <div class="idcard-ratio-box" id="idcard-slot-back-${index}">
-                    <div class="idcard-ratio-placeholder" id="placeholder-back-${index}">
-                        <div class="idcard-ratio-icon">🇨🇳</div>
-                        <div class="idcard-ratio-text">反面 (国徽面)</div>
-                        <div class="idcard-ratio-sub">点击或拖拽上传反面</div>
+                <div class="idcard-ratio-box" id="idcard-slot-back-${idx}">
+                    <div class="idcard-ratio-placeholder" id="placeholder-back-${idx}">
+                        <div class="icon">🇨🇳</div>
+                        <div class="title">反面 (国徽面)</div>
+                        <div class="sub">点击上传</div>
                     </div>
-                    <img id="preview-back-${index}" class="idcard-ratio-img" style="display:none;" alt="反面">
-                    <input type="file" id="file-idcard-back-${index}" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(${index}, 'back', this.files)">
+                    <img id="preview-back-${idx}" class="idcard-ratio-img" style="display:none;" alt="反面">
+                    <input type="file" id="file-idcard-back-${idx}" accept="image/*" style="display:none;" onchange="IdCardManager.onSideUploaded(${idx}, 'back', this.files)">
                 </div>
             </div>
         `;
         container.appendChild(card);
-        this.bindBoxDragDrop(index);
+        this.bindBoxEvents(idx);
     },
 
-    bindBoxDragDrop: function(index) {
+    bindBoxEvents: function(idx) {
         ['front', 'back'].forEach(side => {
-            const box = document.getElementById(`idcard-slot-${side}-${index}`);
-            const input = document.getElementById(`file-idcard-${side}-${index}`);
-            if (!box || !input) return;
-
-            box.onclick = () => input.click();
-
-            ['dragenter', 'dragover'].forEach(name => {
-                box.addEventListener(name, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    box.classList.add('drag-over');
-                });
-            });
-
-            ['dragleave', 'drop'].forEach(name => {
-                box.addEventListener(name, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    box.classList.remove('drag-over');
-                });
-            });
-
-            box.addEventListener('drop', (e) => {
-                const dt = e.dataTransfer;
-                if (dt && dt.files && dt.files.length > 0) {
-                    this.onSideUploaded(index, side, dt.files);
-                }
-            });
+            const box = document.getElementById(`idcard-slot-${side}-${idx}`);
+            const input = document.getElementById(`file-idcard-${side}-${idx}`);
+            if (box && input) {
+                box.addEventListener('click', () => input.click());
+            }
         });
     },
 
-    removePerson: function(index) {
-        const card = document.getElementById(`idcard-person-${index}`);
-        if (card) card.remove();
-        this.persons.splice(index, 1);
-        this.renderPreview();
+    onSideUploaded: function(idx, side, files) {
+        if (!files || files.length === 0) return;
+        const file = files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                this.persons[idx][side] = img;
+                document.getElementById(`placeholder-${side}-${idx}`).style.display = "none";
+                const pImg = document.getElementById(`preview-${side}-${idx}`);
+                pImg.src = e.target.result;
+                pImg.style.display = "block";
+                logToConsole(`第 ${idx + 1} 人 [${side === 'front' ? '正面' : '反面'}] 照片就绪`);
+                this.updateCanvasPreview();
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    },
+
+    updateCanvasPreview: function() {
+        const canvas = EnhanceEngine.canvas;
+        const ctx = EnhanceEngine.ctx;
+        if (!canvas || !ctx) return;
+
+        document.getElementById("viewport-empty-tip").style.display = "none";
+
+        // A4 200 DPI 标准像素：1654 x 2338
+        canvas.width = 1654;
+        canvas.height = 2338;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 身份证 85.6mm x 54mm 对应像素 (200 DPI 下为 674 x 425)
+        const cardW = 674;
+        const cardH = 425;
+        const count = this.persons.length;
+
+        this.persons.forEach((p, i) => {
+            const baseY = 250 + i * 650;
+            if (p.front) {
+                const posX = (canvas.width - cardW) / 2;
+                ctx.drawImage(p.front, posX, baseY, cardW, cardH);
+            }
+            if (p.back) {
+                const posX = (canvas.width - cardW) / 2;
+                ctx.drawImage(p.back, posX, baseY + cardH + 40, cardW, cardH);
+            }
+        });
+    },
+
+    getMergedBlob: function() {
+        return new Promise(resolve => {
+            EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.92);
+        });
     },
 
     clearAll: function() {
         this.persons = [{ front: null, back: null }];
-        const container = document.getElementById('idcard-person-container');
-        if (container) container.innerHTML = '';
-        ['front', 'back'].forEach(side => {
-            const img = document.getElementById(`preview-${side}-0`);
-            const ph = document.getElementById(`placeholder-${side}-0`);
-            const fi = document.getElementById(`file-idcard-${side}-0`);
-            if (img) img.style.display = 'none';
-            if (ph) ph.style.display = 'block';
-            if (fi) fi.value = '';
+        document.getElementById("idcard-person-container").innerHTML = "";
+        ['front', 'back'].forEach(s => {
+            document.getElementById(`placeholder-${s}-0`).style.display = "block";
+            document.getElementById(`preview-${s}-0`).style.display = "none";
         });
-        EnhanceEngine.clearViewport();
-    },
+        const ctx = EnhanceEngine.ctx;
+        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+        document.getElementById("viewport-empty-tip").style.display = "block";
+    }
+};
 
-    generateA4CanvasBlob: function() {
-        return new Promise((resolve) => {
-            const validSides = [];
-            this.persons.forEach(p => {
-                if (p.front) validSides.push(p.front);
-                if (p.back) validSides.push(p.back);
-            });
-            if (validSides.length === 0) {
-                resolve(null);
+// ==================== 4. 设备管理与运维 ====================
+window.DashboardService = {
+    loadPrinters: async function(showToast = false) {
+        try {
+            const resp = await fetch("/api/devices");
+            const res = await resp.json();
+            const select = document.getElementById("printer-select");
+            const cardList = document.getElementById("device-card-list");
+            if (!select) return;
+
+            select.innerHTML = "";
+            const printers = res.printers || [];
+
+            if (printers.length === 0) {
+                select.innerHTML = '<option value="">无可用打印机</option>';
+                if (cardList) cardList.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未安装打印机</div>';
                 return;
             }
 
-            const canvas = document.createElement('canvas');
-            canvas.width = 1654;
-            canvas.height = 2338;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const cardW = 674;
-            const cardH = 425;
-            const posX = (canvas.width - cardW) / 2;
-
-            let loaded = 0;
-            validSides.forEach((file, idx) => {
-                const img = new Image();
-                img.onload = () => {
-                    const posY = 350 + idx * (cardH + 120);
-                    if (posY + cardH < canvas.height) {
-                        ctx.drawImage(img, posX, posY, cardW, cardH);
-                    }
-                    loaded++;
-                    if (loaded === validSides.length) {
-                        canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.95);
-                    }
-                };
-                img.src = URL.createObjectURL(file);
+            printers.forEach(p => {
+                const opt = document.createElement("option");
+                opt.value = p.name;
+                opt.text = `${p.name} (${p.status || '就绪'})`;
+                select.appendChild(opt);
             });
-        });
-    },
 
-    renderPreview: async function() {
-        const blob = await this.generateA4CanvasBlob();
-        if (!blob) {
-            EnhanceEngine.clearViewport();
-            return;
-        }
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.getElementById('canvas-preview');
-            const tip = document.getElementById('viewport-empty-tip');
-            if (canvas && tip) {
-                tip.style.display = 'none';
-                canvas.style.display = 'block';
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
+            if (cardList) {
+                cardList.innerHTML = printers.map(p => `
+                    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;">
+                        <div><b>🖨️ ${p.name}</b> <span style="font-size:11px; color:#10b981;">● ${p.status || '就绪'}</span></div>
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.testPage('${p.name}')">测试页</button>
+                    </div>
+                `).join('');
             }
-        };
-        img.src = URL.createObjectURL(blob);
-    }
-};
-
-// 视窗渲染与增强引擎
-const EnhanceEngine = {
-    currentPage: 0,
-    totalPages: 0,
-
-    clearViewport: function() {
-        const canvas = document.getElementById('canvas-preview');
-        const pdfCanvas = document.getElementById('pdf-canvas-render');
-        const tip = document.getElementById('viewport-empty-tip');
-        if (canvas) canvas.style.display = 'none';
-        if (pdfCanvas) pdfCanvas.style.display = 'none';
-        if (tip) tip.style.display = 'block';
-        document.getElementById('page-counter-lbl').innerText = '0 / 0';
-    },
-
-    invalidateCache: function() {},
-
-    renderPreview: async function() {
-        const files = PrintManager.files.normal;
-        if (!files || files.length === 0) {
-            this.clearViewport();
-            return;
-        }
-
-        const isMerge = document.getElementById('chk-normal-merge').checked;
-
-        if (isMerge && files.length > 1) {
-            this.totalPages = 1;
-            document.getElementById('page-counter-lbl').innerText = '1 / 1';
-            this.renderMultiMergePreview(files);
-            return;
-        }
-
-        const currentFile = files[this.currentPage] || files[0];
-        this.totalPages = files.length;
-        document.getElementById('page-counter-lbl').innerText = `${this.currentPage + 1} / ${this.totalPages}`;
-
-        const isEnhance = document.getElementById('p-enhance').value === 'true';
-        let uploadPayload = currentFile;
-
-        if (isEnhance && window.DocAI && window.DocAI.readyStatus && window.DocAI.readyStatus["corner"]) {
-            try {
-                const cropped = await window.DocAI.processDocument(currentFile);
-                if (cropped) uploadPayload = cropped;
-            } catch (e) {
-                console.warn('端侧 AI 切边跳过:', e);
-            }
-        }
-
-        const fd = new FormData();
-        fd.append('file', uploadPayload, currentFile.name);
-        fd.append('color_mode', AppConfig.currentColorMode);
-        if (uploadPayload !== currentFile) fd.append('client_cropped', 'true');
-
-        try {
-            const resp = await fetch('/api/preview/enhance', { method: 'POST', body: fd });
-            if (!resp.ok) throw new Error('服务端预览异常');
-            const blob = await resp.blob();
-
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.getElementById('canvas-preview');
-                const tip = document.getElementById('viewport-empty-tip');
-                if (canvas && tip) {
-                    tip.style.display = 'none';
-                    canvas.style.display = 'block';
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                }
-            };
-            img.src = URL.createObjectURL(blob);
+            if (showToast) logToConsole("打印机列表与状态刷新完成", "success");
         } catch (e) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                const img = new Image();
-                img.onload = () => {
-                    const canvas = document.getElementById('canvas-preview');
-                    const tip = document.getElementById('viewport-empty-tip');
-                    if (canvas && tip) {
-                        tip.style.display = 'none';
-                        canvas.style.display = 'block';
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                    }
-                };
-                img.src = ev.target.result;
-            };
-            reader.readAsDataURL(currentFile);
-        }
-    },
-
-    renderMultiMergePreview: function(files) {
-        const canvas = document.getElementById('canvas-preview');
-        const tip = document.getElementById('viewport-empty-tip');
-        if (!canvas) return;
-
-        canvas.width = 1654;
-        canvas.height = 2338;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const count = files.length;
-        let cols = 1, rows = 2;
-        if (count === 3 || count === 4) { cols = 2; rows = 2; }
-        else if (count === 5 || count === 6) { cols = 2; rows = 3; }
-        else if (count > 6) { cols = 2; rows = 4; }
-
-        const cellW = canvas.width / cols;
-        const cellH = canvas.height / rows;
-        const margin = 40;
-
-        let loaded = 0;
-        files.slice(0, cols * rows).forEach((f, idx) => {
-            const img = new Image();
-            img.onload = () => {
-                const r = Math.min((cellW - margin * 2) / img.width, (cellH - margin * 2) / img.height);
-                const targetW = img.width * r;
-                const targetH = img.height * r;
-                const col = idx % cols;
-                const row = Math.floor(idx / cols);
-                const posX = col * cellW + (cellW - targetW) / 2;
-                const posY = row * cellH + (cellH - targetH) / 2;
-                ctx.drawImage(img, posX, posY, targetW, targetH);
-                loaded++;
-                if (loaded === Math.min(files.length, cols * rows)) {
-                    if (tip) tip.style.display = 'none';
-                    canvas.style.display = 'block';
-                }
-            };
-            img.src = URL.createObjectURL(f);
-        });
-    },
-
-    changePage: function(delta) {
-        if (this.totalPages <= 1) return;
-        this.currentPage = Math.max(0, Math.min(this.totalPages - 1, this.currentPage + delta));
-        PrintManager.renderFileList();
-        this.renderPreview();
-    },
-
-    adjustZoom: function(step) {},
-    resetZoom: function() {}
-};
-
-// 拖拽注入全局绑定
-function setupGlobalDragDrop() {
-    const dropZone = document.getElementById('drag-drop-zone-normal');
-    const fileInput = document.getElementById('file-input-normal');
-
-    if (dropZone && fileInput) {
-        dropZone.onclick = () => fileInput.click();
-
-        ['dragenter', 'dragover'].forEach(name => {
-            dropZone.addEventListener(name, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.add('drag-over');
-            });
-        });
-
-        ['dragleave', 'drop'].forEach(name => {
-            dropZone.addEventListener(name, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.remove('drag-over');
-            });
-        });
-
-        dropZone.addEventListener('drop', (e) => {
-            const dt = e.dataTransfer;
-            if (dt && dt.files && dt.files.length > 0) {
-                PrintManager.onFilesSelected(dt.files);
-            }
-        });
-    }
-
-    IdCardManager.bindBoxDragDrop(0);
-}
-
-// 打印机状态与运维控制服务
-const DashboardService = {
-    loadPrinters: async function(isManual) {
-        try {
-            const res = await fetch('/api/printers').then(r => r.json());
-            const select = document.getElementById('printer-select');
-            if (select && res.printers) {
-                select.innerHTML = res.printers.map(p => `<option value="${p.name}" ${p.is_default?'selected':''}>${p.name} (${p.state||'空闲'})</option>`).join('');
-                if (res.printers.length > 0) {
-                    AppConfig.activePrinter = select.value;
-                }
-            }
-            if (res.printers && res.printers.length > 0) {
-                document.getElementById('dash-status-pill').innerText = res.printers[0].state || '就绪';
-            }
-        } catch (e) {
-            console.warn('获取打印机列表失败:', e);
+            logToConsole(`打印机列表获取失败: ${e.message}`, "error");
         }
     },
 
     onPrinterChange: function() {
-        AppConfig.activePrinter = document.getElementById('printer-select').value;
+        const p = document.getElementById("printer-select")?.value;
+        logToConsole(`当前目标打印机切换为: ${p}`);
+    },
+
+    testPage: async function(pName) {
+        logToConsole(`向打印机 [${pName}] 派发标准 CUPS 测试页...`);
+        try {
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `action=test_page&printer=${encodeURIComponent(pName)}`
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+        } catch (e) {
+            logToConsole(`测试页下发异常: ${e.message}`, "error");
+        }
     },
 
     loadDiscoveredDevices: async function() {
-        const sel = document.getElementById('discovered-device-select');
-        sel.innerHTML = '<option value="">正在全总线扫描物理打印机...</option>';
+        logToConsole("正在扫描物理 USB 总线与网络端口...");
+        const select = document.getElementById("discovered-device-select");
         try {
-            const res = await fetch('/api/devices/discover').then(r => r.json());
-            if (res.devices && res.devices.length > 0) {
-                sel.innerHTML = res.devices.map(d => `<option value="${d.uri}">${d.info} (${d.device_class})</option>`).join('');
-            } else {
-                sel.innerHTML = '<option value="">未探测到 USB/网络直连物理打印机</option>';
-            }
+            const resp = await fetch("/api/devices/discover");
+            const res = await resp.json();
+            select.innerHTML = '<option value="">-- 请选择硬件端口 --</option>';
+            (res.devices || []).forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.uri;
+                opt.text = `${d.info} (${d.uri})`;
+                select.appendChild(opt);
+            });
+            logToConsole(`扫描完成，发现 ${res.devices ? res.devices.length : 0} 个物理端口`, "success");
         } catch (e) {
-            sel.innerHTML = '<option value="">端口扫描超时</option>';
+            logToConsole(`硬件扫描失败: ${e.message}`, "error");
+        }
+    },
+
+    onDiscoveredDeviceSelect: function(sel) {
+        const uri = sel.value;
+        if (!uri) return;
+        const nameInput = document.getElementById("add-printer-name");
+        if (nameInput && !nameInput.value) {
+            nameInput.value = uri.split("/").pop().split("?")[0].replace(/[^a-zA-Z0-9_-]/g, "_");
         }
     },
 
     searchDrivers: async function() {
-        const kw = document.getElementById('driver-search-kw').value.trim();
-        const box = document.getElementById('driver-search-results');
+        const kw = document.getElementById("driver-search-kw")?.value.trim();
+        const box = document.getElementById("driver-search-results");
         if (!kw) return;
-        box.style.display = 'block';
-        box.innerHTML = '<div style="padding:6px; color:#64748b;">正在检索 CUPS 631 驱动库...</div>';
+        logToConsole(`检索 CUPS 驱动库: ${kw}...`);
         try {
-            const res = await fetch(`/api/drivers/search?q=${encodeURIComponent(kw)}`).then(r => r.json());
-            if (res.drivers && res.drivers.length > 0) {
-                box.innerHTML = res.drivers.map(drv => `<div style="padding:6px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.selectDriver('${drv.id}')">🖨️ ${drv.name}</div>`).join('');
-            } else {
-                box.innerHTML = '<div style="padding:6px; color:#ef4444;">未检索到匹配驱动，可上传 PPD 或安装插件</div>';
-            }
+            const resp = await fetch(`/api/drivers/search?q=${encodeURIComponent(kw)}`);
+            const res = await resp.json();
+            box.style.display = "block";
+            box.innerHTML = (res.drivers || []).map(d => `
+                <div style="padding:4px 6px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
+                    <b>${d.id}</b> - <span style="color:#64748b;">${d.info}</span>
+                </div>
+            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动</div>';
         } catch (e) {
-            box.innerHTML = '<div style="padding:6px; color:#ef4444;">检索失败</div>';
+            logToConsole(`驱动搜索失败: ${e.message}`, "error");
         }
     },
 
-    uploadPpd: async function() {},
-    uploadPlugin: async function() {},
+    pickDriver: function(drvId) {
+        document.getElementById("driver-input-val").value = drvId;
+        document.getElementById("driver-search-results").style.display = "none";
+        logToConsole(`已选定驱动: ${drvId}`);
+    },
+
+    submitAddPrinter: async function() {
+        const name = document.getElementById("add-printer-name")?.value.trim();
+        const uri = document.getElementById("discovered-device-select")?.value;
+        const driver = document.getElementById("driver-input-val")?.value.trim();
+        const alertBox = document.getElementById("add-printer-alert");
+
+        if (!name || !uri) {
+            alertBox.innerHTML = '<span style="color:#ef4444;">设备名称与连接端口不能为空</span>';
+            return;
+        }
+
+        logToConsole(`正在创建打印机队列 [${name}]...`);
+        const fd = new FormData();
+        fd.append("action", "add_printer");
+        fd.append("printer", name);
+        fd.append("device_uri", uri);
+        fd.append("driver", driver);
+
+        try {
+            const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
+            const res = await resp.json();
+            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            if (res.success) {
+                this.loadPrinters(true);
+                logToConsole(`打印机 [${name}] 部署成功并上线`, "success");
+            }
+        } catch (e) {
+            logToConsole(`添加打印机异常: ${e.message}`, "error");
+        }
+    },
+
     resetUsb: async function() {
-        if (!confirm('确认发送 USB 总线硬复位信号？')) return;
-        await fetch('/api/system/reset_usb', { method: 'POST' });
-        alert('USB 总线复位指令已下发！');
+        logToConsole("⚡ 正在触发底层 USB 总线重置...");
+        await fetch("/api/system/reset_usb", { method: "POST" });
+        logToConsole("✔ USB 总线已复位", "success");
     },
+
     cleanJobs: async function() {
-        await fetch('/api/jobs/clear', { method: 'POST' });
-        alert('队列已清空！');
-        this.loadPrinters(false);
+        logToConsole("🗑️ 正在清空等待队列...");
+        await fetch("/api/jobs/clear", { method: "POST" });
+        logToConsole("✔ 队列已彻底清理", "success");
     },
+
     cleanDisk: async function() {
-        await fetch('/api/system/clean_tmp', { method: 'POST' });
-        alert('临时闪存与图片缓存已自洁！');
+        logToConsole("🧹 正在释放闪存与临时缓存...");
+        await fetch("/api/system/clean_tmp", { method: "POST" });
+        logToConsole("✔ 磁盘临时垃圾已彻底回收", "success");
     }
 };
 
-const ScanService = {
-    startScan: async function() {},
-    printCurrentFile: async function() {}
+// ==================== 5. 云邮箱服务 ====================
+window.MailService = {
+    saveConfig: async function() {
+        const alertBox = document.getElementById("mail-alert");
+        const body = {
+            enable: document.getElementById("mail-enable")?.checked,
+            server: document.getElementById("mail-server")?.value.trim(),
+            port: document.getElementById("mail-port")?.value.trim(),
+            user: document.getElementById("mail-user")?.value.trim(),
+            password: document.getElementById("mail-pwd")?.value.trim(),
+            keyword: document.getElementById("mail-keyword")?.value.trim(),
+            whitelist: document.getElementById("mail-whitelist")?.value.trim(),
+            default_printer: document.getElementById("mail-default-printer")?.value,
+            pushplus_token: document.getElementById("mail-pushplus-token")?.value.trim()
+        };
+
+        try {
+            const resp = await fetch("/api/mail/config", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            const res = await resp.json();
+            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            logToConsole(`云邮箱配置更新: ${res.msg}`, res.success ? "success" : "error");
+        } catch (e) {
+            alertBox.innerHTML = `<span style="color:#ef4444;">保存失败: ${e.message}</span>`;
+        }
+    }
 };
 
-// 页面加载触发
-document.addEventListener('DOMContentLoaded', () => {
+// 初始化装载
+document.addEventListener("DOMContentLoaded", () => {
+    EnhanceEngine.init();
+    PrintManager.init();
+    IdCardManager.bindBoxEvents(0);
     DashboardService.loadPrinters(false);
-    setupGlobalDragDrop();
-    if (window.DocAI && window.DocAI.init) {
-        window.DocAI.init();
-    }
 });
