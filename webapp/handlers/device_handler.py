@@ -5,16 +5,11 @@ import os
 import re
 import glob
 import time
-import shutil
 import subprocess
 from handlers.base_handler import BaseHandler
 
 CUPS_PPD_DIR = "/etc/cups/ppd"
-
-DIAG_CACHE = {
-    "data": [],
-    "last_time": 0
-}
+DIAG_CACHE = {"data": [], "last_time": 0}
 
 def run_cmd(cmd, env=None, timeout=2):
     if env is None:
@@ -30,14 +25,15 @@ def run_cmd(cmd, env=None, timeout=2):
 def read_ieee1284_raw_status():
     raw_status = ""
     try:
-        for dev_name in os.listdir("/sys/class/usblp") if os.path.exists("/sys/class/usblp") else []:
-            status_file = os.path.join("/sys/class/usblp", dev_name, "device", "ieee1284_id")
-            if os.path.exists(status_file):
-                try:
-                    with open(status_file, "r", encoding="latin-1") as f:
-                        raw_status += f.read() + " "
-                except Exception:
-                    pass
+        if os.path.exists("/sys/class/usblp"):
+            for dev_name in os.listdir("/sys/class/usblp"):
+                status_file = os.path.join("/sys/class/usblp", dev_name, "device", "ieee1284_id")
+                if os.path.exists(status_file):
+                    try:
+                        with open(status_file, "r", encoding="latin-1") as f:
+                            raw_status += f.read() + " "
+                    except Exception:
+                        pass
     except Exception:
         pass
     return raw_status.lower()
@@ -88,11 +84,11 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     if is_e1:
         status_info["media_empty"] = True
         status_info["error_code"] = "E1"
-        status_info["error_desc"] = "进纸盒缺纸 / 纸张尺寸不匹配 (E1)"
+        status_info["error_desc"] = "进纸盒缺纸 / 纸张不匹配 (E1)"
     elif is_e2:
         status_info["door_open"] = True
         status_info["error_code"] = "E2"
-        status_info["error_desc"] = "打印机门盖已打开 (E2)"
+        status_info["error_desc"] = "打印机门盖开启 (E2)"
     elif is_e3:
         status_info["paper_jam"] = True
         status_info["error_code"] = "E3"
@@ -100,7 +96,7 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     elif is_e4:
         status_info["toner_empty"] = True
         status_info["error_code"] = "E4"
-        status_info["error_desc"] = "缺墨 / 硒鼓异常 (E4)"
+        status_info["error_desc"] = "耗材耗尽 / 硒鼓异常 (E4)"
 
     if any(k in block_lower for k in ["toner-low", "low on toner", "墨粉低"]):
         status_info["toner_low"] = True
@@ -108,13 +104,12 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     for line in printer_block.splitlines():
         line_s = line.strip()
         if line_s.startswith("Status:") or line_s.startswith("状态:"):
-            raw_msg = line_s.split(":", 1)[-1].strip()
-            status_info["state_message"] = raw_msg
+            status_info["state_message"] = line_s.split(":", 1)[-1].strip()
 
     if status_info["error_code"]:
         status_info["state_message"] = f"【{status_info['error_code']}】{status_info['error_desc']}"
     elif pending_jobs_output.strip():
-        status_info["state_message"] = "正在打印处理中..."
+        status_info["state_message"] = "正在打印出纸中..."
 
     return status_info
 
@@ -125,11 +120,10 @@ def perform_system_diagnostics(has_any_printer):
         return DIAG_CACHE["data"]
 
     issues = []
-
     if not os.path.exists("/dev/bus/usb"):
         issues.append({
             "level": "danger",
-            "title": "USB设备节点未映射",
+            "title": "USB 设备节点未挂载",
             "detail": "宿主机 /dev/bus/usb 未映射进容器，打印机与扫描仪无法通信。"
         })
 
@@ -137,15 +131,15 @@ def perform_system_diagnostics(has_any_printer):
     if not ok_avahi or not out_a:
         issues.append({
             "level": "danger",
-            "title": "Avahi mDNS 广播未运行",
-            "detail": "Avahi 广播服务离线，导致苹果 iPhone/Mac 无法通过隔空打印搜索到设备。"
+            "title": "Avahi mDNS 服务离线",
+            "detail": "Avahi 广播未运行，苹果 iPhone/Mac 无法通过隔空打印搜索到设备。"
         })
 
     if not has_any_printer:
         issues.append({
             "level": "warning",
-            "title": "未发现已配置的打印机",
-            "detail": "当前系统没有任何可用队列，请在下方【检索系统驱动库】搜索驱动并一键添加。"
+            "title": "系统未添加打印机",
+            "detail": "当前未配置有效队列，请在下方检索硬件并一键配置驱动。"
         })
 
     DIAG_CACHE["data"] = issues
@@ -179,17 +173,15 @@ class DevicesHandler(BaseHandler):
 
             for line in out_d.splitlines():
                 if ":" in line or "：" in line:
-                    default_printer = line.split(":")[-1].split("：")[-1].strip()
+                    default_printer = line.replace("：", ":").split(":")[-1].strip()
 
             if not default_printer and printers_list:
                 default_printer = printers_list[0]
 
-            # 1. 统计当前等待队列任务数
             for line in out_jobs.splitlines():
                 if line.strip():
                     queue_count += 1
 
-            # 2. 统计最近已完成打印历史记录（截取最新 10 条）
             _, out_comp, _ = run_cmd(["lpstat", "-W", "completed", "-o"], env=env, timeout=2)
             for line in reversed(out_comp.splitlines()[-10:]):
                 line_s = line.strip()
@@ -203,9 +195,7 @@ class DevicesHandler(BaseHandler):
 
         except Exception as e:
             print(f"[DevicesHandler] 设备提取异常: {e}", flush=True)
-            out_l = ""
-            out_p = ""
-            out_jobs = ""
+            out_l = out_p = out_jobs = ""
 
         devices = []
         for p in printers_list:
@@ -226,7 +216,6 @@ class DevicesHandler(BaseHandler):
                 "has_error": bool(details["error_code"])
             })
 
-        # 精简响应数据，仅保留核心的三项指标及诊断信息
         self.write_json(True, "", data={
             "printers": devices,
             "default": default_printer,
