@@ -1,6 +1,6 @@
 /**
  * CUPS 智能工作台前端核心驱动
- * 闭环参数与预览联动、端侧 AI 兼容加载与运维控制
+ * 闭环参数联动、状态迁移、身份证增减人自适应与不重叠网格排版
  */
 
 function logToConsole(msg, level = "info") {
@@ -33,6 +33,11 @@ function switchNavTab(tabName) {
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
         DocAI.fetchDeployedModels();
+    } else if (tabName === "scan") {
+        ScanService.loadScanDevices();
+        ScanService.loadScanList();
+    } else if (tabName === "mail") {
+        MailService.loadConfig();
     }
 }
 
@@ -46,6 +51,7 @@ window.EnhanceEngine = {
     totalPages: 0,
     zoomScale: 1.0,
     isLocked: true,
+    rotationDeg: 0,
 
     init: function() {
         this.canvas = document.getElementById("canvas-preview");
@@ -79,6 +85,13 @@ window.EnhanceEngine = {
 
     resetZoom: function() {
         this.zoomScale = 1.0;
+        this.rotationDeg = 0;
+        this.render();
+    },
+
+    rotate: function(angleDelta) {
+        this.rotationDeg = (this.rotationDeg + angleDelta + 360) % 360;
+        logToConsole(`画幅旋转: ${this.rotationDeg}°`);
         this.render();
     },
 
@@ -93,6 +106,16 @@ window.EnhanceEngine = {
 
     render: function() {
         if (!this.canvas || !this.ctx) return;
+        if (PrintManager.currentSubTab === "idcard") {
+            IdCardManager.updateCanvasPreview();
+            return;
+        }
+
+        if (PrintManager.isMultiMergeEnabled() && PrintManager.loadedImages.length > 1) {
+            this.renderMultiImagesGrid();
+            return;
+        }
+
         if (!this.currentRawImage && !this.pdfDoc) return;
 
         const tip = document.getElementById("viewport-empty-tip");
@@ -103,7 +126,6 @@ window.EnhanceEngine = {
         const colorMode = PrintManager.colorMode;
         const enhance = (document.getElementById("p-enhance")?.value === "true");
 
-        // 调整外层 A4 视窗形态
         const viewport = document.getElementById("a4-viewport");
         if (viewport) {
             viewport.className = `sheet-a4-viewport media-${media.toLowerCase()} ${orientation === 'landscape' ? 'landscape' : ''}`;
@@ -133,11 +155,18 @@ window.EnhanceEngine = {
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, targetW, targetH);
 
-        const scale = Math.min((targetW * 0.95) / img.width, (targetH * 0.95) / img.height) * this.zoomScale;
+        const rad = (this.rotationDeg * Math.PI) / 180;
+        const isSwapped = (this.rotationDeg === 90 || this.rotationDeg === 270);
+        const bboxW = isSwapped ? img.height : img.width;
+        const bboxH = isSwapped ? img.width : img.height;
+
+        const scale = Math.min((targetW * 0.95) / bboxW, (targetH * 0.95) / bboxH) * this.zoomScale;
         const drawW = img.width * scale;
         const drawH = img.height * scale;
-        const posX = (targetW - drawW) / 2;
-        const posY = (targetH - drawH) / 2;
+
+        ctx.save();
+        ctx.translate(targetW / 2, targetH / 2);
+        ctx.rotate(rad);
 
         const offCanvas = document.createElement("canvas");
         offCanvas.width = drawW;
@@ -148,7 +177,6 @@ window.EnhanceEngine = {
         const imgData = offCtx.getImageData(0, 0, drawW, drawH);
         const data = imgData.data;
 
-        // 像素级滤镜流水线：白底除法增强与色彩折算
         for (let i = 0; i < data.length; i += 4) {
             let r = data[i];
             let g = data[i + 1];
@@ -176,7 +204,53 @@ window.EnhanceEngine = {
         }
 
         offCtx.putImageData(imgData, 0, 0);
-        ctx.drawImage(offCanvas, posX, posY);
+        ctx.drawImage(offCanvas, -drawW / 2, -drawH / 2);
+        ctx.restore();
+    },
+
+    // 多图拼版网格绝对隔离排版 (杜绝图块重叠)
+    renderMultiImagesGrid: function() {
+        const imgs = PrintManager.loadedImages;
+        const canvas = this.canvas;
+        const ctx = this.ctx;
+        const count = imgs.length;
+
+        const targetW = 1240;
+        const targetH = 1754;
+        canvas.width = targetW;
+        canvas.height = targetH;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, targetW, targetH);
+
+        let cols = 1, rows = 2;
+        if (count >= 3 && count <= 4) { cols = 2; rows = 2; }
+        else if (count >= 5 && count <= 6) { cols = 2; rows = 3; }
+        else if (count > 6) { cols = 2; rows = 4; }
+
+        const cellW = targetW / cols;
+        const cellH = targetH / rows;
+        const padding = 20;
+
+        imgs.slice(0, cols * rows).forEach((item, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const img = item.img;
+
+            const maxBoxW = cellW - padding * 2;
+            const maxBoxH = cellH - padding * 2;
+            const ratio = Math.min(maxBoxW / img.width, maxBoxH / img.height);
+            const drawW = img.width * ratio;
+            const drawH = img.height * ratio;
+
+            const posX = col * cellW + (cellW - drawW) / 2;
+            const posY = row * cellH + (cellH - drawH) / 2;
+
+            ctx.drawImage(img, posX, posY, drawW, drawH);
+            ctx.strokeStyle = "#cbd5e1";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(posX, posY, drawW, drawH);
+        });
     },
 
     renderPdfPage: function() {
@@ -210,11 +284,13 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互与参数管理 ====================
+// ==================== 2. 打印交互与追加管理 ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
     selectedFiles: [],
+    loadedImages: [],
+    currentActiveIndex: 0,
     currentSubTab: "normal",
 
     init: function() {
@@ -231,15 +307,27 @@ window.PrintManager = {
         }
     },
 
+    isMultiMergeEnabled: function() {
+        return document.getElementById("chk-normal-merge")?.checked || false;
+    },
+
     switchSubTab: function(tab) {
         this.currentSubTab = tab;
         document.getElementById("tab-sub-normal")?.classList.toggle("active", tab === "normal");
         document.getElementById("tab-sub-idcard")?.classList.toggle("active", tab === "idcard");
         document.getElementById("sec-upload-normal").style.display = (tab === "normal" ? "block" : "none");
         document.getElementById("sec-upload-idcard").style.display = (tab === "idcard" ? "block" : "none");
+
+        // 动态隐藏/展示去黑底增强与页面范围表单项
+        const enhanceBox = document.getElementById("item-enhance-box");
+        const pageRangesBox = document.getElementById("item-page-ranges-box");
         if (tab === "idcard") {
+            if (enhanceBox) enhanceBox.style.display = "none";
+            if (pageRangesBox) pageRangesBox.style.display = "none";
             IdCardManager.updateCanvasPreview();
         } else {
+            if (enhanceBox) enhanceBox.style.display = "flex";
+            if (pageRangesBox) pageRangesBox.style.display = "flex";
             EnhanceEngine.render();
         }
     },
@@ -248,7 +336,7 @@ window.PrintManager = {
         this.colorMode = mode;
         document.getElementById("btn-color-mono")?.classList.toggle("active", mode === "monochrome");
         document.getElementById("btn-color-rgb")?.classList.toggle("active", mode === "color");
-        logToConsole(`颜色模式切换为: ${mode === "monochrome" ? "黑白" : "彩色"}`);
+        logToConsole(`颜色模式切换: ${mode === "monochrome" ? "黑白" : "彩色"}`);
         EnhanceEngine.render();
     },
 
@@ -256,36 +344,45 @@ window.PrintManager = {
         this.orientation = orient;
         document.getElementById("btn-orient-port")?.classList.toggle("active", orient === "portrait");
         document.getElementById("btn-orient-land")?.classList.toggle("active", orient === "landscape");
-        logToConsole(`打印排版方向切换为: ${orient === "portrait" ? "纵向" : "横向"}`);
+        logToConsole(`排版方向切换: ${orient === "portrait" ? "纵向" : "横向"}`);
         EnhanceEngine.render();
     },
 
     onPaperSizeChange: function() {
-        const size = document.getElementById("p-media")?.value;
-        logToConsole(`纸张介质切换为: ${size}`);
         EnhanceEngine.render();
     },
 
     onEnhanceChange: function() {
-        const state = document.getElementById("p-enhance")?.value;
-        logToConsole(`去黑底全能王增强: ${state === "true" ? "开启" : "关闭"}`);
         EnhanceEngine.render();
     },
 
     onMergeChange: function() {
-        const merge = document.getElementById("chk-normal-merge")?.checked;
-        logToConsole(`多图同页拼版模式: ${merge ? "开启" : "关闭"}`);
+        logToConsole(`多图同页拼版: ${this.isMultiMergeEnabled() ? "开启" : "关闭"}`);
+        EnhanceEngine.render();
     },
 
     onFilesSelected: function(files) {
         if (!files || files.length === 0) return;
-        this.selectedFiles = Array.from(files);
+        const incoming = Array.from(files);
+
+        incoming.forEach(newF => {
+            if (!this.selectedFiles.some(f => f.name === newF.name && f.size === newF.size)) {
+                this.selectedFiles.push(newF);
+            }
+        });
+
         this.updateFileListUI();
+        this.loadSelectedFile(this.selectedFiles.length - 1);
+    },
 
-        const firstFile = files[0];
-        const ext = firstFile.name.split('.').pop().toLowerCase();
+    loadSelectedFile: function(idx) {
+        if (idx < 0 || idx >= this.selectedFiles.length) return;
+        this.currentActiveIndex = idx;
+        const file = this.selectedFiles[idx];
+        const ext = file.name.split('.').pop().toLowerCase();
 
-        logToConsole(`已加载文件: ${firstFile.name} (${(firstFile.size/1024).toFixed(1)} KB)`);
+        this.updateFileListUI();
+        logToConsole(`装载预览: ${file.name}`);
 
         if (ext === "pdf") {
             const reader = new FileReader();
@@ -299,19 +396,22 @@ window.PrintManager = {
                     EnhanceEngine.renderPdfPage();
                 });
             };
-            reader.readAsArrayBuffer(firstFile);
+            reader.readAsArrayBuffer(file);
         } else {
             EnhanceEngine.pdfDoc = null;
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = (e) => {
                 const img = new Image();
-                img.onload = function() {
+                img.onload = () => {
                     EnhanceEngine.currentRawImage = img;
+                    if (!this.loadedImages.some(item => item.name === file.name)) {
+                        this.loadedImages.push({ name: file.name, img: img });
+                    }
                     EnhanceEngine.render();
                 };
                 img.src = e.target.result;
             };
-            reader.readAsDataURL(firstFile);
+            reader.readAsDataURL(file);
         }
     },
 
@@ -325,29 +425,29 @@ window.PrintManager = {
         }
         box.style.display = "flex";
         box.innerHTML = this.selectedFiles.map((f, i) => `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; font-size:11px;">
-                <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">📄 ${f.name}</div>
-                <button type="button" style="background:none; border:none; color:#ef4444; font-weight:700; cursor:pointer;" onclick="PrintManager.removeFile(${i})">×</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:${i === this.currentActiveIndex ? '#eff6ff' : '#f8fafc'}; border:1px solid ${i === this.currentActiveIndex ? '#3b82f6' : '#e2e8f0'}; border-radius:4px; font-size:11px; cursor:pointer;" onclick="PrintManager.loadSelectedFile(${i})">
+                <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:${i === this.currentActiveIndex ? '700' : '400'}; color:${i === this.currentActiveIndex ? '#1d4ed8' : '#334155'};">
+                    ${i === this.currentActiveIndex ? '👉 ' : ''}📄 [${i + 1}] ${f.name}
+                </div>
+                <button type="button" style="background:none; border:none; color:#ef4444; font-weight:700; cursor:pointer; padding:0 4px;" onclick="event.stopPropagation(); PrintManager.removeFile(${i})">×</button>
             </div>
         `).join('');
     },
 
     removeFile: function(idx) {
-        this.selectedFiles.splice(idx, 1);
-        this.updateFileListUI();
+        const removed = this.selectedFiles.splice(idx, 1)[0];
+        this.loadedImages = this.loadedImages.filter(item => item.name !== removed.name);
         if (this.selectedFiles.length > 0) {
-            this.onFilesSelected(this.selectedFiles);
+            const nextIdx = Math.min(this.selectedFiles.length - 1, idx);
+            this.loadSelectedFile(nextIdx);
         } else {
-            EnhanceEngine.currentRawImage = null;
-            EnhanceEngine.pdfDoc = null;
-            const ctx = EnhanceEngine.ctx;
-            if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
-            document.getElementById("viewport-empty-tip").style.display = "block";
+            this.clearFiles();
         }
     },
 
     clearFiles: function() {
         this.selectedFiles = [];
+        this.loadedImages = [];
         this.updateFileListUI();
         EnhanceEngine.currentRawImage = null;
         EnhanceEngine.pdfDoc = null;
@@ -374,7 +474,8 @@ window.PrintManager = {
         fd.append("media", document.getElementById("p-media")?.value || "A4");
         fd.append("enhance", document.getElementById("p-enhance")?.value || "true");
         fd.append("page_ranges", document.getElementById("p-page-ranges")?.value || "");
-        fd.append("multi_merge", document.getElementById("chk-normal-merge")?.checked ? "true" : "false");
+        fd.append("multi_merge", this.isMultiMergeEnabled() ? "true" : "false");
+        fd.append("rotation", EnhanceEngine.rotationDeg);
 
         if (this.currentSubTab === "normal") {
             if (this.selectedFiles.length === 0) {
@@ -416,7 +517,8 @@ window.PrintManager = {
     }
 };
 
-// ==================== 3. 身份证双面排版引擎 ====================
+// ==================== 3. 身份证标准规范排布排版引擎 ====================
+// 单人身份证：正反面严格上下摆放；多人身份证：每人正反面左右并排摆放
 window.IdCardManager = {
     persons: [{ front: null, back: null }],
 
@@ -461,6 +563,20 @@ window.IdCardManager = {
         `;
         container.appendChild(card);
         this.bindBoxEvents(idx);
+        this.updateCanvasPreview();
+    },
+
+    removePerson: function() {
+        if (this.persons.length <= 1) {
+            alert("至少保留 1 人身份证信息！");
+            return;
+        }
+        const lastIdx = this.persons.length - 1;
+        this.persons.pop();
+        const targetEl = document.getElementById(`idcard-person-${lastIdx}`);
+        if (targetEl) targetEl.remove();
+        logToConsole(`已减少至 ${this.persons.length} 人身份证`);
+        this.updateCanvasPreview();
     },
 
     bindBoxEvents: function(idx) {
@@ -500,30 +616,62 @@ window.IdCardManager = {
 
         document.getElementById("viewport-empty-tip").style.display = "none";
 
+        // A4 200 DPI 标准像素画幅: 1654 x 2338
         canvas.width = 1654;
         canvas.height = 2338;
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+        // 身份证 85.6mm x 54mm 对应像素尺寸: 674 x 425
         const cardW = 674;
         const cardH = 425;
+        const count = this.persons.length;
 
-        this.persons.forEach((p, i) => {
-            const baseY = 250 + i * 650;
+        if (count === 1) {
+            // 单人身份证模式：严格纵向上下垂直居中摆放
+            const p = this.persons[0];
+            const gapY = 240;
+            const startY = (canvas.height - (cardH * 2 + gapY)) / 2;
+            const posX = (canvas.width - cardW) / 2;
+
             if (p.front) {
-                const posX = (canvas.width - cardW) / 2;
-                ctx.drawImage(p.front, posX, baseY, cardW, cardH);
+                ctx.drawImage(p.front, posX, startY, cardW, cardH);
+                ctx.strokeStyle = "#cbd5e1";
+                ctx.strokeRect(posX, startY, cardW, cardH);
             }
             if (p.back) {
-                const posX = (canvas.width - cardW) / 2;
-                ctx.drawImage(p.back, posX, baseY + cardH + 40, cardW, cardH);
+                ctx.drawImage(p.back, posX, startY + cardH + gapY, cardW, cardH);
+                ctx.strokeStyle = "#cbd5e1";
+                ctx.strokeRect(posX, startY + cardH + gapY, cardW, cardH);
             }
-        });
+        } else {
+            // 多人身份证模式 (2~3人)：同一人正反面左右并排摆放，多人垂直向下平铺
+            const gapX = 120;
+            const gapY = 160;
+            const totalRowW = cardW * 2 + gapX;
+            const startX = (canvas.width - totalRowW) / 2;
+            const totalH = count * cardH + (count - 1) * gapY;
+            const startY = (canvas.height - totalH) / 2;
+
+            this.persons.forEach((p, idx) => {
+                const currentY = startY + idx * (cardH + gapY);
+                if (p.front) {
+                    ctx.drawImage(p.front, startX, currentY, cardW, cardH);
+                    ctx.strokeStyle = "#cbd5e1";
+                    ctx.strokeRect(startX, currentY, cardW, cardH);
+                }
+                if (p.back) {
+                    ctx.drawImage(p.back, startX + cardW + gapX, currentY, cardW, cardH);
+                    ctx.strokeStyle = "#cbd5e1";
+                    ctx.strokeRect(startX + cardW + gapX, currentY, cardW, cardH);
+                }
+            });
+        }
     },
 
     getMergedBlob: function() {
         return new Promise(resolve => {
-            EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.92);
+            EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.95);
         });
     },
 
@@ -540,23 +688,125 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 设备管理服务 ====================
+// ==================== 4. 扫描硬件交互服务 ====================
+window.ScanService = {
+    loadScanDevices: async function() {
+        try {
+            const resp = await fetch("/api/scan/devices");
+            const res = await resp.json();
+            const select = document.getElementById("scan-dev-select");
+            select.innerHTML = "";
+            const devs = res.data?.devices || [];
+            if (devs.length === 0) {
+                select.innerHTML = '<option value="">未发现扫描仪</option>';
+                return;
+            }
+            devs.forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.id;
+                opt.text = d.name;
+                select.appendChild(opt);
+            });
+        } catch (e) {
+            logToConsole(`获取扫描仪失败: ${e.message}`, "error");
+        }
+    },
+
+    loadScanList: async function() {
+        try {
+            const resp = await fetch("/api/scan/list");
+            const res = await resp.json();
+            const listContainer = document.getElementById("scan-file-list");
+            const files = res.files || [];
+            if (files.length === 0) {
+                listContainer.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂无扫描件历史</div>';
+                return;
+            }
+            listContainer.innerHTML = files.map(f => `
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:4px; padding:6px 8px; display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+                    <div><b>📄 ${f.filename}</b> <span style="color:#64748b;">(${f.size})</span></div>
+                    <div style="display:flex; gap:4px;">
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px;" onclick="ScanService.viewScan('${f.url}')">查看</button>
+                        <a href="${f.download_url}" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px; text-decoration:none;">下载</a>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            logToConsole(`获取扫描存档失败: ${e.message}`, "error");
+        }
+    },
+
+    viewScan: function(url) {
+        const liveImg = document.getElementById("scan-live-img");
+        document.getElementById("scan-empty-tip").style.display = "none";
+        liveImg.src = url;
+        liveImg.style.display = "block";
+    },
+
+    startScan: async function() {
+        const device = document.getElementById("scan-dev-select")?.value;
+        const resVal = document.getElementById("scan-res")?.value;
+        const mode = document.getElementById("scan-mode")?.value;
+        const alertBox = document.getElementById("scan-alert");
+        const btn = document.getElementById("btn-start-scan");
+
+        btn.disabled = true;
+        btn.innerText = "⏳ 正在物理扫描，请勿移动纸张...";
+        alertBox.innerHTML = "";
+        logToConsole("下发硬件扫描指令...");
+
+        const fd = new FormData();
+        fd.append("device", device);
+        fd.append("resolution", resVal);
+        fd.append("mode", mode);
+
+        try {
+            const resp = await fetch("/api/scan", { method: "POST", body: fd });
+            const res = await resp.json();
+            if (res.success) {
+                alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
+                this.viewScan(res.data.url);
+                this.loadScanList();
+                logToConsole("✔ 扫描作业成功完成", "success");
+            } else {
+                alertBox.innerHTML = `<span style="color:#ef4444;">❌ 扫描失败: ${res.msg}</span>`;
+                logToConsole(`扫描错误: ${res.msg}`, "error");
+            }
+        } catch (e) {
+            alertBox.innerHTML = `<span style="color:#ef4444;">通讯异常: ${e.message}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "📷 启动硬件扫描并呈现图像";
+        }
+    }
+};
+
+// ==================== 5. 设备管理与运维服务 ====================
 window.DashboardService = {
     loadPrinters: async function(showToast = false) {
         try {
             const resp = await fetch("/api/devices");
             const res = await resp.json();
             const select = document.getElementById("printer-select");
-            const statusPill = document.getElementById("dash-status-pill");
+            const mailSelect = document.getElementById("mail-default-printer");
+            const statusTag = document.getElementById("printer-status-tag");
             const queueCount = document.getElementById("dash-queue-count");
+            const cardList = document.getElementById("device-card-list");
 
             if (!select) return;
             select.innerHTML = "";
+            if (mailSelect) mailSelect.innerHTML = "";
             const printers = res.printers || [];
 
             if (printers.length === 0) {
                 select.innerHTML = '<option value="">无可用打印机</option>';
-                if (statusPill) statusPill.innerText = "离线";
+                if (mailSelect) mailSelect.innerHTML = '<option value="">无可用设备</option>';
+                if (statusTag) {
+                    statusTag.className = "printer-status-badge badge-offline";
+                    statusTag.innerText = "打印机状态: 离线";
+                }
+                if (queueCount) queueCount.innerText = "0";
+                if (cardList) cardList.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未安装打印机</div>';
                 return;
             }
 
@@ -565,11 +815,31 @@ window.DashboardService = {
                 opt.value = p.name;
                 opt.text = `${p.name} (${p.status || '就绪'})`;
                 select.appendChild(opt);
+                if (mailSelect) {
+                    const optM = document.createElement("option");
+                    optM.value = p.name;
+                    optM.text = p.name;
+                    mailSelect.appendChild(optM);
+                }
             });
 
-            if (statusPill) statusPill.innerText = printers[0].status || "就绪";
+            const currentStatus = printers[0].status || "就绪";
+            if (statusTag) {
+                statusTag.className = `printer-status-badge ${currentStatus.includes("忙") ? 'badge-busy' : 'badge-idle'}`;
+                statusTag.innerText = `打印机状态: ${currentStatus}`;
+            }
             if (queueCount) queueCount.innerText = printers[0].jobs_count || "0";
-            if (showToast) logToConsole("打印机列表与状态刷新完成", "success");
+
+            if (cardList) {
+                cardList.innerHTML = printers.map(p => `
+                    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;">
+                        <div><b>🖨️ ${p.name}</b> <span style="font-size:11px; color:#10b981;">● ${p.status || '就绪'}</span></div>
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.testPage('${p.name}')">测试页</button>
+                    </div>
+                `).join('');
+            }
+
+            if (showToast) logToConsole("打印机列表刷新完成", "success");
         } catch (e) {
             logToConsole(`打印机列表获取失败: ${e.message}`, "error");
         }
@@ -578,6 +848,175 @@ window.DashboardService = {
     onPrinterChange: function() {
         const p = document.getElementById("printer-select")?.value;
         logToConsole(`当前目标打印机切换为: ${p}`);
+    },
+
+    testPage: async function(pName) {
+        logToConsole(`向打印机 [${pName}] 派发测试页...`);
+        try {
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `action=test_page&printer=${encodeURIComponent(pName)}`
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+        } catch (e) {
+            logToConsole(`测试页下发异常: ${e.message}`, "error");
+        }
+    },
+
+    loadDiscoveredDevices: async function() {
+        logToConsole("正在扫描物理端口与设备 URI...");
+        const select = document.getElementById("discovered-device-select");
+        try {
+            const resp = await fetch("/api/devices/discover");
+            const res = await resp.json();
+            select.innerHTML = '<option value="">-- 请选择硬件端口 --</option>';
+            (res.devices || []).forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.uri;
+                opt.text = `${d.info} (${d.uri})`;
+                select.appendChild(opt);
+            });
+            logToConsole(`发现 ${res.devices ? res.devices.length : 0} 个端口`, "success");
+        } catch (e) {
+            logToConsole(`扫描端口失败: ${e.message}`, "error");
+        }
+    },
+
+    onDiscoveredDeviceSelect: function(sel) {
+        const uri = sel.value;
+        if (!uri) return;
+        const nameInput = document.getElementById("add-printer-name");
+        if (nameInput && !nameInput.value) {
+            nameInput.value = uri.split("/").pop().split("?")[0].replace(/[^a-zA-Z0-9_-]/g, "_");
+        }
+    },
+
+    searchDrivers: async function() {
+        const kw = document.getElementById("driver-search-kw")?.value.trim();
+        const box = document.getElementById("driver-search-results");
+        if (!kw) return;
+        logToConsole(`检索驱动: ${kw}...`);
+        try {
+            const resp = await fetch(`/api/drivers/search?q=${encodeURIComponent(kw)}`);
+            const res = await resp.json();
+            box.style.display = "block";
+            box.innerHTML = (res.drivers || []).map(d => `
+                <div style="padding:4px 6px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
+                    <b>${d.id}</b> - <span style="color:#64748b;">${d.info}</span>
+                </div>
+            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动</div>';
+        } catch (e) {
+            logToConsole(`驱动搜索失败: ${e.message}`, "error");
+        }
+    },
+
+    pickDriver: function(drvId) {
+        document.getElementById("driver-input-val").value = drvId;
+        document.getElementById("driver-search-results").style.display = "none";
+        logToConsole(`已选定驱动: ${drvId}`);
+    },
+
+    submitAddPrinter: async function() {
+        const name = document.getElementById("add-printer-name")?.value.trim();
+        const uri = document.getElementById("discovered-device-select")?.value;
+        const driver = document.getElementById("driver-input-val")?.value.trim();
+        const alertBox = document.getElementById("add-printer-alert");
+
+        if (!name || !uri) {
+            alertBox.innerHTML = '<span style="color:#ef4444;">设备名称与连接端口不能为空</span>';
+            return;
+        }
+
+        logToConsole(`正在创建打印机队列 [${name}]...`);
+        const fd = new FormData();
+        fd.append("action", "add_printer");
+        fd.append("printer", name);
+        fd.append("device_uri", uri);
+        fd.append("driver", driver);
+
+        try {
+            const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
+            const res = await resp.json();
+            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            if (res.success) {
+                this.loadPrinters(true);
+                logToConsole(`打印机 [${name}] 部署成功`, "success");
+            }
+        } catch (e) {
+            logToConsole(`添加异常: ${e.message}`, "error");
+        }
+    },
+
+    resetUsb: async function() {
+        logToConsole("⚡ 正在触发 USB 总线重置...");
+        await fetch("/api/system/reset_usb", { method: "POST" });
+        logToConsole("✔ USB 总线已复位", "success");
+    },
+
+    cleanJobs: async function() {
+        logToConsole("🗑️ 正在清空等待队列...");
+        await fetch("/api/jobs/clear", { method: "POST" });
+        logToConsole("✔ 队列已清空", "success");
+    },
+
+    cleanDisk: async function() {
+        logToConsole("🧹 正在释放临时缓存...");
+        await fetch("/api/system/clean_tmp", { method: "POST" });
+        logToConsole("✔ 磁盘临时垃圾已清理", "success");
+    }
+};
+
+// ==================== 6. 云邮箱服务 ====================
+window.MailService = {
+    loadConfig: async function() {
+        try {
+            const resp = await fetch("/api/mail/config");
+            const res = await resp.json();
+            const cfg = res.data || {};
+            document.getElementById("mail-enable").checked = !!cfg.enable;
+            document.getElementById("mail-server").value = cfg.server || "imap.qq.com";
+            document.getElementById("mail-port").value = cfg.port || 993;
+            document.getElementById("mail-user").value = cfg.user || "";
+            document.getElementById("mail-pwd").value = cfg.password || "";
+            document.getElementById("mail-keyword").value = cfg.keyword || "";
+            document.getElementById("mail-whitelist").value = cfg.whitelist || "";
+            document.getElementById("mail-pushplus-token").value = cfg.pushplus_token || "";
+            if (cfg.default_printer) {
+                document.getElementById("mail-default-printer").value = cfg.default_printer;
+            }
+        } catch (e) {
+            logToConsole(`读取邮箱配置异常: ${e.message}`, "error");
+        }
+    },
+
+    saveConfig: async function() {
+        const alertBox = document.getElementById("mail-alert");
+        const body = {
+            enable: document.getElementById("mail-enable")?.checked,
+            server: document.getElementById("mail-server")?.value.trim(),
+            port: document.getElementById("mail-port")?.value.trim(),
+            user: document.getElementById("mail-user")?.value.trim(),
+            password: document.getElementById("mail-pwd")?.value.trim(),
+            keyword: document.getElementById("mail-keyword")?.value.trim(),
+            whitelist: document.getElementById("mail-whitelist")?.value.trim(),
+            default_printer: document.getElementById("mail-default-printer")?.value,
+            pushplus_token: document.getElementById("mail-pushplus-token")?.value.trim()
+        };
+
+        try {
+            const resp = await fetch("/api/mail/config", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            const res = await resp.json();
+            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            logToConsole(`云邮箱配置更新: ${res.msg}`, res.success ? "success" : "error");
+        } catch (e) {
+            alertBox.innerHTML = `<span style="color:#ef4444;">保存失败: ${e.message}</span>`;
+        }
     }
 };
 
