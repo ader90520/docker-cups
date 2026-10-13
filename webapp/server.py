@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import gc
 import sys
 import glob
 import json
@@ -72,7 +73,6 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
 class ModelManagerHandler(tornado.web.RequestHandler):
-    """端侧 ONNX 模型统一管理中枢：在线热上传、枚举查询、物理安全删除"""
     def set_default_headers(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         self.set_header("Access-Control-Allow-Origin", "*")
@@ -131,6 +131,8 @@ class ModelManagerHandler(tornado.web.RequestHandler):
         except Exception as e:
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
+        finally:
+            gc.collect()
 
     def delete(self):
         name = self.get_argument("name", "").strip()
@@ -170,23 +172,23 @@ class SystemAdminRouteAdapter(PrinterAdminHandler):
         self.get_argument = lambda k, d=None: mapped_action if k == "action" else tornado.web.RequestHandler.get_argument(self, k, d)
         super().post()
 
+def periodic_memory_cleanup():
+    gc.collect()
+
 def make_app():
     handlers = [
-        # 1. 静态资源与首页映射
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/models/(.*)", StaticFileHandler, {"path": MODELS_PATH}),
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
-        # 2. 核心业务打印与图像算法接口（已彻底移除 invoice 独立路由）
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/preview/enhance", EnhancePreviewHandler),
         (r"/api/preview_enhance", EnhancePreviewHandler),
         (r"/enhance_preview", EnhancePreviewHandler),
 
-        # 3. 设备与运维状态接口
         (r"/api/devices", DevicesHandler),
         (r"/api/printers", DevicesHandler),
         (r"/api/printer_admin", PrinterAdminHandler),
@@ -196,15 +198,12 @@ def make_app():
         (r"/api/system/(clean_tmp)", SystemAdminRouteAdapter),
         (r"/api/jobs/(clear)", SystemAdminRouteAdapter),
 
-        # 4. 云邮箱设置接口
         (r"/api/mail_config", MailConfigHandler),
         (r"/api/mail/config", MailConfigHandler),
 
-        # 5. 端侧 AI 模型管理
         (r"/api/models", ModelManagerHandler),
         (r"/api/model/upload", ModelManagerHandler),
 
-        # 6. 扫描仪硬件与文件管理接口
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
@@ -220,9 +219,12 @@ if __name__ == "__main__":
     app = make_app()
     server = tornado.httpserver.HTTPServer(
         app,
-        max_buffer_size=67108864,
-        idle_connection_timeout=60
+        max_buffer_size=20971520,  # 严格限制单次上传最大缓冲为 20MB
+        idle_connection_timeout=25
     )
     server.listen(8088, address="0.0.0.0")
     print(">>> [Web] CUPS 智能工作台已在 8088 端口启动 (0.0.0.0:8088)", flush=True)
+
+    # 每隔 60 秒触发垃圾回收，阻断 Arena 驻留
+    tornado.ioloop.PeriodicCallback(periodic_memory_cleanup, 60000).start()
     tornado.ioloop.IOLoop.current().start()
