@@ -3,7 +3,6 @@
  * 闭环参数与预览联动、端侧 AI 兼容加载与运维控制
  */
 
-// 全局日志推送函数
 function logToConsole(msg, level = "info") {
     const consoleBox = document.getElementById("ai-diag-console");
     if (!consoleBox) return;
@@ -12,7 +11,7 @@ function logToConsole(msg, level = "info") {
     if (level === "error") color = "#f87171";
     if (level === "warn") color = "#fbbf24";
     if (level === "success") color = "#4ade80";
-    
+
     const row = document.createElement("div");
     row.style.marginBottom = "3px";
     row.innerHTML = `<span style="color:#64748b;">[${time}]</span> <span style="color:${color};">${msg}</span>`;
@@ -20,25 +19,24 @@ function logToConsole(msg, level = "info") {
     consoleBox.scrollTop = consoleBox.scrollHeight;
 }
 
-// 标签页切换
 function switchNavTab(tabName) {
     document.querySelectorAll(".tab-panel-container").forEach(el => el.style.display = "none");
     document.querySelectorAll(".top-navbar .nav-btn").forEach(btn => btn.classList.remove("active"));
-    
+
     const targetPanel = document.getElementById(`panel-${tabName}`);
     if (targetPanel) targetPanel.style.display = "block";
-    
+
     const navBtns = document.querySelectorAll(".top-navbar .nav-btn");
     const map = { "print": 0, "scan": 1, "devices": 2, "mail": 3 };
     if (navBtns[map[tabName]]) navBtns[map[tabName]].classList.add("active");
-    
+
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
         DocAI.fetchDeployedModels();
     }
 }
 
-// ==================== 1. 核心渲染与参数实时联动引擎 ====================
+// ==================== 1. 响应式实时渲染引擎 ====================
 window.EnhanceEngine = {
     canvas: null,
     ctx: null,
@@ -93,7 +91,6 @@ window.EnhanceEngine = {
         }
     },
 
-    // 响应所有参数切换的核心重绘函数
     render: function() {
         if (!this.canvas || !this.ctx) return;
         if (!this.currentRawImage && !this.pdfDoc) return;
@@ -106,7 +103,7 @@ window.EnhanceEngine = {
         const colorMode = PrintManager.colorMode;
         const enhance = (document.getElementById("p-enhance")?.value === "true");
 
-        // 1. 调整外层 A4 视窗的 CSS aspect-ratio 与画幅形态
+        // 调整外层 A4 视窗形态
         const viewport = document.getElementById("a4-viewport");
         if (viewport) {
             viewport.className = `sheet-a4-viewport media-${media.toLowerCase()} ${orientation === 'landscape' ? 'landscape' : ''}`;
@@ -117,12 +114,10 @@ window.EnhanceEngine = {
             return;
         }
 
-        // 2. 图像渲染与实时算法滤镜
         const img = this.currentRawImage;
         const canvas = this.canvas;
         const ctx = this.ctx;
 
-        // 根据纸张标准设置物理像素尺寸
         let targetW = 1240;
         let targetH = 1754;
         if (media === "A5") { targetW = 874; targetH = 1240; }
@@ -135,18 +130,15 @@ window.EnhanceEngine = {
         canvas.width = targetW;
         canvas.height = targetH;
 
-        // 白底铺满
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, targetW, targetH);
 
-        // 计算居中自适应
         const scale = Math.min((targetW * 0.95) / img.width, (targetH * 0.95) / img.height) * this.zoomScale;
         const drawW = img.width * scale;
         const drawH = img.height * scale;
         const posX = (targetW - drawW) / 2;
         const posY = (targetH - drawH) / 2;
 
-        // 离屏渲染并提取像素做实时算法滤镜
         const offCanvas = document.createElement("canvas");
         offCanvas.width = drawW;
         offCanvas.height = drawH;
@@ -156,13 +148,12 @@ window.EnhanceEngine = {
         const imgData = offCtx.getImageData(0, 0, drawW, drawH);
         const data = imgData.data;
 
-        // 3. 算法流水线：去黑底背景增强与黑白/彩色色彩映射
+        // 像素级滤镜流水线：白底除法增强与色彩折算
         for (let i = 0; i < data.length; i += 4) {
             let r = data[i];
             let g = data[i + 1];
             let b = data[i + 2];
 
-            // 去黑底全能王白底算法 (局部线性增益)
             if (enhance) {
                 const maxVal = Math.max(r, g, b);
                 const bgFactor = maxVal > 110 ? 255 / (maxVal + 15) : 1.0;
@@ -171,7 +162,6 @@ window.EnhanceEngine = {
                 b = Math.min(255, b * bgFactor);
             }
 
-            // 黑白模式像素折算
             if (colorMode === "monochrome") {
                 const gray = 0.299 * r + 0.587 * g + 0.114 * b;
                 const ink = gray < 185 ? Math.max(0, gray * 0.7 - 10) : 255;
@@ -192,7 +182,6 @@ window.EnhanceEngine = {
     renderPdfPage: function() {
         if (!this.pdfDoc) return;
         this.pdfDoc.getPage(this.currentPage).then(page => {
-            const orientation = PrintManager.orientation;
             const viewportDef = page.getViewport({ scale: 1.5 });
             const canvas = this.canvas;
             const ctx = this.ctx;
@@ -202,7 +191,6 @@ window.EnhanceEngine = {
 
             const renderContext = { canvasContext: ctx, viewport: viewportDef };
             page.render(renderContext).promise.then(() => {
-                // 如果是黑白模式，将 PDF 渲染结果灰度化
                 if (PrintManager.colorMode === "monochrome") {
                     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     const data = imgData.data;
@@ -337,9 +325,9 @@ window.PrintManager = {
         }
         box.style.display = "flex";
         box.innerHTML = this.selectedFiles.map((f, i) => `
-            <div class="file-item-row ${i === 0 ? 'active' : ''}">
-                <div class="file-item-name">📄 ${f.name}</div>
-                <button type="button" class="btn-file-remove" onclick="PrintManager.removeFile(${i})">×</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; font-size:11px;">
+                <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">📄 ${f.name}</div>
+                <button type="button" style="background:none; border:none; color:#ef4444; font-weight:700; cursor:pointer;" onclick="PrintManager.removeFile(${i})">×</button>
             </div>
         `).join('');
     },
@@ -442,10 +430,14 @@ window.IdCardManager = {
 
         const container = document.getElementById("idcard-person-container");
         const card = document.createElement("div");
-        card.className = "idcard-person-card";
+        card.style.background = "#f8fafc";
+        card.style.border = "1px solid #e2e8f0";
+        card.style.borderRadius = "6px";
+        card.style.padding = "10px";
+        card.style.marginBottom = "8px";
         card.id = `idcard-person-${idx}`;
         card.innerHTML = `
-            <div class="idcard-person-title">第 ${idx + 1} 人身份证信息</div>
+            <div style="font-size:12px; font-weight:700; color:#334155; margin-bottom:8px;">第 ${idx + 1} 人身份证信息</div>
             <div class="idcard-ratio-grid">
                 <div class="idcard-ratio-box" id="idcard-slot-front-${idx}">
                     <div class="idcard-ratio-placeholder" id="placeholder-front-${idx}">
@@ -508,16 +500,13 @@ window.IdCardManager = {
 
         document.getElementById("viewport-empty-tip").style.display = "none";
 
-        // A4 200 DPI 标准像素：1654 x 2338
         canvas.width = 1654;
         canvas.height = 2338;
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // 身份证 85.6mm x 54mm 对应像素 (200 DPI 下为 674 x 425)
         const cardW = 674;
         const cardH = 425;
-        const count = this.persons.length;
 
         this.persons.forEach((p, i) => {
             const baseY = 250 + i * 650;
@@ -551,22 +540,23 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 设备管理与运维 ====================
+// ==================== 4. 设备管理服务 ====================
 window.DashboardService = {
     loadPrinters: async function(showToast = false) {
         try {
             const resp = await fetch("/api/devices");
             const res = await resp.json();
             const select = document.getElementById("printer-select");
-            const cardList = document.getElementById("device-card-list");
-            if (!select) return;
+            const statusPill = document.getElementById("dash-status-pill");
+            const queueCount = document.getElementById("dash-queue-count");
 
+            if (!select) return;
             select.innerHTML = "";
             const printers = res.printers || [];
 
             if (printers.length === 0) {
                 select.innerHTML = '<option value="">无可用打印机</option>';
-                if (cardList) cardList.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未安装打印机</div>';
+                if (statusPill) statusPill.innerText = "离线";
                 return;
             }
 
@@ -577,14 +567,8 @@ window.DashboardService = {
                 select.appendChild(opt);
             });
 
-            if (cardList) {
-                cardList.innerHTML = printers.map(p => `
-                    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;">
-                        <div><b>🖨️ ${p.name}</b> <span style="font-size:11px; color:#10b981;">● ${p.status || '就绪'}</span></div>
-                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.testPage('${p.name}')">测试页</button>
-                    </div>
-                `).join('');
-            }
+            if (statusPill) statusPill.innerText = printers[0].status || "就绪";
+            if (queueCount) queueCount.innerText = printers[0].jobs_count || "0";
             if (showToast) logToConsole("打印机列表与状态刷新完成", "success");
         } catch (e) {
             logToConsole(`打印机列表获取失败: ${e.message}`, "error");
@@ -594,158 +578,9 @@ window.DashboardService = {
     onPrinterChange: function() {
         const p = document.getElementById("printer-select")?.value;
         logToConsole(`当前目标打印机切换为: ${p}`);
-    },
-
-    testPage: async function(pName) {
-        logToConsole(`向打印机 [${pName}] 派发标准 CUPS 测试页...`);
-        try {
-            const resp = await fetch("/api/printer_admin", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: `action=test_page&printer=${encodeURIComponent(pName)}`
-            });
-            const res = await resp.json();
-            logToConsole(res.msg, res.success ? "success" : "error");
-        } catch (e) {
-            logToConsole(`测试页下发异常: ${e.message}`, "error");
-        }
-    },
-
-    loadDiscoveredDevices: async function() {
-        logToConsole("正在扫描物理 USB 总线与网络端口...");
-        const select = document.getElementById("discovered-device-select");
-        try {
-            const resp = await fetch("/api/devices/discover");
-            const res = await resp.json();
-            select.innerHTML = '<option value="">-- 请选择硬件端口 --</option>';
-            (res.devices || []).forEach(d => {
-                const opt = document.createElement("option");
-                opt.value = d.uri;
-                opt.text = `${d.info} (${d.uri})`;
-                select.appendChild(opt);
-            });
-            logToConsole(`扫描完成，发现 ${res.devices ? res.devices.length : 0} 个物理端口`, "success");
-        } catch (e) {
-            logToConsole(`硬件扫描失败: ${e.message}`, "error");
-        }
-    },
-
-    onDiscoveredDeviceSelect: function(sel) {
-        const uri = sel.value;
-        if (!uri) return;
-        const nameInput = document.getElementById("add-printer-name");
-        if (nameInput && !nameInput.value) {
-            nameInput.value = uri.split("/").pop().split("?")[0].replace(/[^a-zA-Z0-9_-]/g, "_");
-        }
-    },
-
-    searchDrivers: async function() {
-        const kw = document.getElementById("driver-search-kw")?.value.trim();
-        const box = document.getElementById("driver-search-results");
-        if (!kw) return;
-        logToConsole(`检索 CUPS 驱动库: ${kw}...`);
-        try {
-            const resp = await fetch(`/api/drivers/search?q=${encodeURIComponent(kw)}`);
-            const res = await resp.json();
-            box.style.display = "block";
-            box.innerHTML = (res.drivers || []).map(d => `
-                <div style="padding:4px 6px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
-                    <b>${d.id}</b> - <span style="color:#64748b;">${d.info}</span>
-                </div>
-            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动</div>';
-        } catch (e) {
-            logToConsole(`驱动搜索失败: ${e.message}`, "error");
-        }
-    },
-
-    pickDriver: function(drvId) {
-        document.getElementById("driver-input-val").value = drvId;
-        document.getElementById("driver-search-results").style.display = "none";
-        logToConsole(`已选定驱动: ${drvId}`);
-    },
-
-    submitAddPrinter: async function() {
-        const name = document.getElementById("add-printer-name")?.value.trim();
-        const uri = document.getElementById("discovered-device-select")?.value;
-        const driver = document.getElementById("driver-input-val")?.value.trim();
-        const alertBox = document.getElementById("add-printer-alert");
-
-        if (!name || !uri) {
-            alertBox.innerHTML = '<span style="color:#ef4444;">设备名称与连接端口不能为空</span>';
-            return;
-        }
-
-        logToConsole(`正在创建打印机队列 [${name}]...`);
-        const fd = new FormData();
-        fd.append("action", "add_printer");
-        fd.append("printer", name);
-        fd.append("device_uri", uri);
-        fd.append("driver", driver);
-
-        try {
-            const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
-            const res = await resp.json();
-            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
-            if (res.success) {
-                this.loadPrinters(true);
-                logToConsole(`打印机 [${name}] 部署成功并上线`, "success");
-            }
-        } catch (e) {
-            logToConsole(`添加打印机异常: ${e.message}`, "error");
-        }
-    },
-
-    resetUsb: async function() {
-        logToConsole("⚡ 正在触发底层 USB 总线重置...");
-        await fetch("/api/system/reset_usb", { method: "POST" });
-        logToConsole("✔ USB 总线已复位", "success");
-    },
-
-    cleanJobs: async function() {
-        logToConsole("🗑️ 正在清空等待队列...");
-        await fetch("/api/jobs/clear", { method: "POST" });
-        logToConsole("✔ 队列已彻底清理", "success");
-    },
-
-    cleanDisk: async function() {
-        logToConsole("🧹 正在释放闪存与临时缓存...");
-        await fetch("/api/system/clean_tmp", { method: "POST" });
-        logToConsole("✔ 磁盘临时垃圾已彻底回收", "success");
     }
 };
 
-// ==================== 5. 云邮箱服务 ====================
-window.MailService = {
-    saveConfig: async function() {
-        const alertBox = document.getElementById("mail-alert");
-        const body = {
-            enable: document.getElementById("mail-enable")?.checked,
-            server: document.getElementById("mail-server")?.value.trim(),
-            port: document.getElementById("mail-port")?.value.trim(),
-            user: document.getElementById("mail-user")?.value.trim(),
-            password: document.getElementById("mail-pwd")?.value.trim(),
-            keyword: document.getElementById("mail-keyword")?.value.trim(),
-            whitelist: document.getElementById("mail-whitelist")?.value.trim(),
-            default_printer: document.getElementById("mail-default-printer")?.value,
-            pushplus_token: document.getElementById("mail-pushplus-token")?.value.trim()
-        };
-
-        try {
-            const resp = await fetch("/api/mail/config", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
-            const res = await resp.json();
-            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
-            logToConsole(`云邮箱配置更新: ${res.msg}`, res.success ? "success" : "error");
-        } catch (e) {
-            alertBox.innerHTML = `<span style="color:#ef4444;">保存失败: ${e.message}</span>`;
-        }
-    }
-};
-
-// 初始化装载
 document.addEventListener("DOMContentLoaded", () => {
     EnhanceEngine.init();
     PrintManager.init();
