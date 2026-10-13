@@ -1,5 +1,5 @@
 /**
- * 端侧 ONNX 运算中枢 (移动端严格单线程与无 SIMD 兼容版)
+ * 端侧 ONNX 运算中枢 (移动端单线程与无 SIMD 兼容版)
  */
 
 window.DocAI = {
@@ -15,7 +15,6 @@ window.DocAI = {
                 return;
             }
 
-            // 彻底杜绝 iOS 16.1+ 弹窗报错与线程崩溃
             ort.env.wasm.numThreads = 1;
             ort.env.wasm.simd = false;
 
@@ -41,7 +40,6 @@ window.DocAI = {
                     pill.style.color = "#166534";
                 }
             } catch (loadErr) {
-                // 优雅降级通道，杜绝阻塞弹窗
                 logToConsole(`本地模型未挂载或算子不兼容: ${loadErr.message}`, "warn");
                 this.updateUIStatus("主机端代理", "宿主机计算", "服务端滤镜", "0ms");
 
