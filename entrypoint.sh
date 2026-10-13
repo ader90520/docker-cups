@@ -1,12 +1,15 @@
 #!/bin/bash
 set -e
 
-# 生成并强制生效 UTF-8 中文本地化
-locale-gen zh_CN.UTF-8 2>/dev/null || true
+# ================= 0. 嵌入式系统轻量内存与区域语言约束 =================
 export LC_ALL="zh_CN.UTF-8"
 export LANG="zh_CN.UTF-8"
 export LANGUAGE="zh_CN:zh"
+export OMP_NUM_THREADS=1
+export MALLOC_ARENA_MAX=2
+export OPENCV_LOG_LEVEL=ERROR
 
+locale-gen zh_CN.UTF-8 2>/dev/null || true
 [ -n "$TZ" ] && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # ================= 1. 宿主机环境自动打补丁与自愈 =================
@@ -49,7 +52,7 @@ if [ -f /etc/sane.d/dll.conf ]; then
     grep -q "^hpaio" /etc/sane.d/dll.conf || echo "hpaio" >> /etc/sane.d/dll.conf
 fi
 
-# ================= 4. 断电残留清理与目录自愈 =================
+# ================= 4. 断电残留清理与全量目录结构自愈 =================
 rm -rf /var/run/dbus/* \
        /var/run/avahi-daemon/* \
        /var/lock/sane/* \
@@ -58,8 +61,31 @@ rm -rf /var/run/dbus/* \
        /run/cups/cups.sock \
        /run/cups/cupsd.pid 2>/dev/null || true
 
-mkdir -p /opt/cups_data /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /etc/cups/ppd /tmp/cups_web_uploads /tmp/mail_print_tasks /usr/share/hplip/data/models /opt/webapp/data /opt/webapp/static
-chmod 777 /scans /var/lock/sane /var/run/lock /var/run/dbus /var/run/avahi-daemon /tmp/cups_web_uploads /tmp/mail_print_tasks /opt/webapp/data /opt/webapp/static 2>/dev/null || true
+# 严格保证四项持久化目录及运行时临时目录存在
+mkdir -p /opt/cups_data \
+         /scans \
+         /var/lock/sane \
+         /var/run/lock \
+         /var/run/dbus \
+         /var/run/avahi-daemon \
+         /etc/cups/ppd \
+         /tmp/cups_web_uploads \
+         /tmp/mail_print_tasks \
+         /usr/share/hplip/data/models \
+         /opt/webapp/data \
+         /opt/webapp/static \
+         /opt/webapp/models
+
+chmod -R 777 /scans \
+             /var/lock/sane \
+             /var/run/lock \
+             /var/run/dbus \
+             /var/run/avahi-daemon \
+             /tmp/cups_web_uploads \
+             /tmp/mail_print_tasks \
+             /opt/webapp/data \
+             /opt/webapp/static \
+             /opt/webapp/models 2>/dev/null || true
 
 if [ -f /opt/webapp/index.html ] && [ ! -f /opt/webapp/static/index.html ]; then
     cp -f /opt/webapp/index.html /opt/webapp/static/index.html 2>/dev/null || true
@@ -81,7 +107,7 @@ sleep 1
 avahi-daemon -D 2>/dev/null || service avahi-daemon start 2>/dev/null || true
 sleep 1
 
-# ================= 6. 常驻后台守护进程 =================
+# ================= 6. 常驻后台守护进程 (带防语法越界防护) =================
 auto_usb_daemon() {
     echo ">>> [Hotplug] 自动热插拔与设备恢复守护已上线..."
     while true; do
@@ -93,8 +119,10 @@ auto_usb_daemon() {
         fi
         PRINTER_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
         if [ -n "$PRINTER_LIST" ]; then
-            cupsenable $PRINTER_LIST 2>/dev/null || true
-            cupsaccept $PRINTER_LIST 2>/dev/null || true
+            for p in $PRINTER_LIST; do
+                cupsenable "$p" 2>/dev/null || true
+                cupsaccept "$p" 2>/dev/null || true
+            done
         fi
         sleep 6
     done
@@ -201,15 +229,12 @@ mkdir -p /usr/share/cups/templates \
          /usr/share/cups/locale/zh \
          /usr/share/cups/doc-root/zh_CN
 
-# 1. 编译并安装系统级消息翻译 (.mo)
 if [ -f /opt/i18/cups_zh.po ]; then
     msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
 fi
 
-# 2. 核心修复：彻底覆盖根模板与所有语言协商子目录
-# 优先查找 /opt/i18/zh_CN，其次查找 /opt/i18/templates
 SRC_TMPL=""
 if [ -d "/opt/i18/zh_CN" ]; then
     SRC_TMPL="/opt/i18/zh_CN"
@@ -223,7 +248,6 @@ if [ -n "$SRC_TMPL" ]; then
              /usr/share/cups/templates/zh-cn \
              /usr/share/cups/templates/zh-Hans
 
-    # 强制将默认英文模板完全替换为中文版本（这样即便请求头缺少 zh，渲染出的也是中文）
     cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/ 2>/dev/null || true
     cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
     cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh/ 2>/dev/null || true
@@ -231,7 +255,6 @@ if [ -n "$SRC_TMPL" ]; then
     cp -rf "$SRC_TMPL"/* /usr/share/cups/templates/zh-Hans/ 2>/dev/null || true
 fi
 
-# 3. 静态首页多语言链接绑定
 ZH_INDEX=""
 if [ -f /opt/i18/zh_CN/index.html ]; then
     ZH_INDEX="/opt/i18/zh_CN/index.html"
@@ -246,7 +269,6 @@ if [ -n "$ZH_INDEX" ]; then
     ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
 fi
 
-# 4. 样式修补：消除内嵌多层 h2 导致的重叠文字排版 BUG
 CSS_FILE="/usr/share/cups/doc-root/cups.css"
 if [ -f "$CSS_FILE" ]; then
     cat << 'EOF' >> "$CSS_FILE"
@@ -268,8 +290,10 @@ sleep 2
 
 PRINTER_INIT_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
 if [ -n "$PRINTER_INIT_LIST" ]; then
-    cupsenable $PRINTER_INIT_LIST 2>/dev/null || true
-    cupsaccept $PRINTER_INIT_LIST 2>/dev/null || true
+    for p in $PRINTER_INIT_LIST; do
+        cupsenable "$p" 2>/dev/null || true
+        cupsaccept "$p" 2>/dev/null || true
+    done
 fi
 
 echo ">>> [2/2] 启动 8088 智能控制台..."
