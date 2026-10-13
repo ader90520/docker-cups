@@ -216,51 +216,77 @@ DefaultEncryption Never
 </Policy>
 EOF
 
-# ================= 8. 全量中文模板与子页面深度注入 =================
+# ================= 8. 全量中文模板与子页面深度注入 (自适应彻底修复) =================
 echo ">>> [I18N] 执行 CUPS 全量中文界面与子页面模板注入..."
 
-# 1. 深度注入 /opt/i18/zh_CN/ 下的所有 .tmpl 模板
+# 1. 自适应探测模板目录（兼容 zh_CN、templates、tmpl）
+TMPL_SOURCE=""
 if [ -d "/opt/i18/zh_CN" ]; then
-    echo ">>> 发现中文模板源: /opt/i18/zh_CN/"
-    
+    TMPL_SOURCE="/opt/i18/zh_CN"
+elif [ -d "/opt/i18/templates" ]; then
+    TMPL_SOURCE="/opt/i18/templates"
+elif [ -d "/opt/i18/tmpl" ]; then
+    TMPL_SOURCE="/opt/i18/tmpl"
+fi
+
+if [ -n "$TMPL_SOURCE" ]; then
+    echo ">>> 发现中文模板源: $TMPL_SOURCE"
     # 强制覆盖根级默认模板目录（根除 fallback 英文缺陷）
-    cp -rf /opt/i18/zh_CN/*.tmpl /usr/share/cups/templates/ 2>/dev/null || true
+    cp -rf "$TMPL_SOURCE"/*.tmpl /usr/share/cups/templates/ 2>/dev/null || true
     
     # 全量覆盖所有可能的语言别名子目录
     for lang in zh_CN zh zh-CN zh_Hans zh-Hans; do
         mkdir -p "/usr/share/cups/templates/$lang"
-        cp -rf /opt/i18/zh_CN/*.tmpl "/usr/share/cups/templates/$lang/" 2>/dev/null || true
+        cp -rf "$TMPL_SOURCE"/*.tmpl "/usr/share/cups/templates/$lang/" 2>/dev/null || true
     done
+else
+    echo ">>> ⚠️ 警告: 未找到任何 .tmpl 模板源目录！检查 /opt/i18 结构"
 fi
 
-# 2. 编译 gettext 语言包 (/opt/i18/cups_zh.po)
+# 2. 自适应探测并编译 gettext 语言包 (兼容 cups_zh.po / cups_zh_CN.po / zh_CN.po)
+PO_FILE=""
 if [ -f "/opt/i18/cups_zh.po" ]; then
-    echo ">>> 编译 /opt/i18/cups_zh.po 语言字典..."
+    PO_FILE="/opt/i18/cups_zh.po"
+elif [ -f "/opt/i18/cups_zh_CN.po" ]; then
+    PO_FILE="/opt/i18/cups_zh_CN.po"
+elif [ -f "/opt/i18/zh_CN.po" ]; then
+    PO_FILE="/opt/i18/zh_CN.po"
+fi
+
+if [ -n "$PO_FILE" ]; then
+    echo ">>> 发现并编译语言字典: $PO_FILE"
     mkdir -p /usr/share/cups/locale/zh_CN \
              /usr/share/cups/locale/zh \
              /usr/share/cups/locale/zh-CN \
              /usr/share/cups/locale/zh_Hans \
              /usr/share/cups/locale/zh-Hans
     
-    msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /opt/i18/cups_zh.po 2>/dev/null || true
+    msgfmt -o /usr/share/cups/locale/zh_CN/cups_zh_CN.mo "$PO_FILE" 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh/cups_zh.mo 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_CN/cups_zh.mo 2>/dev/null || true
-    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh-CN/cups_zh_CN.mo 2>/dev/null || true
+    cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh-CN/cups_zh-CN.mo 2>/dev/null || true
     cp -f /usr/share/cups/locale/zh_CN/cups_zh_CN.mo /usr/share/cups/locale/zh_Hans/cups_zh_Hans.mo 2>/dev/null || true
 fi
 
 # 3. 覆盖静态首页 index.html
-if [ -f "/opt/i18/index.html" ]; then
-    echo ">>> 注入 /opt/i18/index.html 首页..."
+INDEX_HTML=""
+if [ -f "/opt/i18/zh_CN/index.html" ]; then
+    INDEX_HTML="/opt/i18/zh_CN/index.html"
+elif [ -f "/opt/i18/index.html" ]; then
+    INDEX_HTML="/opt/i18/index.html"
+fi
+
+if [ -n "$INDEX_HTML" ]; then
+    echo ">>> 注入首页文件: $INDEX_HTML"
     mkdir -p /usr/share/cups/doc-root/zh_CN /usr/share/cups/doc-root/zh /usr/share/cups/doc-root/zh-CN
-    cp -f /opt/i18/index.html /usr/share/cups/doc-root/index.html 2>/dev/null || true
-    cp -f /opt/i18/index.html /usr/share/cups/doc-root/zh_CN/index.html 2>/dev/null || true
-    cp -f /opt/i18/index.html /usr/share/cups/doc-root/zh/index.html 2>/dev/null || true
+    cp -f "$INDEX_HTML" /usr/share/cups/doc-root/index.html 2>/dev/null || true
+    cp -f "$INDEX_HTML" /usr/share/cups/doc-root/zh_CN/index.html 2>/dev/null || true
+    cp -f "$INDEX_HTML" /usr/share/cups/doc-root/zh/index.html 2>/dev/null || true
     ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh 2>/dev/null || true
     ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
 fi
 
-# 4. 纠偏文件读取权限
+# 4. 纠偏文件读取权限 (确保 lp 与 root 均能无阻碍读取)
 chmod -R 755 /usr/share/cups/templates /usr/share/cups/locale /usr/share/cups/doc-root 2>/dev/null || true
 
 # ================= 9. 启动核心服务 =================
