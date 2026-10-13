@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 导入业务模块 (保留原代码所有 handler 导入，未删动一行)
+# 导入业务模块 (完整保留原代码所有 handler)
 from handlers.print_handler import PrintHandler
 from handlers.idcard_handler import IDCardHandler
 from handlers.invoice_handler import InvoiceHandler
@@ -74,49 +74,13 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
-class ModelUploadHandler(tornado.web.RequestHandler):
-    """支持端侧 ONNX 模型的在线热上传与持久化存储"""
-    def post(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        try:
-            # 兼容 model_file 与 model 两种上传键名
-            files = self.request.files.get("model_file", []) or self.request.files.get("model", [])
-            if not files:
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
-                return
-
-            upload_file = files[0]
-            filename = upload_file["filename"]
-            if not filename.lower().endswith(".onnx"):
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "仅支持上传 .onnx 格式的模型文件"}))
-                return
-
-            target_path = os.path.join(MODELS_PATH, filename)
-            with open(target_path, "wb") as f:
-                f.write(upload_file["body"])
-
-            # 兼容默认切边模型命名
-            default_corner_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
-            if "corner" in filename.lower() or not os.path.exists(default_corner_path):
-                with open(default_corner_path, "wb") as f:
-                    f.write(upload_file["body"])
-
-            self.write(json.dumps({
-                "success": True,
-                "msg": f"模型 {filename} 已成功上传并部署至 /models/{filename}"
-            }))
-        except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
-
 class ModelManagerHandler(tornado.web.RequestHandler):
-    """已部署模型列表查询与单键物理移除管理接口"""
+    """端侧 ONNX 模型统一管理中枢：在线热上传、枚举查询、物理安全删除"""
     def set_default_headers(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
         self.set_header("Access-Control-Allow-Origin", "*")
-        self.set_header("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+        self.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.set_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
 
     def options(self):
         self.set_status(204)
@@ -140,10 +104,44 @@ class ModelManagerHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
+    def post(self):
+        """同时兼容 /api/models 与 /api/model/upload 的文件上传"""
+        try:
+            files = self.request.files.get("model_file", []) or self.request.files.get("model", [])
+            if not files:
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
+                return
+
+            upload_file = files[0]
+            filename = os.path.basename(upload_file["filename"])
+            if not filename.lower().endswith(".onnx"):
+                self.set_status(400)
+                self.write(json.dumps({"success": False, "msg": "仅支持上传 .onnx 格式的模型文件"}))
+                return
+
+            target_path = os.path.join(MODELS_PATH, filename)
+            with open(target_path, "wb") as f:
+                f.write(upload_file["body"])
+
+            # 若模型包含 corner 或当前默认切边模型缺失，同步更新 doc_corner.onnx
+            default_corner_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
+            if "corner" in filename.lower() or not os.path.exists(default_corner_path):
+                with open(default_corner_path, "wb") as f:
+                    f.write(upload_file["body"])
+
+            self.write(json.dumps({
+                "success": True,
+                "msg": f"模型 {filename} 已成功上传并部署至 /models/{filename}"
+            }))
+        except Exception as e:
+            self.set_status(500)
+            self.write(json.dumps({"success": False, "msg": str(e)}))
+
     def delete(self):
         """根据名称物理删除指定的 .onnx 模型文件"""
         name = self.get_argument("name", "").strip()
-        # 安全防御：杜绝路径穿越与非 onnx 文件误删
+        # 防路径穿越防御
         if not name or "/" in name or "\\" in name or not name.lower().endswith('.onnx'):
             self.set_status(400)
             self.write(json.dumps({"success": False, "msg": "非法模型文件名"}))
@@ -161,6 +159,26 @@ class ModelManagerHandler(tornado.web.RequestHandler):
             self.set_status(404)
             self.write(json.dumps({"success": False, "msg": "模型文件不存在"}))
 
+class SystemAdminRouteAdapter(PrinterAdminHandler):
+    """路由适配器：将前端 app.js 调用的细分系统路由透传至 PrinterAdminHandler"""
+    def get(self, route_type):
+        if route_type == "discover":
+            self.get_argument = lambda k, d=None: "discovered_devices" if k == "action" else d
+        elif route_type == "search":
+            q_val = tornado.web.RequestHandler.get_argument(self, "q", "")
+            self.get_argument = lambda k, d=None: "drivers" if k == "action" else (q_val if k == "q" else d)
+        super().get()
+
+    def post(self, route_type):
+        action_map = {
+            "reset_usb": "reset_usb",
+            "clear": "cancel_all",
+            "clean_tmp": "clean_disk"
+        }
+        mapped_action = action_map.get(route_type, route_type)
+        self.get_argument = lambda k, d=None: mapped_action if k == "action" else tornado.web.RequestHandler.get_argument(self, k, d)
+        super().post()
+
 def make_app():
     handlers = [
         # 1. 静态资源与首页映射
@@ -174,16 +192,29 @@ def make_app():
         (r"/api/print", PrintHandler),
         (r"/api/idcard", IDCardHandler),
         (r"/api/invoice", InvoiceHandler),
-        (r"/api/devices", DevicesHandler),
-        (r"/api/printer_admin", PrinterAdminHandler),
-        (r"/api/mail_config", MailConfigHandler),
         (r"/api/preview/enhance", EnhancePreviewHandler),
         (r"/api/preview_enhance", EnhancePreviewHandler),
         (r"/enhance_preview", EnhancePreviewHandler),
-        (r"/api/model/upload", ModelUploadHandler),
-        (r"/api/models", ModelManagerHandler),  # 挂载模型列表与删除接口
 
-        # 3. 扫描仪接口
+        # 3. 设备与运维状态接口 (全量兼容 /api/printers 与 /api/devices)
+        (r"/api/devices", DevicesHandler),
+        (r"/api/printers", DevicesHandler),
+        (r"/api/printer_admin", PrinterAdminHandler),
+        (r"/api/devices/(discover)", SystemAdminRouteAdapter),
+        (r"/api/drivers/(search)", SystemAdminRouteAdapter),
+        (r"/api/system/(reset_usb)", SystemAdminRouteAdapter),
+        (r"/api/system/(clean_tmp)", SystemAdminRouteAdapter),
+        (r"/api/jobs/(clear)", SystemAdminRouteAdapter),
+
+        # 4. 云邮箱设置接口 (双向兼容带/不带斜杠)
+        (r"/api/mail_config", MailConfigHandler),
+        (r"/api/mail/config", MailConfigHandler),
+
+        # 5. 端侧 AI 模型管理 (POST/GET/DELETE 统一接入)
+        (r"/api/models", ModelManagerHandler),
+        (r"/api/model/upload", ModelManagerHandler),
+
+        # 6. 扫描仪硬件与文件管理接口
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
@@ -202,8 +233,13 @@ def make_app():
 
 if __name__ == "__main__":
     app = make_app()
-    server = tornado.httpserver.HTTPServer(app, max_buffer_size=104857600)
+    # 限制单报文缓冲最大 64MB (防止 1GB 内存盒子打满崩溃)，设置 60s 空闲连接回收
+    server = tornado.httpserver.HTTPServer(
+        app,
+        max_buffer_size=67108864,
+        idle_connection_timeout=60
+    )
     server.listen(8088, address="0.0.0.0")
-    print(">>> CUPS 智能工作台已在 8088 端口正常启动 (Listen: 0.0.0.0:8088)", flush=True)
-    print(f">>> 静态模型目录已映射至: {MODELS_PATH} (路由: /models/*)", flush=True)
+    print(">>> [Web] CUPS 智能工作台已在 8088 端口正常启动 (0.0.0.0:8088)", flush=True)
+    print(f">>> [Storage] 模型映射目录: {MODELS_PATH} -> 路由 /models/*", flush=True)
     tornado.ioloop.IOLoop.current().start()
