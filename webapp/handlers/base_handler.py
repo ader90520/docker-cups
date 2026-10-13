@@ -12,8 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 UPLOAD_DIR = "/tmp/cups_web_uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# 独立的轻量线程池（限制并发为 2，防止 ARM 4 核设备上下文切换过载）
-THREAD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="CupsBaseWorker")
+# 限制工作线程池并发数为 2，防止 ARM 4 核设备由于密集调度引发高负载
+THREAD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="CupsWorker")
 
 class BaseHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
@@ -27,7 +27,6 @@ class BaseHandler(tornado.web.RequestHandler):
         self.finish()
 
     def write_json(self, success=True, msg="", data=None, **kwargs):
-        """双向对齐 msg 与 message，避免前端不同框架解包出 undefined"""
         resp = {
             "success": bool(success),
             "msg": str(msg),
@@ -38,8 +37,7 @@ class BaseHandler(tornado.web.RequestHandler):
         resp.update(kwargs)
         self.write(resp)
 
-    def clean_old_files(self, max_age_seconds=600):
-        """非阻塞后台清理：清理 10 分钟前的缓存文件，保障 8GB eMMC 空间健康"""
+    def clean_old_files(self, max_age_seconds=300):
         def _cleanup():
             try:
                 now = time.time()
@@ -57,13 +55,6 @@ class BaseHandler(tornado.web.RequestHandler):
         THREAD_POOL.submit(_cleanup)
 
     def execute_lp(self, printer, copies, file_path, extra_opts=None, timeout=20):
-        """
-        加固版 CUPS 打印派发管道：
-        1. 显式锁定 UNIX 本地套接字通信
-        2. 参数白名单清洗防注入
-        3. 捕获超时与系统调用异常，避免 500 熔断
-        """
-        # 参数清洗与防注入防御
         clean_printer = str(printer).strip() if printer else ""
         if clean_printer and (clean_printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', clean_printer)):
             return False, "非法打印机设备名称"
@@ -76,9 +67,8 @@ class BaseHandler(tornado.web.RequestHandler):
             copies_int = 1
 
         if not file_path or not os.path.exists(file_path):
-            return False, "待打印文件不存在或已被清理"
+            return False, "待打印文件不存在"
 
-        # 显式构造 CUPS 本地套接字环境变量，杜绝走 TCP 网络回环超时
         env = os.environ.copy()
         env["CUPS_SERVER"] = "/run/cups/cups.sock"
         env["LANG"] = "C"
@@ -97,7 +87,6 @@ class BaseHandler(tornado.web.RequestHandler):
         if extra_opts and isinstance(extra_opts, list):
             for opt in extra_opts:
                 opt_str = str(opt).strip()
-                # 过滤异常参数
                 if opt_str and not opt_str.startswith("-") and "=" in opt_str:
                     cmd.extend(["-o", opt_str])
 
@@ -118,9 +107,8 @@ class BaseHandler(tornado.web.RequestHandler):
                 job_id = res.stdout.strip()
                 return True, job_id
             else:
-                return False, res.stderr.strip() or "CUPS 队列拒绝作业"
-
+                return False, res.stderr.strip() or "CUPS 拒绝作业"
         except subprocess.TimeoutExpired:
-            return False, "打印管道通信超时（设备可能处于脱机、卡纸或端口锁死状态）"
+            return False, "打印机通信超时"
         except Exception as e:
             return False, f"调度进程异常: {str(e)}"
