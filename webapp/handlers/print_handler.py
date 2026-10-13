@@ -19,7 +19,6 @@ except Exception:
 
 ALLOWED_PRINT_EXTS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.webp', '.heic'}
 
-# 200 DPI 标准介质像素画幅规格
 CANVAS_SIZES_200DPI = {
     "A4": (1654, 2338),
     "A5": (1169, 1654),
@@ -35,29 +34,23 @@ def log_debug(msg):
         pass
     print(f"[PrintLog] {msg}", flush=True)
 
-def fit_to_a4_fast_frame(img, fill_ratio=0.97, media="A4"):
-    """自适应介质纸张黄金居中画幅"""
+def fit_to_a4_fast_frame(img, fill_ratio=0.96, media="A4"):
     media_key = media.upper() if media.upper() in CANVAS_SIZES_200DPI else "A4"
     target_w, target_h = CANVAS_SIZES_200DPI[media_key]
     orig_w, orig_h = img.size
 
     ratio = min((target_w * fill_ratio) / orig_w, (target_h * fill_ratio) / orig_h)
-    new_w = int(orig_w * ratio)
-    new_h = int(orig_h * ratio)
+    new_w = max(1, int(orig_w * ratio))
+    new_h = max(1, int(orig_h * ratio))
 
     resized_img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
     canvas = Image.new("RGB", (target_w, target_h), (255, 255, 255))
-
     pos_x = (target_w - new_w) // 2
     pos_y = (target_h - new_h) // 2
     canvas.paste(resized_img, (pos_x, pos_y))
     return canvas
 
 def merge_images_n_up(image_paths, media="A4"):
-    """
-    多图/多发票同页拼版核心函数 (N-up 拼版引擎)
-    根据图片数量（2~8张）自动排布网格，同页高清输出
-    """
     media_key = media.upper() if media.upper() in CANVAS_SIZES_200DPI else "A4"
     page_w, page_h = CANVAS_SIZES_200DPI[media_key]
     canvas = Image.new("RGB", (page_w, page_h), (255, 255, 255))
@@ -65,9 +58,8 @@ def merge_images_n_up(image_paths, media="A4"):
     count = len(image_paths)
     if count == 1:
         with Image.open(image_paths[0]) as im:
-            return fit_to_a4_fast_frame(im.convert("RGB"), fill_ratio=0.97, media=media)
+            return fit_to_a4_fast_frame(ImageOps.exif_transpose(im).convert("RGB"), fill_ratio=0.96, media=media)
 
-    # 智能分栏排版拓扑
     if count == 2:
         cols, rows = 1, 2
     elif count in (3, 4):
@@ -84,7 +76,7 @@ def merge_images_n_up(image_paths, media="A4"):
     for idx, img_p in enumerate(image_paths[:cols * rows]):
         try:
             with Image.open(img_p) as raw_img:
-                img = ImageOps.exif_transpose(raw_img.convert("RGB"))
+                img = ImageOps.exif_transpose(raw_img).convert("RGB")
                 ratio = min((cell_w - margin * 2) / img.width, (cell_h - margin * 2) / img.height)
                 target_w = max(10, int(img.width * ratio))
                 target_h = max(10, int(img.height * ratio))
@@ -96,12 +88,11 @@ def merge_images_n_up(image_paths, media="A4"):
                 pos_y = row * cell_h + (cell_h - target_h) // 2
                 canvas.paste(resized, (pos_x, pos_y))
         except Exception as e:
-            log_debug(f"单图拼版失败: {e}")
+            log_debug(f"单图拼版受阻: {e}")
 
     return canvas
 
 def clean_extreme_edges_only(arr, margin_ratio=0.010):
-    """仅切除极端纸外物理黑边（1%），保全页眉页脚与版头信息"""
     h, w = arr.shape[:2]
     top_h = int(h * margin_ratio)
     bot_h = int(h * (1.0 - margin_ratio))
@@ -112,25 +103,9 @@ def clean_extreme_edges_only(arr, margin_ratio=0.010):
     arr[bot_h:h, :] = 255.0
     arr[:, 0:left_w] = 255.0
     arr[:, right_w:w] = 255.0
-
-    corner_y = int(h * 0.08)
-    corner_x = int(w * 0.08)
-    sub = arr[top_h:corner_y, left_w:corner_x]
-    sub[sub < 130] = 255.0
     return arr
 
-def order_points_cv(pts):
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-    return rect
-
 def auto_perspective_crop_cv(cv_img):
-    """大盒子功能：极速四角梯形校正与透视拉平"""
     try:
         orig = cv_img.copy()
         h, w = cv_img.shape[:2]
@@ -157,7 +132,14 @@ def auto_perspective_crop_cv(cv_img):
 
         if screen_cnt is not None:
             pts = screen_cnt.reshape(4, 2) * ratio
-            rect = order_points_cv(pts)
+            rect = np.zeros((4, 2), dtype="float32")
+            s = pts.sum(axis=1)
+            rect[0] = pts[np.argmin(s)]
+            rect[2] = pts[np.argmax(s)]
+            diff = np.diff(pts, axis=1)
+            rect[1] = pts[np.argmin(diff)]
+            rect[3] = pts[np.argmax(diff)]
+
             (tl, tr, br, bl) = rect
             max_w = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
             max_h = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
@@ -165,25 +147,17 @@ def auto_perspective_crop_cv(cv_img):
             if max_w > 100 and max_h > 100:
                 dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
                 M = cv2.getPerspectiveTransform(rect, dst)
-                warped = cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_LINEAR)
-                return warped
+                return cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_LINEAR)
     except Exception as e:
-        log_debug(f"OpenCV 透视裁剪跳过: {e}")
+        log_debug(f"OpenCV 透视拉平跳过: {e}")
     return cv_img
 
 def process_image_for_print(input_path, output_path, media="A4"):
-    """
-    双引擎图像增强处理：
-    - 大盒子环境自动启用 OpenCV 梯形矫正与精确通道分离
-    - 小盒子环境自动降级使用 PIL 纯轻量化矩阵加速 (零 OpenCV 依赖)
-    """
+    """双引擎鲁棒增强处理流水线"""
     try:
         t0 = time.time()
-        log_debug(f"图像增强流水线启动: {input_path} (HAVE_OPENCV={HAVE_OPENCV})")
-
         with Image.open(input_path) as check_img:
             if check_img.width < 10 or check_img.height < 10:
-                log_debug(f"图像尺寸过小 ({check_img.width}x{check_img.height})，跳过增强直接打印")
                 return False
 
         if HAVE_OPENCV:
@@ -196,7 +170,6 @@ def process_image_for_print(input_path, output_path, media="A4"):
                 cv_img = cv2.rotate(cv_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
             cv_img = auto_perspective_crop_cv(cv_img)
-
             calc_w = 1654
             calc_h = int(cv_img.shape[0] * (calc_w / float(cv_img.shape[1])))
             cv_img = cv2.resize(cv_img, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
@@ -204,7 +177,6 @@ def process_image_for_print(input_path, output_path, media="A4"):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 4倍降采样光照闭运算
             brightness = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
             small_w, small_h = max(100, calc_w // 4), max(100, calc_h // 4)
             small_b = cv2.resize(brightness, (small_w, small_h), interpolation=cv2.INTER_AREA)
@@ -218,7 +190,6 @@ def process_image_for_print(input_path, output_path, media="A4"):
             g_div = (g_f / bg_float) * 255.0
             b_div = (b_f / bg_float) * 255.0
 
-            # 彩色笔划召回
             red_excess = r_f - np.maximum(g_f, b_f)
             is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
             color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
@@ -229,10 +200,7 @@ def process_image_for_print(input_path, output_path, media="A4"):
             grad_y = cv2.Sobel(gray_div, cv2.CV_32F, 0, 1, ksize=3)
             grad_mag = np.sqrt(grad_x**2 + grad_y**2)
 
-            is_text_mask = (~all_color_mask) & (
-                ((gray_div < 220.0) & (grad_mag > 6.5)) | 
-                (gray_div < 178.0)
-            )
+            is_text_mask = (~all_color_mask) & (((gray_div < 220.0) & (grad_mag > 6.5)) | (gray_div < 178.0))
 
             out_r = np.full_like(r_div, 255.0)
             out_g = np.full_like(g_div, 255.0)
@@ -254,13 +222,12 @@ def process_image_for_print(input_path, output_path, media="A4"):
             res_uint8 = np.clip(out_bgr, 0, 255).astype(np.uint8)
             res_rgb = cv2.cvtColor(res_uint8, cv2.COLOR_BGR2RGB)
             sharp_pil = Image.fromarray(res_rgb)
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97, media=media)
+            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
             final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         else:
-            # 小盒子纯 PIL+NumPy 降维分支 (极速 0 额外内存消耗)
             with Image.open(input_path) as disk_img:
-                img = ImageOps.exif_transpose(disk_img.convert("RGB"))
+                img = ImageOps.exif_transpose(disk_img).convert("RGB")
 
             if img.width > img.height:
                 img = img.rotate(270, expand=True)
@@ -270,7 +237,9 @@ def process_image_for_print(input_path, output_path, media="A4"):
             work_img = img.resize((calc_w, calc_h), Image.Resampling.BILINEAR)
 
             r, g, b = work_img.split()
-            r_arr, g_arr, b_arr = np.array(r, dtype=np.float32), np.array(g, dtype=np.float32), np.array(b, dtype=np.float32)
+            r_arr = np.array(r, dtype=np.float32)
+            g_arr = np.array(g, dtype=np.float32)
+            b_arr = np.array(b, dtype=np.float32)
 
             brightness = np.maximum(np.maximum(r_arr, g_arr), b_arr).astype(np.uint8)
             contrast_img = Image.fromarray(brightness)
@@ -278,7 +247,7 @@ def process_image_for_print(input_path, output_path, media="A4"):
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
             r_div = (r_arr / bg_arr) * 255.0
-            g_div = (g_arr / bg_arr) * 255.0
+            g_div = (g_f := (g_arr / bg_arr) * 255.0)
             b_div = (b_arr / bg_arr) * 255.0
 
             red_excess = r_arr - np.maximum(g_arr, b_arr)
@@ -312,13 +281,13 @@ def process_image_for_print(input_path, output_path, media="A4"):
 
             res_uint8 = np.clip(rgb_stack, 0, 255).astype(np.uint8)
             sharp_pil = Image.fromarray(res_uint8, mode="RGB")
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.97, media=media)
+            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
             final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
 
         log_debug(f"图像增强耗时: {time.time() - t0:.2f}s -> {output_path}")
         return True
     except Exception as e:
-        log_debug(f"处理异常: {e}")
+        log_debug(f"处理异常，自动回退: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
@@ -369,13 +338,11 @@ class PrintHandler(BaseHandler):
                 media = "A4"
 
             os.makedirs(UPLOAD_DIR, exist_ok=True)
-
             jobs = []
             env = os.environ.copy()
             env["CUPS_SERVER"] = "/run/cups/cups.sock"
             env["LANG"] = "C"
 
-            # 区分图片与非图片文件
             image_raw_paths = []
             non_image_files = []
 
@@ -399,10 +366,8 @@ class PrintHandler(BaseHandler):
 
             target_files_to_print = []
 
-            # 1. 处理图片：判断是否需要多张发票/图片同页拼版
             if image_raw_paths:
                 if multi_merge and len(image_raw_paths) > 1:
-                    # 开启同页拼版：合成为单张画幅
                     merged_canvas = merge_images_n_up(image_raw_paths, media=media)
                     merged_path = os.path.join(UPLOAD_DIR, f"merged_{uuid.uuid4().hex[:8]}.jpg")
                     merged_canvas.save(merged_path, format="JPEG", quality=90, dpi=(200, 200))
@@ -416,7 +381,6 @@ class PrintHandler(BaseHandler):
                     else:
                         target_files_to_print.append(merged_path)
                 else:
-                    # 默认逐张处理
                     for src_path in image_raw_paths:
                         target_f = src_path
                         if enhance:
@@ -426,10 +390,8 @@ class PrintHandler(BaseHandler):
                                 target_f = opt_path
                         target_files_to_print.append(target_f)
 
-            # 2. 加入 PDF 等文档
             target_files_to_print.extend(non_image_files)
 
-            # 3. 循环派发任务至 CUPS 队列
             for target_file in target_files_to_print:
                 cmd = [
                     "lp",
@@ -439,7 +401,6 @@ class PrintHandler(BaseHandler):
                     "-o", f"PageSize={media}",
                     "-o", "fit-to-page",
                     "-o", "scaling=100",
-                    "-o", "natural-scaling=100",
                     "-o", "position=center"
                 ]
 
@@ -466,7 +427,7 @@ class PrintHandler(BaseHandler):
                     return
 
             clean_old_tmp_files(UPLOAD_DIR)
-            self.write_json(True, f"共 {len(target_files_to_print)} 个版面文件已送达打印队列", job=", ".join(jobs))
+            self.write_json(True, f"共 {len(target_files_to_print)} 个文件成功送达打印队列", job=", ".join(jobs))
         except subprocess.TimeoutExpired:
             self.write_json(False, "打印任务派发超时，打印机可能处于离线、卡纸或通信受阻状态")
         except Exception as e:
