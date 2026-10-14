@@ -1,6 +1,6 @@
 /**
- * CUPS 智能工作台前端核心驱动
- * 闭环参数联动、状态迁移、身份证增减人自适应与不重叠网格排版
+ * CUPS 智能工作台前端核心驱动 (app.js)
+ * 完整修复接口映射、响应式预览、多图排版与设备管理闭环
  */
 
 function logToConsole(msg, level = "info") {
@@ -32,7 +32,10 @@ function switchNavTab(tabName) {
 
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
-        DocAI.fetchDeployedModels();
+        DashboardService.loadDiscoveredDevices();
+        if (window.DocAI && typeof DocAI.fetchDeployedModels === 'function') {
+            DocAI.fetchDeployedModels();
+        }
     } else if (tabName === "scan") {
         ScanService.loadScanDevices();
         ScanService.loadScanList();
@@ -208,7 +211,6 @@ window.EnhanceEngine = {
         ctx.restore();
     },
 
-    // 多图拼版网格绝对隔离排版 (杜绝图块重叠)
     renderMultiImagesGrid: function() {
         const imgs = PrintManager.loadedImages;
         const canvas = this.canvas;
@@ -318,16 +320,15 @@ window.PrintManager = {
         document.getElementById("sec-upload-normal").style.display = (tab === "normal" ? "block" : "none");
         document.getElementById("sec-upload-idcard").style.display = (tab === "idcard" ? "block" : "none");
 
-        // 动态隐藏/展示去黑底增强与页面范围表单项
-        const enhanceBox = document.getElementById("item-enhance-box");
-        const pageRangesBox = document.getElementById("item-page-ranges-box");
+        const enhanceBox = document.getElementById("item-enhance-wrap") || document.getElementById("item-enhance-box");
+        const pageRangesBox = document.getElementById("item-pageranges-wrap") || document.getElementById("item-page-ranges-box");
         if (tab === "idcard") {
             if (enhanceBox) enhanceBox.style.display = "none";
             if (pageRangesBox) pageRangesBox.style.display = "none";
             IdCardManager.updateCanvasPreview();
         } else {
-            if (enhanceBox) enhanceBox.style.display = "flex";
-            if (pageRangesBox) pageRangesBox.style.display = "flex";
+            if (enhanceBox) enhanceBox.style.display = "block";
+            if (pageRangesBox) pageRangesBox.style.display = "block";
             EnhanceEngine.render();
         }
     },
@@ -517,8 +518,7 @@ window.PrintManager = {
     }
 };
 
-// ==================== 3. 身份证标准规范排布排版引擎 ====================
-// 单人身份证：正反面严格上下摆放；多人身份证：每人正反面左右并排摆放
+// ==================== 3. 身份证标准排版引擎 ====================
 window.IdCardManager = {
     persons: [{ front: null, back: null }],
 
@@ -566,17 +566,19 @@ window.IdCardManager = {
         this.updateCanvasPreview();
     },
 
-    removePerson: function() {
-        if (this.persons.length <= 1) {
-            alert("至少保留 1 人身份证信息！");
-            return;
-        }
-        const lastIdx = this.persons.length - 1;
-        this.persons.pop();
-        const targetEl = document.getElementById(`idcard-person-${lastIdx}`);
-        if (targetEl) targetEl.remove();
-        logToConsole(`已减少至 ${this.persons.length} 人身份证`);
-        this.updateCanvasPreview();
+    clearAll: function() {
+        this.persons = [{ front: null, back: null }];
+        const container = document.getElementById("idcard-person-container");
+        if (container) container.innerHTML = "";
+        ['front', 'back'].forEach(s => {
+            const p = document.getElementById(`placeholder-${s}-0`);
+            const prev = document.getElementById(`preview-${s}-0`);
+            if (p) p.style.display = "block";
+            if (prev) prev.style.display = "none";
+        });
+        const ctx = EnhanceEngine.ctx;
+        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+        document.getElementById("viewport-empty-tip").style.display = "block";
     },
 
     bindBoxEvents: function(idx) {
@@ -584,7 +586,7 @@ window.IdCardManager = {
             const box = document.getElementById(`idcard-slot-${side}-${idx}`);
             const input = document.getElementById(`file-idcard-${side}-${idx}`);
             if (box && input) {
-                box.addEventListener('click', () => input.click());
+                box.onclick = () => input.click();
             }
         });
     },
@@ -597,10 +599,13 @@ window.IdCardManager = {
             const img = new Image();
             img.onload = () => {
                 this.persons[idx][side] = img;
-                document.getElementById(`placeholder-${side}-${idx}`).style.display = "none";
+                const holder = document.getElementById(`placeholder-${side}-${idx}`);
+                if (holder) holder.style.display = "none";
                 const pImg = document.getElementById(`preview-${side}-${idx}`);
-                pImg.src = e.target.result;
-                pImg.style.display = "block";
+                if (pImg) {
+                    pImg.src = e.target.result;
+                    pImg.style.display = "block";
+                }
                 logToConsole(`第 ${idx + 1} 人 [${side === 'front' ? '正面' : '反面'}] 照片就绪`);
                 this.updateCanvasPreview();
             };
@@ -616,19 +621,16 @@ window.IdCardManager = {
 
         document.getElementById("viewport-empty-tip").style.display = "none";
 
-        // A4 200 DPI 标准像素画幅: 1654 x 2338
         canvas.width = 1654;
         canvas.height = 2338;
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // 身份证 85.6mm x 54mm 对应像素尺寸: 674 x 425
         const cardW = 674;
         const cardH = 425;
         const count = this.persons.length;
 
         if (count === 1) {
-            // 单人身份证模式：严格纵向上下垂直居中摆放
             const p = this.persons[0];
             const gapY = 240;
             const startY = (canvas.height - (cardH * 2 + gapY)) / 2;
@@ -645,7 +647,6 @@ window.IdCardManager = {
                 ctx.strokeRect(posX, startY + cardH + gapY, cardW, cardH);
             }
         } else {
-            // 多人身份证模式 (2~3人)：同一人正反面左右并排摆放，多人垂直向下平铺
             const gapX = 120;
             const gapY = 160;
             const totalRowW = cardW * 2 + gapX;
@@ -673,18 +674,6 @@ window.IdCardManager = {
         return new Promise(resolve => {
             EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.95);
         });
-    },
-
-    clearAll: function() {
-        this.persons = [{ front: null, back: null }];
-        document.getElementById("idcard-person-container").innerHTML = "";
-        ['front', 'back'].forEach(s => {
-            document.getElementById(`placeholder-${s}-0`).style.display = "block";
-            document.getElementById(`preview-${s}-0`).style.display = "none";
-        });
-        const ctx = EnhanceEngine.ctx;
-        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
-        document.getElementById("viewport-empty-tip").style.display = "block";
     }
 };
 
@@ -717,6 +706,7 @@ window.ScanService = {
             const resp = await fetch("/api/scan/list");
             const res = await resp.json();
             const listContainer = document.getElementById("scan-file-list");
+            if (!listContainer) return;
             const files = res.files || [];
             if (files.length === 0) {
                 listContainer.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂无扫描件历史</div>';
@@ -783,6 +773,7 @@ window.ScanService = {
 
 // ==================== 5. 设备管理与运维服务 ====================
 window.DashboardService = {
+    // 彻底修复：同时容错 res.data.printers 与 res.printers
     loadPrinters: async function(showToast = false) {
         try {
             const resp = await fetch("/api/devices");
@@ -796,17 +787,20 @@ window.DashboardService = {
             if (!select) return;
             select.innerHTML = "";
             if (mailSelect) mailSelect.innerHTML = "";
-            const printers = res.printers || [];
+
+            // 核心修复点：提取后端真实打印机数组
+            const printers = (res.data && res.data.printers) ? res.data.printers : (res.printers || []);
+            const defaultPrinter = (res.data && res.data.default) ? res.data.default : (res.default || "");
 
             if (printers.length === 0) {
                 select.innerHTML = '<option value="">无可用打印机</option>';
                 if (mailSelect) mailSelect.innerHTML = '<option value="">无可用设备</option>';
                 if (statusTag) {
                     statusTag.className = "printer-status-badge badge-offline";
-                    statusTag.innerText = "打印机状态: 离线";
+                    statusTag.innerText = "状态: 离线";
                 }
                 if (queueCount) queueCount.innerText = "0";
-                if (cardList) cardList.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未安装打印机</div>';
+                if (cardList) cardList.innerHTML = '<div style="font-size:11px; color:#94a3b8; padding:8px;">暂未安装打印机，请在下方检索端口添加</div>';
                 return;
             }
 
@@ -814,11 +808,16 @@ window.DashboardService = {
                 const opt = document.createElement("option");
                 opt.value = p.name;
                 opt.text = `${p.name} (${p.status || '就绪'})`;
+                if (p.name === defaultPrinter || p.is_default) {
+                    opt.selected = true;
+                }
                 select.appendChild(opt);
+
                 if (mailSelect) {
                     const optM = document.createElement("option");
                     optM.value = p.name;
                     optM.text = p.name;
+                    if (p.name === defaultPrinter || p.is_default) optM.selected = true;
                     mailSelect.appendChild(optM);
                 }
             });
@@ -826,15 +825,22 @@ window.DashboardService = {
             const currentStatus = printers[0].status || "就绪";
             if (statusTag) {
                 statusTag.className = `printer-status-badge ${currentStatus.includes("忙") ? 'badge-busy' : 'badge-idle'}`;
-                statusTag.innerText = `打印机状态: ${currentStatus}`;
+                statusTag.innerText = `状态: ${currentStatus}`;
             }
-            if (queueCount) queueCount.innerText = printers[0].jobs_count || "0";
+            if (queueCount) queueCount.innerText = (res.data ? res.data.queue_count : res.queue_count) || "0";
 
             if (cardList) {
                 cardList.innerHTML = printers.map(p => `
                     <div style="background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;">
-                        <div><b>🖨️ ${p.name}</b> <span style="font-size:11px; color:#10b981;">● ${p.status || '就绪'}</span></div>
-                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.testPage('${p.name}')">测试页</button>
+                        <div>
+                            <b>🖨️ ${p.name}</b> 
+                            <span style="font-size:11px; color:${p.has_error ? '#ef4444' : '#10b981'}; font-weight:600;">● ${p.status || '就绪'}</span>
+                            ${p.is_default ? '<span style="font-size:10px; background:#dbeafe; color:#1d4ed8; padding:1px 4px; border-radius:3px; margin-left:4px;">默认</span>' : ''}
+                        </div>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.testPage('${p.name}')">测试页</button>
+                            <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.setDefault('${p.name}')">设为默认</button>
+                        </div>
                     </div>
                 `).join('');
             }
@@ -865,46 +871,58 @@ window.DashboardService = {
         }
     },
 
-    loadDiscoveredDevices: async function() {
-        logToConsole("正在扫描物理端口与设备 URI...");
-        const select = document.getElementById("discovered-device-select");
+    setDefault: async function(pName) {
+        logToConsole(`设置 [${pName}] 为系统默认打印机...`);
         try {
-            const resp = await fetch("/api/devices/discover");
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: `action=set_default&printer=${encodeURIComponent(pName)}`
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+            this.loadPrinters(true);
+        } catch (e) {
+            logToConsole(`设置默认异常: ${e.message}`, "error");
+        }
+    },
+
+    // 核心修复点：正确路由到 /api/printer_admin?action=discovered_devices
+    loadDiscoveredDevices: async function() {
+        logToConsole("正在扫描硬件物理端口与 USB URI...");
+        const select = document.getElementById("discovered-device-select");
+        if (!select) return;
+        try {
+            const resp = await fetch("/api/printer_admin?action=discovered_devices");
             const res = await resp.json();
             select.innerHTML = '<option value="">-- 请选择硬件端口 --</option>';
-            (res.devices || []).forEach(d => {
+            const devs = res.data || [];
+            devs.forEach(d => {
                 const opt = document.createElement("option");
                 opt.value = d.uri;
-                opt.text = `${d.info} (${d.uri})`;
+                opt.text = `${d.name || d.info} (${d.uri})`;
                 select.appendChild(opt);
             });
-            logToConsole(`发现 ${res.devices ? res.devices.length : 0} 个端口`, "success");
+            logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
         } catch (e) {
             logToConsole(`扫描端口失败: ${e.message}`, "error");
         }
     },
 
-    onDiscoveredDeviceSelect: function(sel) {
-        const uri = sel.value;
-        if (!uri) return;
-        const nameInput = document.getElementById("add-printer-name");
-        if (nameInput && !nameInput.value) {
-            nameInput.value = uri.split("/").pop().split("?")[0].replace(/[^a-zA-Z0-9_-]/g, "_");
-        }
-    },
-
+    // 核心修复点：正确路由到 /api/printer_admin?action=drivers&q=...
     searchDrivers: async function() {
         const kw = document.getElementById("driver-search-kw")?.value.trim();
         const box = document.getElementById("driver-search-results");
-        if (!kw) return;
+        if (!kw || !box) return;
         logToConsole(`检索驱动: ${kw}...`);
         try {
-            const resp = await fetch(`/api/drivers/search?q=${encodeURIComponent(kw)}`);
+            const resp = await fetch(`/api/printer_admin?action=drivers&q=${encodeURIComponent(kw)}`);
             const res = await resp.json();
             box.style.display = "block";
-            box.innerHTML = (res.drivers || []).map(d => `
-                <div style="padding:4px 6px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
-                    <b>${d.id}</b> - <span style="color:#64748b;">${d.info}</span>
+            const drvs = res.data || [];
+            box.innerHTML = drvs.map(d => `
+                <div style="padding:5px 8px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
+                    <b>${d.id}</b> - <span style="color:#64748b;">${d.name || d.info}</span>
                 </div>
             `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动</div>';
         } catch (e) {
@@ -913,58 +931,99 @@ window.DashboardService = {
     },
 
     pickDriver: function(drvId) {
-        document.getElementById("driver-input-val").value = drvId;
-        document.getElementById("driver-search-results").style.display = "none";
+        const inputVal = document.getElementById("driver-search-kw");
+        if (inputVal) inputVal.value = drvId;
+        const hiddenDriver = document.getElementById("driver-input-val");
+        if (hiddenDriver) hiddenDriver.value = drvId;
+        const box = document.getElementById("driver-search-results");
+        if (box) box.style.display = "none";
         logToConsole(`已选定驱动: ${drvId}`);
     },
 
-    submitAddPrinter: async function() {
-        const name = document.getElementById("add-printer-name")?.value.trim();
-        const uri = document.getElementById("discovered-device-select")?.value;
-        const driver = document.getElementById("driver-input-val")?.value.trim();
-        const alertBox = document.getElementById("add-printer-alert");
-
-        if (!name || !uri) {
-            alertBox.innerHTML = '<span style="color:#ef4444;">设备名称与连接端口不能为空</span>';
+    uploadPpd: async function() {
+        const fileInput = document.getElementById("ppd-file-input");
+        const alertBox = document.getElementById("ppd-alert");
+        if (!fileInput || fileInput.files.length === 0) {
+            alert("请选取 .ppd 驱动文件");
             return;
         }
-
-        logToConsole(`正在创建打印机队列 [${name}]...`);
         const fd = new FormData();
-        fd.append("action", "add_printer");
-        fd.append("printer", name);
-        fd.append("device_uri", uri);
-        fd.append("driver", driver);
-
+        fd.append("action", "upload_ppd");
+        fd.append("ppd_file", fileInput.files[0]);
         try {
             const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
             const res = await resp.json();
-            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
-            if (res.success) {
-                this.loadPrinters(true);
-                logToConsole(`打印机 [${name}] 部署成功`, "success");
-            }
+            if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            logToConsole(res.msg, res.success ? "success" : "error");
         } catch (e) {
-            logToConsole(`添加异常: ${e.message}`, "error");
+            logToConsole(`安装 PPD 异常: ${e.message}`, "error");
+        }
+    },
+
+    uploadPlugin: async function() {
+        const fileInput = document.getElementById("plugin-file-input");
+        const alertBox = document.getElementById("plugin-alert");
+        if (!fileInput || fileInput.files.length === 0) {
+            alert("请选取 .run 插件包文件");
+            return;
+        }
+        const fd = new FormData();
+        fd.append("action", "upload_scanner_plugin");
+        fd.append("plugin_file", fileInput.files[0]);
+        try {
+            const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
+            const res = await resp.json();
+            if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            logToConsole(res.msg, res.success ? "success" : "error");
+        } catch (e) {
+            logToConsole(`安装插件异常: ${e.message}`, "error");
         }
     },
 
     resetUsb: async function() {
         logToConsole("⚡ 正在触发 USB 总线重置...");
-        await fetch("/api/system/reset_usb", { method: "POST" });
-        logToConsole("✔ USB 总线已复位", "success");
+        try {
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "action=reset_usb"
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+        } catch (e) {
+            logToConsole(`USB 重置异常: ${e.message}`, "error");
+        }
     },
 
     cleanJobs: async function() {
         logToConsole("🗑️ 正在清空等待队列...");
-        await fetch("/api/jobs/clear", { method: "POST" });
-        logToConsole("✔ 队列已清空", "success");
+        try {
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "action=cancel_all"
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+            this.loadPrinters(false);
+        } catch (e) {
+            logToConsole(`清空队列异常: ${e.message}`, "error");
+        }
     },
 
     cleanDisk: async function() {
         logToConsole("🧹 正在释放临时缓存...");
-        await fetch("/api/system/clean_tmp", { method: "POST" });
-        logToConsole("✔ 磁盘临时垃圾已清理", "success");
+        try {
+            const resp = await fetch("/api/printer_admin", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "action=clean_disk"
+            });
+            const res = await resp.json();
+            logToConsole(res.msg, res.success ? "success" : "error");
+        } catch (e) {
+            logToConsole(`清理缓存异常: ${e.message}`, "error");
+        }
     }
 };
 
@@ -972,50 +1031,36 @@ window.DashboardService = {
 window.MailService = {
     loadConfig: async function() {
         try {
-            const resp = await fetch("/api/mail/config");
+            const resp = await fetch("/api/mail_config");
             const res = await resp.json();
-            const cfg = res.data || {};
-            document.getElementById("mail-enable").checked = !!cfg.enable;
-            document.getElementById("mail-server").value = cfg.server || "imap.qq.com";
-            document.getElementById("mail-port").value = cfg.port || 993;
-            document.getElementById("mail-user").value = cfg.user || "";
-            document.getElementById("mail-pwd").value = cfg.password || "";
-            document.getElementById("mail-keyword").value = cfg.keyword || "";
-            document.getElementById("mail-whitelist").value = cfg.whitelist || "";
-            document.getElementById("mail-pushplus-token").value = cfg.pushplus_token || "";
-            if (cfg.default_printer) {
-                document.getElementById("mail-default-printer").value = cfg.default_printer;
-            }
+            const cfg = res.data || res.config || {};
+            const enableEl = document.getElementById("mail_enable");
+            if (enableEl) enableEl.value = (cfg.enable === true || cfg.enable === "true") ? "true" : "false";
+            if (document.getElementById("mail_server")) document.getElementById("mail_server").value = cfg.server || "imap.qq.com";
+            if (document.getElementById("mail_port")) document.getElementById("mail_port").value = cfg.port || 993;
+            if (document.getElementById("mail_user")) document.getElementById("mail_user").value = cfg.user || "";
+            if (document.getElementById("mail_keyword")) document.getElementById("mail_keyword").value = cfg.keyword || "";
+            if (document.getElementById("mail_whitelist")) document.getElementById("mail_whitelist").value = cfg.whitelist || "";
+            if (document.getElementById("mail_pushplus_token")) document.getElementById("mail_pushplus_token").value = cfg.pushplus_token || "";
         } catch (e) {
             logToConsole(`读取邮箱配置异常: ${e.message}`, "error");
         }
     },
 
-    saveConfig: async function() {
+    saveConfig: async function(e) {
+        if (e) e.preventDefault();
         const alertBox = document.getElementById("mail-alert");
-        const body = {
-            enable: document.getElementById("mail-enable")?.checked,
-            server: document.getElementById("mail-server")?.value.trim(),
-            port: document.getElementById("mail-port")?.value.trim(),
-            user: document.getElementById("mail-user")?.value.trim(),
-            password: document.getElementById("mail-pwd")?.value.trim(),
-            keyword: document.getElementById("mail-keyword")?.value.trim(),
-            whitelist: document.getElementById("mail-whitelist")?.value.trim(),
-            default_printer: document.getElementById("mail-default-printer")?.value,
-            pushplus_token: document.getElementById("mail-pushplus-token")?.value.trim()
-        };
+        const form = document.getElementById("mail-cfg-form");
+        if (!form) return;
+        const fd = new FormData(form);
 
         try {
-            const resp = await fetch("/api/mail/config", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
+            const resp = await fetch("/api/mail_config", { method: "POST", body: fd });
             const res = await resp.json();
-            alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
+            if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
             logToConsole(`云邮箱配置更新: ${res.msg}`, res.success ? "success" : "error");
         } catch (e) {
-            alertBox.innerHTML = `<span style="color:#ef4444;">保存失败: ${e.message}</span>`;
+            if (alertBox) alertBox.innerHTML = `<span style="color:#ef4444;">保存失败: ${e.message}</span>`;
         }
     }
 };
@@ -1025,4 +1070,9 @@ document.addEventListener("DOMContentLoaded", () => {
     PrintManager.init();
     IdCardManager.bindBoxEvents(0);
     DashboardService.loadPrinters(false);
+
+    const mailForm = document.getElementById("mail-cfg-form");
+    if (mailForm) {
+        mailForm.onsubmit = (e) => MailService.saveConfig(e);
+    }
 });
