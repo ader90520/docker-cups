@@ -11,32 +11,27 @@ from handlers.base_handler import BaseHandler
 CUPS_PPD_DIR = "/etc/cups/ppd"
 DIAG_CACHE = {"data": [], "last_time": 0}
 
-def run_cmd(cmd, env=None, timeout=2):
+def get_cups_env():
+    env = os.environ.copy()
+    # 优先使用本地回环 TCP 端口 631，彻底杜绝 Unix Socket 权限与断开冲突
+    env["CUPS_SERVER"] = "127.0.0.1:631"
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
+
+def run_cmd(cmd, env=None, timeout=3):
     if env is None:
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
+        env = get_cups_env()
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=timeout)
+        # 如果 127.0.0.1:631 遇到通信抖动，自动回退到默认系统环境重试一次
+        if res.returncode != 0 and "CUPS_SERVER" in env:
+            fallback_env = env.copy()
+            del fallback_env["CUPS_SERVER"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=fallback_env, timeout=timeout)
         return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
     except Exception as e:
         return False, "", str(e)
-
-def read_ieee1284_raw_status():
-    raw_status = ""
-    try:
-        if os.path.exists("/sys/class/usblp"):
-            for dev_name in os.listdir("/sys/class/usblp"):
-                status_file = os.path.join("/sys/class/usblp", dev_name, "device", "ieee1284_id")
-                if os.path.exists(status_file):
-                    try:
-                        with open(status_file, "r", encoding="latin-1") as f:
-                            raw_status += f.read() + " "
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-    return raw_status.lower()
 
 def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_output, lpstat_p_output):
     status_info = {
@@ -48,7 +43,7 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
         "toner_empty": False,
         "error_code": "",
         "error_desc": "",
-        "state_message": "就绪"
+        "state_message": "空闲 (就绪)"
     }
 
     printer_block = ""
@@ -65,20 +60,15 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     block_lower = printer_block.lower()
     jobs_lower = pending_jobs_output.lower()
     p_lower = lpstat_p_output.lower()
-    raw_1284 = read_ieee1284_raw_status()
 
     if "shared" in block_lower or "printer-is-shared=true" in block_lower:
         status_info["is_shared"] = True
 
-    is_e1 = (
-        "paper_empty" in raw_1284 or "out_of_paper" in raw_1284 or
-        any(k in block_lower for k in ["media-empty", "out-of-paper", "out of paper", "media-needed", "tray-empty", "paper out", "waiting for paper", "缺纸", "装入纸张"]) or
-        any(k in jobs_lower for k in ["waiting for paper", "media-needed", "out of paper", "tray empty", "load paper"]) or
-        any(k in p_lower for k in ["media-empty", "out of paper", "offline", "paused", "disabled"])
-    )
-
-    is_e2 = "door_open" in raw_1284 or any(k in block_lower for k in ["cover-open", "door-open", "door open", "机盖"])
-    is_e3 = "jam" in raw_1284 or any(k in block_lower for k in ["media-jam", "paper jam", "jam", "卡纸"])
+    # 精准捕获真实硬件错误，防止 paused / idle 被误判为缺纸
+    is_e1 = any(k in block_lower for k in ["media-empty", "out-of-paper", "out of paper", "media-needed", "tray-empty", "缺纸"]) or \
+            any(k in jobs_lower for k in ["waiting for paper", "media-needed", "out of paper", "tray empty", "load paper"])
+    is_e2 = any(k in block_lower for k in ["cover-open", "door-open", "door open", "机盖"])
+    is_e3 = any(k in block_lower for k in ["media-jam", "paper jam", "jam", "卡纸"])
     is_e4 = any(k in block_lower for k in ["toner-empty", "out of toner", "marker-supply-empty", "无墨", "更换耗材"])
 
     if is_e1:
@@ -101,6 +91,7 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
     if any(k in block_lower for k in ["toner-low", "low on toner", "墨粉低"]):
         status_info["toner_low"] = True
 
+    # 提取状态描述文本
     for line in printer_block.splitlines():
         line_s = line.strip()
         if line_s.startswith("Status:") or line_s.startswith("状态:"):
@@ -110,6 +101,8 @@ def parse_printer_detailed_status(printer_name, lpstat_l_output, pending_jobs_ou
         status_info["state_message"] = f"【{status_info['error_code']}】{status_info['error_desc']}"
     elif pending_jobs_output.strip():
         status_info["state_message"] = "正在打印出纸中..."
+    elif "idle" in p_lower:
+        status_info["state_message"] = "空闲"
 
     return status_info
 
@@ -139,7 +132,7 @@ def perform_system_diagnostics(has_any_printer):
         issues.append({
             "level": "warning",
             "title": "系统未添加打印机",
-            "detail": "当前未配置有效队列，请在下方检索硬件并一键配置驱动。"
+            "detail": "当前未配置有效队列，请在【设备管理】中添加打印机硬件。"
         })
 
     DIAG_CACHE["data"] = issues
@@ -154,16 +147,17 @@ class DevicesHandler(BaseHandler):
         completed_jobs = []
 
         try:
-            env = os.environ.copy()
-            env["CUPS_SERVER"] = "/run/cups/cups.sock"
-            env["LANG"] = "C"
+            env = get_cups_env()
 
+            # 抓取队列与状态
+            _, out_p, _ = run_cmd(["lpstat", "-p"], env=env, timeout=2)
             _, out_l, _ = run_cmd(["lpstat", "-p", "-l"], env=env, timeout=2)
-            _, out_p, _ = run_cmd(["lpstat", "-p"], env=env, timeout=1)
             _, out_d, _ = run_cmd(["lpstat", "-d"], env=env, timeout=1)
             _, out_jobs, _ = run_cmd(["lpstat", "-o"], env=env, timeout=1)
 
+            # 解析打印机列表
             for line in out_p.splitlines():
+                line = line.strip()
                 if line.startswith("printer ") or line.startswith("打印机 "):
                     parts = line.split()
                     if len(parts) >= 2:
@@ -171,17 +165,22 @@ class DevicesHandler(BaseHandler):
                         if p and p not in printers_list:
                             printers_list.append(p)
 
+            # 解析默认打印机
             for line in out_d.splitlines():
                 if ":" in line or "：" in line:
-                    default_printer = line.replace("：", ":").split(":")[-1].strip()
+                    val = line.replace("：", ":").split(":")[-1].strip()
+                    if val and "no system default" not in val.lower():
+                        default_printer = val
 
             if not default_printer and printers_list:
                 default_printer = printers_list[0]
 
+            # 统计队列任务数
             for line in out_jobs.splitlines():
                 if line.strip():
                     queue_count += 1
 
+            # 最近打印记录
             _, out_comp, _ = run_cmd(["lpstat", "-W", "completed", "-o"], env=env, timeout=2)
             for line in reversed(out_comp.splitlines()[-10:]):
                 line_s = line.strip()
