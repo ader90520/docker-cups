@@ -18,6 +18,13 @@ IGNORED_BACKENDS = {
 
 MODEL_DIR = "/usr/share/cups/model"
 
+def get_cups_env():
+    env = os.environ.copy()
+    env["CUPS_SERVER"] = "127.0.0.1:631"
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
+
 def perform_cleanup():
     try:
         if os.path.exists(UPLOAD_DIR):
@@ -45,13 +52,14 @@ class PrinterAdminHandler(BaseHandler):
     def get(self):
         action = self.get_argument("action", "").strip()
 
-        if action == "discovered_devices":
+        if action in ["discovered_devices", "discover"]:
             try:
-                env = os.environ.copy()
-                env["CUPS_SERVER"] = "/run/cups/cups.sock"
-                env["LANG"] = "C"
-
+                env = get_cups_env()
                 res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, env=env)
+                if res.returncode != 0:
+                    # 回退重试
+                    res = subprocess.run(["lpinfo", "-v"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+
                 devices = []
                 seen_uris = set()
 
@@ -96,21 +104,21 @@ class PrinterAdminHandler(BaseHandler):
 
                         friendly_name = friendly_name.strip()
                         if uri not in seen_uris and uri not in ["hp", "usb", "direct"]:
-                            devices.append({"uri": uri, "name": friendly_name})
+                            devices.append({"uri": uri, "name": friendly_name, "info": friendly_name})
                             seen_uris.add(uri)
 
                 self.write_json(True, "扫描物理端口成功", data=devices)
             except Exception as e:
                 self.write_json(False, f"扫描物理端口异常: {str(e)}")
 
-        elif action == "drivers":
+        elif action in ["drivers", "search_drivers"]:
             q = self.get_argument("q", "").strip().lower()
             try:
-                env = os.environ.copy()
-                env["CUPS_SERVER"] = "/run/cups/cups.sock"
-                env["LANG"] = "C"
-
+                env = get_cups_env()
                 res = subprocess.run(["lpinfo", "-m"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, env=env)
+                if res.returncode != 0:
+                    res = subprocess.run(["lpinfo", "-m"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+
                 drivers = []
                 for line in res.stdout.splitlines():
                     line = line.strip()
@@ -122,10 +130,10 @@ class PrinterAdminHandler(BaseHandler):
 
                     if not q:
                         if any(k in drv_id.lower() or k in drv_name.lower() for k in ["hplip", "foo2zjs", "laserjet", "series"]):
-                            drivers.append({"id": drv_id, "name": drv_name})
+                            drivers.append({"id": drv_id, "name": drv_name, "info": drv_name})
                     else:
                         if q in drv_id.lower() or q in drv_name.lower():
-                            drivers.append({"id": drv_id, "name": drv_name})
+                            drivers.append({"id": drv_id, "name": drv_name, "info": drv_name})
 
                     if len(drivers) >= 80:
                         break
@@ -138,15 +146,13 @@ class PrinterAdminHandler(BaseHandler):
 
     def post(self):
         action = self.get_argument("action", "").strip()
-        printer = self.get_argument("printer", "").strip()
+        printer = self.get_argument("printer", "").strip() or self.get_argument("name", "").strip()
 
         if printer and (printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', printer)):
             self.write_json(False, "非法打印机设备名称")
             return
 
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
+        env = get_cups_env()
 
         if action == "resume_printer":
             if not printer:
@@ -230,7 +236,7 @@ class PrinterAdminHandler(BaseHandler):
                 self.write_json(False, f"测试页异常: {str(e)}")
             return
 
-        elif action == "cancel_all":
+        elif action in ["cancel_all", "clean_jobs"]:
             try:
                 subprocess.run(["cancel", "-a"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
                 self.write_json(True, "所有打印队列已清空")
@@ -320,15 +326,15 @@ class PrinterAdminHandler(BaseHandler):
                 shutil.rmtree(extract_dir, ignore_errors=True)
             return
 
-        elif action == "clean_disk":
+        elif action in ["clean_disk", "clean_tmp"]:
             perform_cleanup()
             self.write_json(True, "临时缓存与碎片清理完成！已同步激活后台静默自洁。")
             return
 
-        # 添加新打印机
+        # 添加新打印机 (兼容 action 为空或 action=add_printer)
         try:
             uri = self.get_argument("uri", "").strip() or self.get_argument("device_uri", "").strip()
-            name = self.get_argument("name", "").strip() or self.get_argument("printer_name", "").strip()
+            name = self.get_argument("name", "").strip() or self.get_argument("printer_name", "").strip() or printer
             driver = self.get_argument("driver", "").strip() or self.get_argument("ppd_name", "").strip()
             description = self.get_argument("description", "").strip()
             ppd_file = self.request.files.get("ppd_file", [])
