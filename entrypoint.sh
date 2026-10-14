@@ -69,6 +69,8 @@ mkdir -p /opt/cups_data \
          /var/run/lock \
          /var/run/dbus \
          /var/run/avahi-daemon \
+         /run/cups \
+         /var/run/cups \
          /etc/cups/ppd \
          /tmp/cups_web_uploads \
          /tmp/mail_print_tasks \
@@ -82,6 +84,8 @@ chmod -R 777 /scans \
              /var/run/lock \
              /var/run/dbus \
              /var/run/avahi-daemon \
+             /run/cups \
+             /var/run/cups \
              /tmp/cups_web_uploads \
              /tmp/mail_print_tasks \
              /opt/webapp/data \
@@ -150,6 +154,7 @@ DefaultAuthType Basic
 WebInterface Yes
 ServerAlias *
 DefaultLanguage zh_CN
+DefaultCharset UTF-8
 DefaultPaperSize A4
 DefaultEncryption Never
 
@@ -286,13 +291,16 @@ if [ -n "$INDEX_HTML" ]; then
     ln -sf /usr/share/cups/doc-root/index.html /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
 fi
 
-# 4. 纠偏文件读取权限 (确保 lp 与 root 均能无阻碍读取)
+# 4. 纠偏文件与 socket 目录读取权限 (确保 lp 与 root 均能无阻碍读取)
 chmod -R 755 /usr/share/cups/templates /usr/share/cups/locale /usr/share/cups/doc-root 2>/dev/null || true
 
 # ================= 9. 启动核心服务 =================
 echo ">>> [1/2] 启动 CUPS 核心引擎 (631)..."
 /usr/sbin/cupsd
 sleep 1
+
+# 确保 socket 建立后权限放宽，避免后端 Tornado 无法通信
+chmod 777 /run/cups/cups.sock 2>/dev/null || true
 
 PRINTER_INIT_LIST=$(lpstat -p 2>/dev/null | awk '{print $2}' || true)
 if [ -n "$PRINTER_INIT_LIST" ]; then
