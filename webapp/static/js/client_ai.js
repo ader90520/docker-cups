@@ -1,6 +1,14 @@
 /**
- * 端侧 ONNX 运算中枢 (移动端单线程与无 SIMD 兼容版)
+ * 端侧 ONNX 运算中枢 (移动端 Safari 与低内存硬件完全兼容版)
  */
+
+// 1. 必须在全局生命周期最顶层彻底锁死 WASM，消除 SIMD 预检与多线程开销
+if (typeof ort !== 'undefined' && ort.env) {
+    ort.env.wasm = ort.env.wasm || {};
+    ort.env.wasm.simd = false;
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.proxy = false;
+}
 
 window.DocAI = {
     session: null,
@@ -15,22 +23,25 @@ window.DocAI = {
                 return;
             }
 
+            // 双重保险：再次锁定运行上下文
             ort.env.wasm.numThreads = 1;
             ort.env.wasm.simd = false;
 
             const sessionOptions = {
                 executionProviders: ['wasm'],
-                graphOptimizationLevel: 'all'
+                graphOptimizationLevel: 'disabled' // 禁用图优化，杜绝 SIMD 算子强校验
             };
 
             const t0 = performance.now();
             logToConsole("正在挂载本地默认模型 /models/doc_corner.onnx...");
 
             try {
-                this.session = await ort.InferenceSession.create("/models/doc_corner.onnx", sessionOptions);
+                // 追加时间戳杜绝 iOS Safari 强制读取已损坏的旧缓存
+                const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
+                this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
                 this.readyStatus["corner"] = true;
-                this.updateUIStatus("WASM (兼容模式)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
+                this.updateUIStatus("WASM (标准兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
                 logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
 
                 const pill = document.getElementById("ai-engine-pill");
@@ -40,8 +51,15 @@ window.DocAI = {
                     pill.style.color = "#166534";
                 }
             } catch (loadErr) {
-                logToConsole(`本地模型未挂载或算子不兼容: ${loadErr.message}`, "warn");
-                this.updateUIStatus("主机端代理", "宿主机计算", "服务端滤镜", "0ms");
+                // 给出极其明晰的诊断原因
+                let reason = loadErr.message || "未知原因";
+                if (reason.includes("invalid wire type") || reason.includes("offset")) {
+                    reason = "模型文件损坏 (可能下载到了 HTML 网页或空文件)";
+                } else if (reason.includes("SIMD")) {
+                    reason = "设备不支持 WASM SIMD 指令集";
+                }
+                logToConsole(`ℹ 本地模型未就绪: ${reason}，系统已无缝回退到主机计算`, "warn");
+                this.updateUIStatus("主机端代理", "宿主机计算", "服务端几何滤镜", "0ms");
 
                 const pill = document.getElementById("ai-engine-pill");
                 if (pill) {
@@ -77,12 +95,17 @@ window.DocAI = {
         }
 
         const file = fileInput.files[0];
-        logToConsole(`正在深度解析 ${file.name} 的模型拓扑结构...`);
+        if (!file.name.toLowerCase().endsWith(".onnx")) {
+            if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">仅允许上传 .onnx 格式二进制模型</span>';
+            return;
+        }
+
+        logToConsole(`正在校验并上传模型: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
         const fd = new FormData();
         fd.append("model_file", file);
 
         try {
-            const resp = await fetch("/api/models", { method: "POST", body: fd });
+            const resp = await fetch("/api/model/upload", { method: "POST", body: fd });
             const res = await resp.json();
             if (res.success) {
                 logToConsole(`✔ ${res.msg}`, "success");
@@ -107,13 +130,13 @@ window.DocAI = {
             const res = await resp.json();
             const models = res.models || [];
             if (models.length === 0) {
-                box.innerHTML = '<div style="font-size:11px; color:#94a3b8;">暂未挂载外部 ONNX 权重</div>';
+                box.innerHTML = '<div style="font-size:11px; color:#94a3b8; padding:6px;">暂未挂载外部 ONNX 权重</div>';
                 return;
             }
             box.innerHTML = models.map(m => `
-                <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; border:1px solid #e2e8f0; padding:6px 8px; border-radius:4px; font-size:11px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; background:#fff; border:1px solid #e2e8f0; padding:6px 8px; border-radius:4px; font-size:11px; margin-bottom:4px;">
                     <div><b>📦 ${m.name}</b> <span style="color:#64748b; font-size:10px;">(${m.size})</span></div>
-                    <button type="button" class="btn-text-danger" onclick="DocAI.removeModel('${m.name}')">移除</button>
+                    <button type="button" class="btn-text-danger" style="color:#ef4444; border:none; background:none; cursor:pointer;" onclick="DocAI.removeModel('${m.name}')">移除</button>
                 </div>
             `).join('');
         } catch (e) {
@@ -128,6 +151,7 @@ window.DocAI = {
             const res = await resp.json();
             logToConsole(res.msg, res.success ? "success" : "error");
             this.fetchDeployedModels();
+            this.init();
         } catch (e) {
             logToConsole(`移除异常: ${e.message}`, "error");
         }
