@@ -1,54 +1,71 @@
-name: Export DocCornerNet ONNX
+name: Export DocAligner Lightweight ONNX
 
 on:
   workflow_dispatch:
 
 jobs:
-  export:
+  export-model:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout Code
+      - name: 检出当前仓库代码
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: 安装依赖库
         run: |
           pip install --upgrade pip
-          pip install tensorflow keras tf2onnx onnx
+          pip install docaligner onnx onnxruntime torch
 
-      - name: Clone & Run Native Exporter
+      - name: 编译导出标准轻量 doc_corner.onnx
         run: |
-          git clone https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/model_source
-          cd /tmp/model_source
+          python -c "
+          import os, torch, onnx
+          from docaligner import DocAligner
 
-          # 使用作者原生 export_onnx.py 并传齐必选参数
-          python export_onnx.py \
-            --checkpoint checkpoints/mobilenetv2_256_best \
-            --output /tmp/doc_corner.onnx \
-            --opset 13
+          print('>>> [1/3] 正在加载 DocAligner LCNet100 超轻骨干权重...')
+          aligner = DocAligner(model_name='lcnet100_h_e_bifpn_256')
+          model = aligner.model
+          model.eval()
 
-          # 校验生成结果
-          if [ ! -f /tmp/doc_corner.onnx ]; then
-            echo "作者 export_onnx 未直接在 /tmp 生成，查找工作区内所有的 onnx 文件..."
-            find . -name "*.onnx" -exec cp {} /tmp/doc_corner.onnx \;
-          fi
+          # 构造标准的 256x256 静态输入尺寸 (无动态算子开销，完美适配移动端 Safari/WASM)
+          dummy_input = torch.randn(1, 3, 256, 256)
+          output_dir = 'webapp/models'
+          os.makedirs(output_dir, exist_ok=True)
+          output_path = os.path.join(output_dir, 'doc_corner.onnx')
 
-          ls -lh /tmp/doc_corner.onnx
+          print('>>> [2/3] 正在导出为纯净 ONNX (Opset 12)...')
+          torch.onnx.export(
+              model,
+              dummy_input,
+              output_path,
+              export_params=True,
+              opset_version=12,
+              do_constant_folding=True,
+              input_names=['input'],
+              output_names=['output']
+          )
 
-          mkdir -p $GITHUB_WORKSPACE/webapp/models/
-          cp /tmp/doc_corner.onnx $GITHUB_WORKSPACE/webapp/models/doc_corner.onnx
+          size_mb = os.path.getsize(output_path) / (1024 * 1024)
+          print(f'✔ [3/3] 编译成功！文件已生成至: {output_path} (体积: {size_mb:.2f} MB)')
+          "
 
-      - name: Commit Model to Repository
+      - name: 归档生成可下载文件 (页面直接下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc_corner_onnx
+          path: webapp/models/doc_corner.onnx
+
+      - name: 自动提交模型到代码仓库 (实现无需手动上传的闭环)
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Auto-build: successfully exported doc_corner.onnx" || echo "Nothing to commit"
+          git commit -m "Auto-build: successfully exported doc_corner.onnx (DocAligner LCNet100)" || echo "Nothing to commit"
           git push
