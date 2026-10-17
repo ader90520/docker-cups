@@ -179,7 +179,6 @@ def process_image_for_print(input_path, output_path, media="A4", is_color=False)
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            # 1. 估算全图低频光照阴影背景 (使用形态学大核平滑闭运算)
             max_channel = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
             small_w, small_h = max(60, calc_w // 6), max(60, calc_h // 6)
             small_b = cv2.resize(max_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
@@ -189,44 +188,35 @@ def process_image_for_print(input_path, output_path, media="A4", is_color=False)
             bg_morph = cv2.resize(bg_morph_small, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
             bg_float = cv2.GaussianBlur(bg_morph, (21, 21), 0).astype(np.float32) + 1.0
 
-            # 2. 图像背景白化除法 (Division Normalization)
             r_div = np.clip((r_f / bg_float) * 255.0, 0, 255)
             g_div = np.clip((g_f / bg_float) * 255.0, 0, 255)
             b_div = np.clip((b_f / bg_float) * 255.0, 0, 255)
 
-            # 3. 灰度与梯度检测
             gray_div = (0.299 * r_div + 0.587 * g_div + 0.114 * b_div)
             grad_x = cv2.Sobel(gray_div, cv2.CV_32F, 1, 0, ksize=3)
             grad_y = cv2.Sobel(gray_div, cv2.CV_32F, 0, 1, ksize=3)
             grad_mag = np.sqrt(grad_x**2 + grad_y**2)
 
-            # 4. 彩色通道识别 (红印章、橘色标题、彩色图形、红色批注)
             red_excess = r_f - np.maximum(g_f, b_f)
             color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
-            # 放宽彩色判断，捕获所有非黑白颜色
             is_color_element = (red_excess > 5.0) | (color_diff > 10.0)
 
-            # 5. 文字线稿高灵敏度遮罩 (强边缘 OR 灰度深度)
             is_text_mask = (~is_color_element) & (((gray_div < 225.0) & (grad_mag > 5.0)) | (gray_div < 185.0))
 
-            # 初始背景纯白
             out_r = np.full_like(r_div, 255.0)
             out_g = np.full_like(g_div, 255.0)
             out_b = np.full_like(b_div, 255.0)
 
             if is_color:
-                # 彩色模式：增强色彩饱和度，原汁原味还原
                 out_r[is_color_element] = np.clip(r_div[is_color_element] * 0.95, 0, 255)
                 out_g[is_color_element] = np.clip(g_div[is_color_element] * 0.90, 0, 255)
                 out_b[is_color_element] = np.clip(b_div[is_color_element] * 0.90, 0, 255)
 
-            # 无论黑白还是彩色，纯文字字迹加深为深黑色 (极大解决字体不清晰发灰问题)
             dark_ink = np.clip(gray_div[is_text_mask] * 0.28, 5.0, 55.0)
             out_r[is_text_mask] = dark_ink
             out_g[is_text_mask] = dark_ink
             out_b[is_text_mask] = dark_ink
 
-            # 6. 轻量边缘裁切净边
             out_bgr = cv2.merge([out_b, out_g, out_r])
             out_bgr = clean_extreme_edges_only(out_bgr, margin_ratio=0.012)
 
@@ -237,7 +227,6 @@ def process_image_for_print(input_path, output_path, media="A4", is_color=False)
             final_canvas.save(output_path, format="JPEG", quality=90, dpi=(200, 200))
 
         else:
-            # Pillow 回退管线
             with Image.open(input_path) as disk_img:
                 img = ImageOps.exif_transpose(disk_img).convert("RGB")
 
@@ -429,6 +418,7 @@ class PrintHandler(BaseHandler):
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
+                # 仅针对 PDF 实体文件附加 page-ranges，杜绝单页图片被拒绝
                 if is_pdf and page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
