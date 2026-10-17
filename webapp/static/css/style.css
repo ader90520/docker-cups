@@ -197,7 +197,7 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* PC 端双列弹性自适应网格布局（强化对齐） */
+/* PC 端双列网格布局：启用 stretch 实现左右严格等高 */
 .pc-double-layout {
     display: grid;
     grid-template-columns: 0.95fr 1.05fr;
@@ -270,7 +270,7 @@ body {
     color: var(--text-sub);
 }
 
-/* 身份证 85.6 : 54 网格 */
+/* 身份证 85.6 : 54 黄金双列网格 */
 .idcard-ratio-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -400,7 +400,7 @@ body {
     background: var(--primary-green-hover);
 }
 
-/* 预览容器自适应填满与绝对对齐 */
+/* 右侧自适应铺满预览容器，实现底部平齐 */
 .col-right .preview-container {
     flex: 1 1 auto;
     display: flex;
@@ -442,7 +442,7 @@ body {
     color: #166534;
 }
 
-/* 视窗容器：使用弹性填充确保与左列底部严丝合缝 */
+/* 视窗容器：由固定高度改为 flex 自适应填充满，两边底部彻底对齐 */
 .viewport-wrapper {
     position: relative;
     background: #1e293b;
