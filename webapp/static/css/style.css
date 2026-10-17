@@ -197,18 +197,20 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* 双列网格布局：合理比例与协调视觉 */
+/* PC 端双列网格布局：启用 stretch 确保左右列高度平齐 */
 .pc-double-layout {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 0.95fr 1.05fr;
     gap: 12px;
     width: 100%;
-    align-items: start;
+    align-items: stretch;
 }
 
 .col-left, .col-right {
     min-width: 0;
     width: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .card-box {
@@ -321,7 +323,7 @@ body {
     object-fit: cover;
 }
 
-/* 扁平单选组 */
+/* 扁平交互单选组 */
 .flat-radio-group {
     display: flex;
     border: 1px solid var(--border-color);
@@ -398,13 +400,18 @@ body {
     background: var(--primary-green-hover);
 }
 
-/* 精准优化的实时预览容器：紧凑协调，消灭突兀黑边 */
-.preview-container {
+/* 右侧自适应铺满预览容器，实现底部平齐 */
+.col-right .preview-container {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
     padding: 12px;
     width: 100%;
+    overflow: hidden;
 }
 
 .preview-toolbar {
@@ -435,7 +442,7 @@ body {
     color: #166534;
 }
 
-/* 核心优化：高宽适中，PC 端高度收敛至 440px，居中呼吸适度 */
+/* 视窗容器：采用 440px 黄金高度并兼顾 Flex 居中，比例紧凑精致，消除巨大空旷黑框 */
 .viewport-wrapper {
     position: relative;
     background: #1e293b;
@@ -490,7 +497,7 @@ body {
 }
 
 /* 底部队列任务数条 */
-.printer-status-bar {
+.col-right .printer-status-bar {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
@@ -502,7 +509,7 @@ body {
     font-size: 12px;
 }
 
-/* 设备管理控制台高度协调 */
+/* 设备管理控制台协调 */
 #panel-devices #ai-diag-console {
     background: #1e293b;
     color: #e2e8f0;
