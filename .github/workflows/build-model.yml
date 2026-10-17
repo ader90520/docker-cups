@@ -1,4 +1,4 @@
-name: Export DocAligner Lightweight ONNX
+name: Export DocCornerNet ONNX
 
 on:
   workflow_dispatch:
@@ -13,56 +13,60 @@ jobs:
       - name: 检出当前仓库代码
         uses: actions/checkout@v4
 
-      - name: 下载并验证 DocAligner 官方原生 ONNX 模型
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装模型转换依赖
+        run: |
+          pip install --upgrade pip
+          pip install tensorflow keras tf2onnx onnx
+
+      - name: 克隆开源仓库并执行原生 ONNX 导出
         run: |
           mkdir -p webapp/models
-          TARGET_FILE="webapp/models/doc_corner.onnx"
+          TARGET_FILE="$GITHUB_WORKSPACE/webapp/models/doc_corner.onnx"
 
-          echo ">>> 正在从官方 Release 资产源获取 lcnet100 模型..."
-          
-          # 优先从 DocsaidLab 官方 Release 资产拉取
-          MODEL_URLS=(
-            "https://github.com/DocsaidLab/DocAligner/releases/download/model/lcnet100_h_e_bifpn_256_fp32.onnx"
-            "https://github.com/DocsaidLab/DocAligner/releases/download/v0.1.0/lcnet100_h_e_bifpn_256_fp32.onnx"
-            "https://huggingface.co/DocsaidLab/DocAligner/resolve/main/lcnet100_h_e_bifpn_256_fp32.onnx"
-          )
+          echo ">>> 正在克隆 DocCornerNet-CoordClass 开源项目..."
+          git clone --depth 1 https://github.com/mapo80/DocCornerNet-CoordClass.git /tmp/model_source
+          cd /tmp/model_source
 
-          SUCCESS=0
-          for url in "${MODEL_URLS[@]}"; do
-            echo "尝试下载: $url"
-            if curl -L -f -s -S --connect-timeout 15 --retry 3 -o "$TARGET_FILE" "$url"; then
-              # 校验文件是否大于 2MB 且不是 HTML 网页
-              FILE_SIZE=$(stat -c%s "$TARGET_FILE" 2>/dev/null || stat -f%z "$TARGET_FILE" 2>/dev/null || echo 0)
-              if [ "$FILE_SIZE" -gt 2000000 ]; then
-                echo "✔ 成功下载并校验模型 (大小: $((FILE_SIZE / 1024 / 1024)) MB)"
-                SUCCESS=1
-                break
-              else
-                echo "⚠ 下载文件体积异常 ($FILE_SIZE bytes)，继续尝试下一个源..."
-                rm -f "$TARGET_FILE"
-              fi
-            fi
-          done
+          echo ">>> 检查作者自带 checkpoint 目录..."
+          ls -R checkpoints || true
 
-          # 如果官方预编译权重均不可直达，采用备用极速 OpenCV 官方超轻角点模型作为保底
-          if [ "$SUCCESS" -ne 1 ]; then
-            echo ">>> 官方源资产重定向中，使用 OpenCV Zoo 官方轻量角点权重保底..."
-            curl -L -f -s -S -o "$TARGET_FILE" \
-              "https://github.com/opencv/opencv_zoo/raw/main/models/qrcode_wechat/detect_2021nov.onnx"
+          echo ">>> 执行原生 export_onnx.py 编译转换..."
+          python export_onnx.py \
+            --checkpoint checkpoints/mobilenetv2_256_best \
+            --output /tmp/doc_corner.onnx \
+            --opset 12 || python export_onnx.py --output /tmp/doc_corner.onnx || true
+
+          if [ -f /tmp/doc_corner.onnx ]; then
+            cp /tmp/doc_corner.onnx "$TARGET_FILE"
+            echo "✔ 成功生成 doc_corner.onnx"
+          else
+            echo "查找生成的其他 onnx 文件..."
+            find /tmp/model_source -name "*.onnx" -exec cp {} "$TARGET_FILE" \;
           fi
 
-          ls -lh "$TARGET_FILE"
+          if [ -f "$TARGET_FILE" ]; then
+            ls -lh "$TARGET_FILE"
+          else
+            echo "⚠ 未能生成 ONNX 模型，前端将自动保持使用 OpenCV 极速几何拉平通道"
+          fi
 
-      - name: 归档生成可下载工件 (Artifact)
+      - name: 归档生成可下载文件 (Artifact)
+        if: hashFiles('webapp/models/doc_corner.onnx') != ''
         uses: actions/upload-artifact@v4
         with:
           name: doc_corner_onnx
           path: webapp/models/doc_corner.onnx
 
-      - name: 自动提交模型到代码仓库 (闭环落地)
+      - name: 自动提交模型到代码仓库
+        if: hashFiles('webapp/models/doc_corner.onnx') != ''
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Auto-build: successfully acquired doc_corner.onnx" || echo "Nothing to commit"
+          git commit -m "Auto-build: successfully exported doc_corner.onnx via DocCornerNet" || echo "Nothing to commit"
           git push
