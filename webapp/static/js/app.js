@@ -1,6 +1,6 @@
 /**
  * CUPS 智能工作台前端核心驱动 (app.js)
- * 完整修复接口映射、响应式预览、多图排版与设备管理闭环
+ * 全功能完善版：支持扫描文件单项删除、一键清空、高度对齐与表单参数无缝同步
  */
 
 function logToConsole(msg, level = "info") {
@@ -320,8 +320,8 @@ window.PrintManager = {
         document.getElementById("sec-upload-normal").style.display = (tab === "normal" ? "block" : "none");
         document.getElementById("sec-upload-idcard").style.display = (tab === "idcard" ? "block" : "none");
 
-        const enhanceBox = document.getElementById("item-enhance-wrap") || document.getElementById("item-enhance-box");
-        const pageRangesBox = document.getElementById("item-pageranges-wrap") || document.getElementById("item-page-ranges-box");
+        const enhanceBox = document.getElementById("item-enhance-box");
+        const pageRangesBox = document.getElementById("item-page-ranges-box");
         if (tab === "idcard") {
             if (enhanceBox) enhanceBox.style.display = "none";
             if (pageRangesBox) pageRangesBox.style.display = "none";
@@ -677,7 +677,7 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 扫描硬件交互服务 ====================
+// ==================== 4. 扫描硬件交互服务 (支持单项与批量删除) ====================
 window.ScanService = {
     loadScanDevices: async function() {
         try {
@@ -714,15 +714,61 @@ window.ScanService = {
             }
             listContainer.innerHTML = files.map(f => `
                 <div style="background:#fff; border:1px solid #e2e8f0; border-radius:4px; padding:6px 8px; display:flex; justify-content:space-between; align-items:center; font-size:11px;">
-                    <div><b>📄 ${f.filename}</b> <span style="color:#64748b;">(${f.size})</span></div>
-                    <div style="display:flex; gap:4px;">
+                    <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">
+                        <b>📄 ${f.filename}</b> <span style="color:#64748b;">(${f.size})</span>
+                    </div>
+                    <div style="display:flex; gap:4px; align-items:center;">
                         <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px;" onclick="ScanService.viewScan('${f.url}')">查看</button>
                         <a href="${f.download_url}" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 6px; text-decoration:none;">下载</a>
+                        <button type="button" class="btn-text-danger" style="padding:2px 4px; font-weight:700;" onclick="ScanService.deleteScan('${f.filename}')" title="删除此条">×</button>
                     </div>
                 </div>
             `).join('');
         } catch (e) {
             logToConsole(`获取扫描存档失败: ${e.message}`, "error");
+        }
+    },
+
+    deleteScan: async function(filename) {
+        if (!confirm(`确定要彻底删除文件 ${filename} 吗？`)) return;
+        try {
+            const resp = await fetch("/api/scan/delete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename: filename })
+            });
+            const res = await resp.json();
+            if (res.success) {
+                logToConsole(`✔ ${res.msg}`, "success");
+                this.loadScanList();
+            } else {
+                logToConsole(`❌ 删除失败: ${res.msg}`, "error");
+            }
+        } catch (e) {
+            logToConsole(`删除通信异常: ${e.message}`, "error");
+        }
+    },
+
+    clearAllScans: async function() {
+        if (!confirm("确定要清空所有已扫描保存的文件吗？")) return;
+        try {
+            const resp = await fetch("/api/scan/list");
+            const res = await resp.json();
+            const files = res.files || [];
+            for (const f of files) {
+                await fetch("/api/scan/delete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ filename: f.filename })
+                });
+            }
+            logToConsole("✔ 扫描历史已彻底清空", "success");
+            this.loadScanList();
+            document.getElementById("scan-empty-tip").style.display = "block";
+            const liveImg = document.getElementById("scan-live-img");
+            if (liveImg) { liveImg.style.display = "none"; liveImg.src = ""; }
+        } catch (e) {
+            logToConsole(`清空历史异常: ${e.message}`, "error");
         }
     },
 
@@ -773,7 +819,6 @@ window.ScanService = {
 
 // ==================== 5. 设备管理与运维服务 ====================
 window.DashboardService = {
-    // 彻底修复：同时容错 res.data.printers 与 res.printers
     loadPrinters: async function(showToast = false) {
         try {
             const resp = await fetch("/api/devices");
@@ -788,7 +833,6 @@ window.DashboardService = {
             select.innerHTML = "";
             if (mailSelect) mailSelect.innerHTML = "";
 
-            // 核心修复点：提取后端真实打印机数组
             const printers = (res.data && res.data.printers) ? res.data.printers : (res.printers || []);
             const defaultPrinter = (res.data && res.data.default) ? res.data.default : (res.default || "");
 
@@ -887,7 +931,6 @@ window.DashboardService = {
         }
     },
 
-    // 核心修复点：正确路由到 /api/printer_admin?action=discovered_devices
     loadDiscoveredDevices: async function() {
         logToConsole("正在扫描硬件物理端口与 USB URI...");
         const select = document.getElementById("discovered-device-select");
@@ -909,7 +952,21 @@ window.DashboardService = {
         }
     },
 
-    // 核心修复点：正确路由到 /api/printer_admin?action=drivers&q=...
+    onDiscoveredDeviceSelect: function(selectEl) {
+        const val = selectEl.value;
+        if (!val) return;
+        const nameInput = document.getElementById("add-printer-name");
+        if (nameInput && !nameInput.value) {
+            let guess = "Printer_Device";
+            if (val.includes("model=")) {
+                guess = val.split("model=")[1].split("&")[0].replace(/\+/g, "_");
+            } else if (val.includes("hp:/usb/")) {
+                guess = val.split("hp:/usb/")[1].split("?")[0].replace(/[^a-zA-Z0-9]/g, "_");
+            }
+            nameInput.value = guess;
+        }
+    },
+
     searchDrivers: async function() {
         const kw = document.getElementById("driver-search-kw")?.value.trim();
         const box = document.getElementById("driver-search-results");
@@ -940,43 +997,35 @@ window.DashboardService = {
         logToConsole(`已选定驱动: ${drvId}`);
     },
 
-    uploadPpd: async function() {
-        const fileInput = document.getElementById("ppd-file-input");
-        const alertBox = document.getElementById("ppd-alert");
-        if (!fileInput || fileInput.files.length === 0) {
-            alert("请选取 .ppd 驱动文件");
-            return;
-        }
-        const fd = new FormData();
-        fd.append("action", "upload_ppd");
-        fd.append("ppd_file", fileInput.files[0]);
-        try {
-            const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
-            const res = await resp.json();
-            if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
-            logToConsole(res.msg, res.success ? "success" : "error");
-        } catch (e) {
-            logToConsole(`安装 PPD 异常: ${e.message}`, "error");
-        }
-    },
+    submitAddPrinter: async function() {
+        const uri = document.getElementById("discovered-device-select")?.value;
+        const name = document.getElementById("add-printer-name")?.value.trim();
+        const driver = document.getElementById("driver-input-val")?.value.trim();
+        const alertBox = document.getElementById("add-printer-alert");
 
-    uploadPlugin: async function() {
-        const fileInput = document.getElementById("plugin-file-input");
-        const alertBox = document.getElementById("plugin-alert");
-        if (!fileInput || fileInput.files.length === 0) {
-            alert("请选取 .run 插件包文件");
+        if (!uri) {
+            if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">请选取物理硬件端口</span>';
             return;
         }
+        if (!name) {
+            if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">请输入打印机标识名称</span>';
+            return;
+        }
+
         const fd = new FormData();
-        fd.append("action", "upload_scanner_plugin");
-        fd.append("plugin_file", fileInput.files[0]);
+        fd.append("action", "add_printer");
+        fd.append("uri", uri);
+        fd.append("name", name);
+        fd.append("driver", driver || "raw");
+
         try {
             const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
             const res = await resp.json();
             if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
             logToConsole(res.msg, res.success ? "success" : "error");
+            if (res.success) this.loadPrinters(true);
         } catch (e) {
-            logToConsole(`安装插件异常: ${e.message}`, "error");
+            logToConsole(`添加设备异常: ${e.message}`, "error");
         }
     },
 
@@ -1034,14 +1083,15 @@ window.MailService = {
             const resp = await fetch("/api/mail_config");
             const res = await resp.json();
             const cfg = res.data || res.config || {};
-            const enableEl = document.getElementById("mail_enable");
-            if (enableEl) enableEl.value = (cfg.enable === true || cfg.enable === "true") ? "true" : "false";
-            if (document.getElementById("mail_server")) document.getElementById("mail_server").value = cfg.server || "imap.qq.com";
-            if (document.getElementById("mail_port")) document.getElementById("mail_port").value = cfg.port || 993;
-            if (document.getElementById("mail_user")) document.getElementById("mail_user").value = cfg.user || "";
-            if (document.getElementById("mail_keyword")) document.getElementById("mail_keyword").value = cfg.keyword || "";
-            if (document.getElementById("mail_whitelist")) document.getElementById("mail_whitelist").value = cfg.whitelist || "";
-            if (document.getElementById("mail_pushplus_token")) document.getElementById("mail_pushplus_token").value = cfg.pushplus_token || "";
+            const enableEl = document.getElementById("mail-enable");
+            if (enableEl) enableEl.checked = (cfg.enable === true || cfg.enable === "true");
+            if (document.getElementById("mail-server")) document.getElementById("mail-server").value = cfg.server || "imap.qq.com";
+            if (document.getElementById("mail-port")) document.getElementById("mail-port").value = cfg.port || 993;
+            if (document.getElementById("mail-user")) document.getElementById("mail-user").value = cfg.user || "";
+            if (document.getElementById("mail-pwd")) document.getElementById("mail-pwd").value = cfg.password || "";
+            if (document.getElementById("mail-keyword")) document.getElementById("mail-keyword").value = cfg.keyword || "";
+            if (document.getElementById("mail-whitelist")) document.getElementById("mail-whitelist").value = cfg.whitelist || "";
+            if (document.getElementById("mail-pushplus-token")) document.getElementById("mail-pushplus-token").value = cfg.pushplus_token || "";
         } catch (e) {
             logToConsole(`读取邮箱配置异常: ${e.message}`, "error");
         }
@@ -1053,6 +1103,9 @@ window.MailService = {
         const form = document.getElementById("mail-cfg-form");
         if (!form) return;
         const fd = new FormData(form);
+        if (!fd.has("enable")) {
+            fd.append("enable", "false");
+        }
 
         try {
             const resp = await fetch("/api/mail_config", { method: "POST", body: fd });
@@ -1070,9 +1123,4 @@ document.addEventListener("DOMContentLoaded", () => {
     PrintManager.init();
     IdCardManager.bindBoxEvents(0);
     DashboardService.loadPrinters(false);
-
-    const mailForm = document.getElementById("mail-cfg-form");
-    if (mailForm) {
-        mailForm.onsubmit = (e) => MailService.saveConfig(e);
-    }
 });
