@@ -153,7 +153,6 @@ window.DocAI = {
         }
     },
 
-    // 核心修复点：使用 async/await 确保所有缓存和本地存储彻底删完后，强制刷新页面
     clearCacheAndReload: async function() {
         logToConsole("正在清理端侧运行时缓存与离线存储...");
         try {
