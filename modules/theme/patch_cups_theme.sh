@@ -1,22 +1,61 @@
 #!/bin/bash
 set -e
 
-echo ">>> [Theme] 开始注入 CUPS 导航条与页尾深蓝主题..."
+echo ">>> [Theme & i18n] 开始注入 CUPS 导航条与页尾深蓝主题及全站中文汉化..."
 
-mkdir -p /usr/share/cups/doc-root /usr/share/cups/templates/zh_CN /tmp/zh_templates
+mkdir -p /usr/share/cups/doc-root \
+         /usr/share/cups/templates/zh_CN \
+         /usr/share/cups/templates/zh \
+         /usr/share/locale/zh_CN/LC_MESSAGES \
+         /tmp/zh_templates
 
-# 1. 拷贝中文首页及模板
-if [ -f /tmp/index.html ]; then
-    cp -f /tmp/index.html /usr/share/cups/doc-root/index.html
+# 1. 编译并部署 GNU gettext 语言包 (.po -> .mo)
+PO_FILE=$(find /opt /usr /tmp -name "cups_zh.po" 2>/dev/null | head -n 1)
+if [ -n "$PO_FILE" ] && [ -f "$PO_FILE" ]; then
+    echo ">>> 正在编译 cups_zh.po -> cups_zh_CN.mo..."
+    if command -v msgfmt >/dev/null 2>&1; then
+        msgfmt "$PO_FILE" -o /usr/share/locale/zh_CN/LC_MESSAGES/cups_zh_CN.mo 2>/dev/null || true
+        cp -f /usr/share/locale/zh_CN/LC_MESSAGES/cups_zh_CN.mo /usr/share/locale/zh_CN/LC_MESSAGES/cups_zh.mo 2>/dev/null || true
+    fi
 fi
 
-if [ -d /tmp/zh_templates ]; then
-    cp -rf /tmp/zh_templates/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+# 2. 拷贝中文首页及所有子页面模板
+INDEX_SRC=$(find /opt /tmp /usr -name "index.html" -path "*/i18*" 2>/dev/null | head -n 1)
+if [ -z "$INDEX_SRC" ] && [ -f /tmp/index.html ]; then
+    INDEX_SRC="/tmp/index.html"
+fi
+if [ -n "$INDEX_SRC" ] && [ -f "$INDEX_SRC" ]; then
+    cp -f "$INDEX_SRC" /usr/share/cups/doc-root/index.html
+    cp -f "$INDEX_SRC" /usr/share/cups/doc-root/index.html.zh_CN 2>/dev/null || true
 fi
 
-# 2. 定制样式表，注入顶底蓝色样式
+ZH_TPL_DIR=$(find /opt /tmp /usr -type d -path "*/i18/zh_CN" 2>/dev/null | head -n 1)
+if [ -z "$ZH_TPL_DIR" ]; then
+    ZH_TPL_DIR="/tmp/zh_templates"
+fi
+
+if [ -d "$ZH_TPL_DIR" ]; then
+    cp -rf "$ZH_TPL_DIR"/* /usr/share/cups/templates/zh_CN/ 2>/dev/null || true
+    cp -rf "$ZH_TPL_DIR"/* /usr/share/cups/templates/zh/ 2>/dev/null || true
+    # 直接作为默认根模板覆盖，彻底杜绝子页面回退到英文
+    cp -rf "$ZH_TPL_DIR"/* /usr/share/cups/templates/ 2>/dev/null || true
+fi
+
+# 3. 强制在 cupsd.conf 中声明默认语言
+if [ -f /etc/cups/cupsd.conf ]; then
+    sed -i '/DefaultLanguage/d' /etc/cups/cupsd.conf
+    sed -i '/DefaultCharset/d' /etc/cups/cupsd.conf
+    cat << 'EOF' >> /etc/cups/cupsd.conf
+DefaultLanguage zh_CN
+DefaultCharset UTF-8
+DefaultPaperSize A4
+EOF
+fi
+
+# 4. 定制样式表，注入顶底蓝色样式
 CSS_FILE="/usr/share/cups/doc-root/cups.css"
 if [ -f "$CSS_FILE" ]; then
+    sed -i '/顶部导航与底栏深蓝主题/,$d' "$CSS_FILE" || true
     cat << 'EOF' >> "$CSS_FILE"
 
 /* ==================== 顶部导航与底栏深蓝主题 ==================== */
