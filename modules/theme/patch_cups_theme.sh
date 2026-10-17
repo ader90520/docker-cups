@@ -52,7 +52,7 @@ DefaultPaperSize A4
 EOF
 fi
 
-# 4. 定制样式表，注入顶底蓝色样式
+# 4. 定制样式表，注入顶底深蓝主题
 CSS_FILE="/usr/share/cups/doc-root/cups.css"
 if [ -f "$CSS_FILE" ]; then
     sed -i '/顶部导航与底栏深蓝主题/,$d' "$CSS_FILE" || true
@@ -69,7 +69,6 @@ html, body {
     flex-direction: column !important;
 }
 
-/* 顶部整体深蓝条 */
 div.header {
     background: linear-gradient(135deg, #004b99, #0066cc) !important;
     padding: 15px 25px !important;
@@ -114,7 +113,6 @@ div.header ul li a:hover {
     color: #ffffff !important;
 }
 
-/* 主内容区：解除 1000px 宽度禁锢，自适应通栏平展铺满 */
 div.body {
     flex: 1 0 auto !important;
     width: auto !important;
@@ -128,7 +126,6 @@ div.body {
     box-sizing: border-box !important;
 }
 
-/* 底部整条深蓝条：强制贴底且通栏延展 */
 div.footer {
     flex-shrink: 0 !important;
     background: #004080 !important;
