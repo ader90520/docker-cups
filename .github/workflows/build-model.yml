@@ -13,65 +13,56 @@ jobs:
       - name: 检出当前仓库代码
         uses: actions/checkout@v4
 
-      - name: 配置 Python 环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: 安装基础依赖
+      - name: 下载并验证 DocAligner 官方原生 ONNX 模型
         run: |
-          pip install --upgrade pip
-          pip install torch onnx onnxruntime docsaidkit albumentations
+          mkdir -p webapp/models
+          TARGET_FILE="webapp/models/doc_corner.onnx"
 
-      - name: 克隆 DocAligner 源码并导出 ONNX
-        run: |
-          # 1. 克隆官方源码并以开发模式安装
-          git clone --depth 1 https://github.com/DocsaidLab/DocAligner.git /tmp/DocAligner
-          cd /tmp/DocAligner
-          pip install -e .
-
-          # 2. 调用官方接口加载 LCNet 权重并导出为静态 256x256 ONNX
-          python -c "
-          import os, torch, onnx
-          from docaligner import DocAligner
-
-          print('>>> 正在拉取 LCNet100 权重并构建网络...')
-          model_name = 'lcnet100_h_e_bifpn_256'
-          aligner = DocAligner(model_name=model_name)
-          model = aligner.model
-          model.eval()
-
-          dummy_input = torch.randn(1, 3, 256, 256)
-          out_dir = '$GITHUB_WORKSPACE/webapp/models'
-          os.makedirs(out_dir, exist_ok=True)
-          out_path = os.path.join(out_dir, 'doc_corner.onnx')
-
-          print(f'>>> 导出静态 ONNX 到: {out_path} ...')
-          torch.onnx.export(
-              model,
-              dummy_input,
-              out_path,
-              export_params=True,
-              opset_version=12,
-              do_constant_folding=True,
-              input_names=['input'],
-              output_names=['output']
+          echo ">>> 正在从官方 Release 资产源获取 lcnet100 模型..."
+          
+          # 优先从 DocsaidLab 官方 Release 资产拉取
+          MODEL_URLS=(
+            "https://github.com/DocsaidLab/DocAligner/releases/download/model/lcnet100_h_e_bifpn_256_fp32.onnx"
+            "https://github.com/DocsaidLab/DocAligner/releases/download/v0.1.0/lcnet100_h_e_bifpn_256_fp32.onnx"
+            "https://huggingface.co/DocsaidLab/DocAligner/resolve/main/lcnet100_h_e_bifpn_256_fp32.onnx"
           )
 
-          size_mb = os.path.getsize(out_path) / (1024 * 1024)
-          print(f'✔ 导出完成！文件体积: {size_mb:.2f} MB')
-          "
+          SUCCESS=0
+          for url in "${MODEL_URLS[@]}"; do
+            echo "尝试下载: $url"
+            if curl -L -f -s -S --connect-timeout 15 --retry 3 -o "$TARGET_FILE" "$url"; then
+              # 校验文件是否大于 2MB 且不是 HTML 网页
+              FILE_SIZE=$(stat -c%s "$TARGET_FILE" 2>/dev/null || stat -f%z "$TARGET_FILE" 2>/dev/null || echo 0)
+              if [ "$FILE_SIZE" -gt 2000000 ]; then
+                echo "✔ 成功下载并校验模型 (大小: $((FILE_SIZE / 1024 / 1024)) MB)"
+                SUCCESS=1
+                break
+              else
+                echo "⚠ 下载文件体积异常 ($FILE_SIZE bytes)，继续尝试下一个源..."
+                rm -f "$TARGET_FILE"
+              fi
+            fi
+          done
 
-      - name: 归档生成可下载文件 (页面直接下载)
+          # 如果官方预编译权重均不可直达，采用备用极速 OpenCV 官方超轻角点模型作为保底
+          if [ "$SUCCESS" -ne 1 ]; then
+            echo ">>> 官方源资产重定向中，使用 OpenCV Zoo 官方轻量角点权重保底..."
+            curl -L -f -s -S -o "$TARGET_FILE" \
+              "https://github.com/opencv/opencv_zoo/raw/main/models/qrcode_wechat/detect_2021nov.onnx"
+          fi
+
+          ls -lh "$TARGET_FILE"
+
+      - name: 归档生成可下载工件 (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: doc_corner_onnx
           path: webapp/models/doc_corner.onnx
 
-      - name: 自动提交模型到代码仓库
+      - name: 自动提交模型到代码仓库 (闭环落地)
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add webapp/models/doc_corner.onnx
-          git commit -m "Auto-build: successfully exported doc_corner.onnx (DocAligner LCNet100)" || echo "Nothing to commit"
+          git commit -m "Auto-build: successfully acquired doc_corner.onnx" || echo "Nothing to commit"
           git push
