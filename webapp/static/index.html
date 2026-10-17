@@ -72,6 +72,7 @@
                         <span>🪪 身份证规范排版 (单人上下 / 多人左右并排)</span>
                         <div style="display:flex; gap:6px;">
                             <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.addPerson()">➕ 增加一人</button>
+                            <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.removePerson()">➖ 减少一人</button>
                             <button type="button" class="btn-text-danger" onclick="IdCardManager.clearAll()">清空照片</button>
                         </div>
                     </div>
@@ -358,7 +359,7 @@
         </div>
     </div>
 
-    <!-- 4. 云邮箱设置面板（已去除宽度限制，保持全局对齐） -->
+    <!-- 4. 云邮箱设置面板（去除窄屏样式，全局对齐通栏） -->
     <div id="panel-mail" class="tab-panel-container" style="display:none;">
         <div class="card-box">
             <div class="card-title">
