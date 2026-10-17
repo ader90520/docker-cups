@@ -197,20 +197,18 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* PC 端双列网格布局：启用 stretch 实现左右严格等高 */
+/* 双列网格布局：合理比例与协调视觉 */
 .pc-double-layout {
     display: grid;
-    grid-template-columns: 0.95fr 1.05fr;
+    grid-template-columns: 1fr 1fr;
     gap: 12px;
     width: 100%;
-    align-items: stretch;
+    align-items: start;
 }
 
 .col-left, .col-right {
     min-width: 0;
     width: 100%;
-    display: flex;
-    flex-direction: column;
 }
 
 .card-box {
@@ -323,7 +321,7 @@ body {
     object-fit: cover;
 }
 
-/* 扁平交互单选组 */
+/* 扁平单选组 */
 .flat-radio-group {
     display: flex;
     border: 1px solid var(--border-color);
@@ -400,18 +398,13 @@ body {
     background: var(--primary-green-hover);
 }
 
-/* 右侧自适应铺满预览容器，实现底部平齐 */
-.col-right .preview-container {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    margin-bottom: 0;
+/* 精准优化的实时预览容器：紧凑协调，消灭突兀黑边 */
+.preview-container {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
     padding: 12px;
     width: 100%;
-    overflow: hidden;
 }
 
 .preview-toolbar {
@@ -442,19 +435,19 @@ body {
     color: #166534;
 }
 
-/* 视窗容器：由固定高度改为 flex 自适应填充满，两边底部彻底对齐 */
+/* 核心优化：高宽适中，PC 端高度收敛至 440px，居中呼吸适度 */
 .viewport-wrapper {
     position: relative;
     background: #1e293b;
     border-radius: 6px;
-    flex: 1 1 auto;
-    min-height: 480px;
+    height: 440px;
+    max-height: 440px;
     width: 100%;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 14px;
+    padding: 12px;
     box-sizing: border-box;
 }
 
@@ -462,7 +455,7 @@ body {
     background: #ffffff;
     width: auto;
     height: 100%;
-    max-height: 100%;
+    max-height: 416px;
     aspect-ratio: 210 / 297;
     box-shadow: 0 4px 18px rgba(0,0,0,0.5);
     position: relative;
@@ -471,7 +464,7 @@ body {
     justify-content: center;
     box-sizing: border-box;
     padding: 2px;
-    transition: aspect-ratio 0.2s;
+    transition: aspect-ratio 0.2s, max-height 0.2s;
 }
 
 .sheet-a4-viewport.landscape {
@@ -497,7 +490,7 @@ body {
 }
 
 /* 底部队列任务数条 */
-.col-right .printer-status-bar {
+.printer-status-bar {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
@@ -509,17 +502,15 @@ body {
     font-size: 12px;
 }
 
-/* 设备管理页面右侧控制台拉伸对齐 */
-#panel-devices .col-right .card-box:last-child {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-}
-
+/* 设备管理控制台高度协调 */
 #panel-devices #ai-diag-console {
-    flex: 1 1 auto;
-    height: auto !important;
-    min-height: 250px;
+    background: #1e293b;
+    color: #e2e8f0;
+    font-family: monospace;
+    font-size: 11px;
+    padding: 8px;
+    height: 250px;
+    overflow-y: auto;
 }
 
 /* 移动端紧凑自适应 */
@@ -550,8 +541,12 @@ body {
     }
 
     .viewport-wrapper {
-        min-height: 320px !important;
-        height: 320px !important;
+        height: 360px !important;
+        max-height: 360px !important;
         padding: 8px;
+    }
+
+    .sheet-a4-viewport {
+        max-height: 344px !important;
     }
 }
