@@ -1,16 +1,17 @@
 /**
- * 端侧 ONNX 运算中枢 (完整闭环与自动降级版)
- * 1. 自动前处理 (256x256 RGB Tensor)
- * 2. 推理角点热力图并提取 4 个顶点
+ * 端侧 ONNX 运算中枢 (完整闭环与自动降级版 - 深度优化)
+ * 1. 自动前处理 (256x256 RGB Tensor，纯净兼容模式)
+ * 2. 推理角点热力图/坐标并提取 4 个顶点
  * 3. 前端 Canvas 双三角形映射透视拉平
- * 4. 模型损坏或加载失败时，零报错自动透明降级到服务端 OpenCV 处理
+ * 4. 模型缺失、SIMD受限或损坏时，零报错自动透明降级到服务端 OpenCV 处理
  */
 
-if (typeof ort !== 'undefined' && ort.env) {
+// 彻底屏蔽 SIMD 与 Worker 代理，确保移动端 Safari 与低配客户端环境零崩溃
+if (typeof ort !== 'undefined') {
     ort.env.wasm = ort.env.wasm || {};
     ort.env.wasm.simd = false;
-    ort.env.wasm.numThreads = 1;
     ort.env.wasm.proxy = false;
+    ort.env.wasm.numThreads = 1;
 }
 
 window.DocAI = {
@@ -26,9 +27,12 @@ window.DocAI = {
                 return;
             }
 
+            // 禁用内存碎片整理与图算子优化，绕过 WASM 算子检查
             const sessionOptions = {
                 executionProviders: ['wasm'],
-                graphOptimizationLevel: 'disabled'
+                graphOptimizationLevel: 'disabled',
+                enableCpuMemArena: false,
+                enableMemPattern: false
             };
 
             const t0 = performance.now();
@@ -82,7 +86,7 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：归一化为 1x3x256x256 Float32Array
+    // 图像前处理：归一化为 1x3x256x256 Float32Array RGB Tensor
     preprocess: function(img) {
         const targetW = 256, targetH = 256;
         const canvas = document.createElement("canvas");
@@ -104,13 +108,14 @@ window.DocAI = {
         return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
     },
 
-    // 从模型输出解析 4 个角点坐标
+    // 从模型输出解析 4 个角点坐标 (适配 Heatmap 峰值及归一化关键点)
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
         const dims = outputTensor.dims;
         let corners = [];
 
+        // 格式 1: 直接输出 8 个坐标点 [1, 8]
         if (dims.length === 2 && dims[1] === 8) {
             for (let i = 0; i < 4; i++) {
                 corners.push({
@@ -118,7 +123,9 @@ window.DocAI = {
                     y: data[i * 2 + 1] * origH
                 });
             }
-        } else if (dims.length === 4 && dims[1] === 4) {
+        } 
+        // 格式 2: 4 通道热力图 [1, 4, H, W]
+        else if (dims.length === 4 && dims[1] === 4) {
             const h = dims[2], w = dims[3];
             const planeSize = h * w;
             for (let c = 0; c < 4; c++) {
@@ -139,11 +146,12 @@ window.DocAI = {
             }
         }
 
+        // 顶点几何排序：左上(TL)、右上(TR)、右下(BR)、左下(BL)
         if (corners.length === 4) {
             corners.sort((a, b) => a.y - b.y);
             const top = [corners[0], corners[1]].sort((a, b) => a.x - b.x);
             const bottom = [corners[2], corners[3]].sort((a, b) => a.x - b.x);
-            return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
+            return [top[0], top[1], bottom[1], bottom[0]];
         }
         return null;
     },
@@ -159,6 +167,7 @@ window.DocAI = {
         const outW = Math.max(widthTop, widthBottom);
         const outH = Math.max(heightLeft, heightRight);
 
+        // 若角点框选区域过小，视为无效识别，安全退出
         if (outW < img.width * 0.35 || outH < img.height * 0.35) {
             return Promise.resolve(img);
         }
@@ -202,7 +211,7 @@ window.DocAI = {
             const c = (u0*(v1*x2 - v2*x1) - u1*(v0*x2 - v2*x0) + u2*(v0*x1 - v1*x0)) / delta;
             const d = (y0*(v1 - v2) - y1*(v0 - v2) + y2*(v0 - v1)) / delta;
             const e = (u0*(y1 - y2) - u1*(y0 - y2) + u2*(y0 - y1)) / delta;
-            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*y1 - v1*y0)) / delta;
+            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*x1 - v1*x0)) / delta;
 
             ctx.transform(a, d, b, e, c, f);
             ctx.drawImage(im, 0, 0);
@@ -210,7 +219,7 @@ window.DocAI = {
         ctx.restore();
     },
 
-    // 闭环总调度入口：模型成功则端侧切边，未加载或失败则自动透明降级
+    // 闭环总调度入口：端侧 AI 优先切边拉平，异常或未就绪时自动透明降级
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
@@ -218,7 +227,14 @@ window.DocAI = {
         try {
             const t0 = performance.now();
             const inputTensor = this.preprocess(rawImg);
-            const feeds = { input: inputTensor };
+            
+            // 动态匹配模型实际输入节点名称 (input / images / data 等)
+            const inputName = this.session.inputNames && this.session.inputNames.length > 0 
+                ? this.session.inputNames[0] 
+                : "input";
+            const feeds = {};
+            feeds[inputName] = inputTensor;
+
             const results = await this.session.run(feeds);
             const outputTensor = results[Object.keys(results)[0]];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
@@ -235,6 +251,7 @@ window.DocAI = {
         return rawImg;
     },
 
+    // 模型校验与自动正名上传
     inspectAndUploadModel: async function(inputId) {
         const fileInput = document.getElementById(inputId);
         const alertBox = document.getElementById("model-alert");
@@ -244,21 +261,18 @@ window.DocAI = {
         }
 
         const file = fileInput.files[0];
-        const fileName = file.name || "";
-        if (!fileName.toLowerCase().endsWith(".onnx")) {
+        const rawFileName = file.name || "";
+        if (!rawFileName.toLowerCase().endsWith(".onnx")) {
             if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">仅允许上传 .onnx 格式二进制模型</span>';
             return;
         }
 
         const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
-        logToConsole(`正在校验并上传模型: ${fileName} (${sizeMb} MB)...`);
-        
-        if (file.size > 20 * 1024 * 1024 && fileName.includes("corner")) {
-            logToConsole(`⚠️ 提示: 角点定位模型体积偏大(${sizeMb}MB)，建议部署轻量版`, "warn");
-        }
+        logToConsole(`正在校验并上传模型: ${rawFileName} (${sizeMb} MB)...`);
 
         const fd = new FormData();
-        fd.append("model_file", file);
+        // 关键增强：自动将如 doc_corner 2.onnx 纠偏固化为标准名 doc_corner.onnx
+        fd.append("model_file", file, "doc_corner.onnx");
 
         try {
             const resp = await fetch("/api/model/upload", { method: "POST", body: fd });
