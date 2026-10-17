@@ -1,5 +1,9 @@
 /**
- * 端侧 ONNX 运算中枢 (移动端 Safari 与低内存硬件完全兼容版)
+ * 端侧 ONNX 运算中枢 (完整闭环与自动降级版)
+ * 1. 自动前处理 (256x256 RGB Tensor)
+ * 2. 推理角点热力图并提取 4 个顶点
+ * 3. 前端 Canvas 双三角形映射透视拉平
+ * 4. 模型损坏或加载失败时，零报错自动透明降级到服务端 OpenCV 处理
  */
 
 if (typeof ort !== 'undefined' && ort.env) {
@@ -11,19 +15,16 @@ if (typeof ort !== 'undefined' && ort.env) {
 
 window.DocAI = {
     session: null,
-    readyStatus: { "corner": false, "dewarp": false },
+    isReady: false,
 
     init: async function() {
         logToConsole("端侧 AI 诊断守护启动...");
         try {
             if (typeof ort === 'undefined') {
-                logToConsole("未检测到 onnxruntime-web 运行时，转用服务端通道", "warn");
-                this.updateUIStatus("未挂载", "无", "无", "-");
+                logToConsole("未检测到 onnxruntime-web 运行时，转用服务端轻量 OpenCV 通道", "warn");
+                this.fallbackToHost("未挂载运行时");
                 return;
             }
-
-            ort.env.wasm.numThreads = 1;
-            ort.env.wasm.simd = false;
 
             const sessionOptions = {
                 executionProviders: ['wasm'],
@@ -31,43 +32,42 @@ window.DocAI = {
             };
 
             const t0 = performance.now();
-            logToConsole("正在挂载本地默认模型 /models/doc_corner.onnx...");
+            logToConsole("正在装载本地轻量角点模型 /models/doc_corner.onnx...");
 
             try {
                 const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
-                this.readyStatus["corner"] = true;
-                this.updateUIStatus("WASM (标准兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
+                this.isReady = true;
+                this.updateUIStatus("WASM (纯净兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
                 logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
 
                 const pill = document.getElementById("ai-engine-pill");
                 if (pill) {
-                    pill.innerText = "⚡ 端侧 AI 就绪 (WASM 兼容模式)";
+                    pill.innerText = "⚡ 端侧 AI 就绪 (自动切边拉平)";
                     pill.style.background = "#dcfce7";
                     pill.style.color = "#166534";
                 }
             } catch (loadErr) {
-                let reason = loadErr.message || "未知原因";
-                if (reason.includes("invalid wire type") || reason.includes("offset")) {
-                    reason = "模型文件损坏 (可能下载到了 HTML 网页或空文件)";
-                } else if (reason.includes("SIMD")) {
-                    reason = "设备不支持 WASM SIMD 指令集";
-                }
-                logToConsole(`ℹ 本地模型未就绪: ${reason}，系统已无缝回退到主机计算`, "warn");
-                this.updateUIStatus("主机端代理", "宿主机计算", "服务端几何滤镜", "0ms");
-
-                const pill = document.getElementById("ai-engine-pill");
-                if (pill) {
-                    pill.innerText = "☁️ 主机端代理 (轻量模式)";
-                    pill.style.background = "#f1f5f9";
-                    pill.style.color = "#475569";
-                }
+                let reason = loadErr.message || "文件未就绪";
+                logToConsole(`ℹ 本地模型未就绪: ${reason}，系统已无缝切换至 OpenCV 轻量图像管线`, "warn");
+                this.fallbackToHost("OpenCV 几何滤镜");
             }
-
         } catch (e) {
             logToConsole(`端侧环境初始化跳过: ${e.message}`, "warn");
-            this.updateUIStatus("主机端代理", "自动降级", "系统级增强", "0ms");
+            this.fallbackToHost("系统级自动增强");
+        }
+    },
+
+    fallbackToHost: function(modelDesc) {
+        this.isReady = false;
+        this.session = null;
+        this.updateUIStatus("OpenCV 极速引擎", "宿主机处理", modelDesc, "0ms");
+        const pill = document.getElementById("ai-engine-pill");
+        if (pill) {
+            pill.innerText = "☁️ 轻量模式 (OpenCV 智能拉平)";
+            pill.style.background = "#f1f5f9";
+            pill.style.color = "#475569";
         }
     },
 
@@ -82,32 +82,199 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
+    // 图像前处理：归一化为 1x3x256x256 Float32Array
+    preprocess: function(img) {
+        const targetW = 256, targetH = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+
+        const floatData = new Float32Array(3 * targetW * targetH);
+        const channelSize = targetW * targetH;
+
+        for (let i = 0; i < channelSize; i++) {
+            floatData[i] = imgData[i * 4] / 255.0;
+            floatData[channelSize + i] = imgData[i * 4 + 1] / 255.0;
+            floatData[2 * channelSize + i] = imgData[i * 4 + 2] / 255.0;
+        }
+
+        return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
+    },
+
+    // 从模型输出解析 4 个角点坐标
+    extractCorners: function(outputTensor, origW, origH) {
+        if (!outputTensor || !outputTensor.data) return null;
+        const data = outputTensor.data;
+        const dims = outputTensor.dims;
+        let corners = [];
+
+        if (dims.length === 2 && dims[1] === 8) {
+            for (let i = 0; i < 4; i++) {
+                corners.push({
+                    x: data[i * 2] * origW,
+                    y: data[i * 2 + 1] * origH
+                });
+            }
+        } else if (dims.length === 4 && dims[1] === 4) {
+            const h = dims[2], w = dims[3];
+            const planeSize = h * w;
+            for (let c = 0; c < 4; c++) {
+                let maxVal = -Infinity, maxIdx = 0;
+                const offset = c * planeSize;
+                for (let i = 0; i < planeSize; i++) {
+                    if (data[offset + i] > maxVal) {
+                        maxVal = data[offset + i];
+                        maxIdx = i;
+                    }
+                }
+                const py = Math.floor(maxIdx / w);
+                const px = maxIdx % w;
+                corners.push({
+                    x: (px / w) * origW,
+                    y: (py / h) * origH
+                });
+            }
+        }
+
+        if (corners.length === 4) {
+            corners.sort((a, b) => a.y - b.y);
+            const top = [corners[0], corners[1]].sort((a, b) => a.x - b.x);
+            const bottom = [corners[2], corners[3]].sort((a, b) => a.x - b.x);
+            return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
+        }
+        return null;
+    },
+
+    // 前端 Canvas 透视变换拉直切边
+    warpPerspective: function(img, pts) {
+        const [tl, tr, br, bl] = pts;
+        const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        const widthBottom = Math.hypot(br.x - bl.x, br.y - bl.y);
+        const heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+        const heightRight = Math.hypot(br.x - tr.x, br.y - tr.y);
+
+        const outW = Math.max(widthTop, widthBottom);
+        const outH = Math.max(heightLeft, heightRight);
+
+        if (outW < img.width * 0.35 || outH < img.height * 0.35) {
+            return Promise.resolve(img);
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(outW);
+        canvas.height = Math.round(outH);
+        const ctx = canvas.getContext("2d");
+
+        this.drawTriangleWarp(ctx, img, [tl, tr, br], [{x:0, y:0}, {x:outW, y:0}, {x:outW, y:outH}]);
+        this.drawTriangleWarp(ctx, img, [tl, br, bl], [{x:0, y:0}, {x:outW, y:outH}, {x:0, y:outH}]);
+
+        return new Promise(resolve => {
+            const warpedImg = new Image();
+            warpedImg.onload = () => resolve(warpedImg);
+            warpedImg.onerror = () => resolve(img);
+            warpedImg.src = canvas.toDataURL("image/jpeg", 0.95);
+        });
+    },
+
+    drawTriangleWarp: function(ctx, im, srcPts, dstPts) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(dstPts[0].x, dstPts[0].y);
+        ctx.lineTo(dstPts[1].x, dstPts[1].y);
+        ctx.lineTo(dstPts[2].x, dstPts[2].y);
+        ctx.closePath();
+        ctx.clip();
+
+        const x0 = srcPts[0].x, y0 = srcPts[0].y;
+        const x1 = srcPts[1].x, y1 = srcPts[1].y;
+        const x2 = srcPts[2].x, y2 = srcPts[2].y;
+        const u0 = dstPts[0].x, v0 = dstPts[0].y;
+        const u1 = dstPts[1].x, v1 = dstPts[1].y;
+        const u2 = dstPts[2].x, v2 = dstPts[2].y;
+
+        const delta = u0*(v1 - v2) - u1*(v0 - v2) + u2*(v0 - v1);
+        if (Math.abs(delta) > 0.0001) {
+            const a = (x0*(v1 - v2) - x1*(v0 - v2) + x2*(v0 - v1)) / delta;
+            const b = (u0*(x1 - x2) - u1*(x0 - x2) + u2*(x0 - x1)) / delta;
+            const c = (u0*(v1*x2 - v2*x1) - u1*(v0*x2 - v2*x0) + u2*(v0*x1 - v1*x0)) / delta;
+            const d = (y0*(v1 - v2) - y1*(v0 - v2) + y2*(v0 - v1)) / delta;
+            const e = (u0*(y1 - y2) - u1*(y0 - y2) + u2*(y0 - y1)) / delta;
+            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*y1 - v1*y0)) / delta;
+
+            ctx.transform(a, d, b, e, c, f);
+            ctx.drawImage(im, 0, 0);
+        }
+        ctx.restore();
+    },
+
+    // 闭环总调度入口：模型成功则端侧切边，未加载或失败则自动透明降级
+    processImageAuto: async function(rawImg) {
+        if (!this.isReady || !this.session) {
+            return rawImg;
+        }
+        try {
+            const t0 = performance.now();
+            const inputTensor = this.preprocess(rawImg);
+            const feeds = { input: inputTensor };
+            const results = await this.session.run(feeds);
+            const outputTensor = results[Object.keys(results)[0]];
+            const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
+            const cost = (performance.now() - t0).toFixed(1);
+            document.getElementById("diag-metric-speed")?.innerText = `${cost}ms`;
+
+            if (corners) {
+                logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行智能平整 (${cost}ms)`, "success");
+                return await this.warpPerspective(rawImg, corners);
+            }
+        } catch (e) {
+            logToConsole(`端侧推理跳过，转由后端 OpenCV 兜底: ${e.message}`, "warn");
+        }
+        return rawImg;
+    },
+
     inspectAndUploadModel: async function(inputId) {
         const fileInput = document.getElementById(inputId);
         const alertBox = document.getElementById("model-alert");
-        if (!fileInput || fileInput.files.length === 0) {
+        if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
             if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">请选取 .onnx 文件</span>';
             return;
         }
 
         const file = fileInput.files[0];
-        if (!file.name.toLowerCase().endsWith(".onnx")) {
+        const fileName = file.name || "";
+        if (!fileName.toLowerCase().endsWith(".onnx")) {
             if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">仅允许上传 .onnx 格式二进制模型</span>';
             return;
         }
 
-        logToConsole(`正在校验并上传模型: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+        logToConsole(`正在校验并上传模型: ${fileName} (${sizeMb} MB)...`);
+        
+        if (file.size > 20 * 1024 * 1024 && fileName.includes("corner")) {
+            logToConsole(`⚠️ 提示: 角点定位模型体积偏大(${sizeMb}MB)，建议部署轻量版`, "warn");
+        }
+
         const fd = new FormData();
         fd.append("model_file", file);
 
         try {
             const resp = await fetch("/api/model/upload", { method: "POST", body: fd });
-            const res = await resp.json();
+            const text = await resp.text();
+            let res;
+            try {
+                res = JSON.parse(text);
+            } catch (jsonErr) {
+                throw new Error(`服务端异常返回: ${text.substring(0, 60)}...`);
+            }
+
             if (res.success) {
                 logToConsole(`✔ ${res.msg}`, "success");
                 if (alertBox) alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
-                this.init();
                 this.fetchDeployedModels();
+                this.init();
             } else {
                 logToConsole(`模型部署拒绝: ${res.msg}`, "error");
                 if (alertBox) alertBox.innerHTML = `<span style="color:#ef4444;">${res.msg}</span>`;
@@ -162,13 +329,9 @@ window.DocAI = {
             }
             localStorage.clear();
             sessionStorage.clear();
-        } catch (e) {
-            console.warn("清理存储异常:", e);
-        }
+        } catch (e) {}
         logToConsole("✔ 缓存已全部抹除，正在重新载入工作台...", "success");
-        setTimeout(() => {
-            window.location.reload(true);
-        }, 300);
+        setTimeout(() => window.location.reload(true), 300);
     }
 };
 
