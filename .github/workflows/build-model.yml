@@ -18,33 +18,39 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 安装依赖库
+      - name: 安装基础依赖
         run: |
           pip install --upgrade pip
-          pip install docaligner onnx onnxruntime torch
+          pip install torch onnx onnxruntime docsaidkit albumentations
 
-      - name: 编译导出标准轻量 doc_corner.onnx
+      - name: 克隆 DocAligner 源码并导出 ONNX
         run: |
+          # 1. 克隆官方源码并以开发模式安装
+          git clone --depth 1 https://github.com/DocsaidLab/DocAligner.git /tmp/DocAligner
+          cd /tmp/DocAligner
+          pip install -e .
+
+          # 2. 调用官方接口加载 LCNet 权重并导出为静态 256x256 ONNX
           python -c "
           import os, torch, onnx
           from docaligner import DocAligner
 
-          print('>>> [1/3] 正在加载 DocAligner LCNet100 超轻骨干权重...')
-          aligner = DocAligner(model_name='lcnet100_h_e_bifpn_256')
+          print('>>> 正在拉取 LCNet100 权重并构建网络...')
+          model_name = 'lcnet100_h_e_bifpn_256'
+          aligner = DocAligner(model_name=model_name)
           model = aligner.model
           model.eval()
 
-          # 构造标准的 256x256 静态输入尺寸 (无动态算子开销，完美适配移动端 Safari/WASM)
           dummy_input = torch.randn(1, 3, 256, 256)
-          output_dir = 'webapp/models'
-          os.makedirs(output_dir, exist_ok=True)
-          output_path = os.path.join(output_dir, 'doc_corner.onnx')
+          out_dir = '$GITHUB_WORKSPACE/webapp/models'
+          os.makedirs(out_dir, exist_ok=True)
+          out_path = os.path.join(out_dir, 'doc_corner.onnx')
 
-          print('>>> [2/3] 正在导出为纯净 ONNX (Opset 12)...')
+          print(f'>>> 导出静态 ONNX 到: {out_path} ...')
           torch.onnx.export(
               model,
               dummy_input,
-              output_path,
+              out_path,
               export_params=True,
               opset_version=12,
               do_constant_folding=True,
@@ -52,8 +58,8 @@ jobs:
               output_names=['output']
           )
 
-          size_mb = os.path.getsize(output_path) / (1024 * 1024)
-          print(f'✔ [3/3] 编译成功！文件已生成至: {output_path} (体积: {size_mb:.2f} MB)')
+          size_mb = os.path.getsize(out_path) / (1024 * 1024)
+          print(f'✔ 导出完成！文件体积: {size_mb:.2f} MB')
           "
 
       - name: 归档生成可下载文件 (页面直接下载)
@@ -62,7 +68,7 @@ jobs:
           name: doc_corner_onnx
           path: webapp/models/doc_corner.onnx
 
-      - name: 自动提交模型到代码仓库 (实现无需手动上传的闭环)
+      - name: 自动提交模型到代码仓库
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
