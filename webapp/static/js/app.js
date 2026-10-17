@@ -1,6 +1,6 @@
 /**
  * CUPS 智能工作台前端核心驱动 (app.js)
- * 全功能完善版：支持扫描文件单项删除、一键清空、高度对齐与表单参数无缝同步
+ * 完整保留全部原有功能：修复响应式预览高低平齐、补齐 removePerson、完善扫描文件删除与清空闭环
  */
 
 function logToConsole(msg, level = "info") {
@@ -566,6 +566,19 @@ window.IdCardManager = {
         this.updateCanvasPreview();
     },
 
+    removePerson: function() {
+        if (this.persons.length <= 1) {
+            alert("至少保留一人身份证！");
+            return;
+        }
+        const idx = this.persons.length - 1;
+        this.persons.pop();
+        const card = document.getElementById(`idcard-person-${idx}`);
+        if (card) card.remove();
+        logToConsole(`已移除第 ${idx + 1} 人身份证信息`);
+        this.updateCanvasPreview();
+    },
+
     clearAll: function() {
         this.persons = [{ front: null, back: null }];
         const container = document.getElementById("idcard-person-container");
@@ -677,7 +690,7 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 扫描硬件交互服务 (支持单项与批量删除) ====================
+// ==================== 4. 扫描硬件交互服务 (支持单项与清空删除) ====================
 window.ScanService = {
     loadScanDevices: async function() {
         try {
