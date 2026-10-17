@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
-    <script src="/static/js/client_ai.js"></script>
+    <script src="/static/js/doc_ai.js"></script>
     <script src="/static/js/app.js" defer></script>
 </head>
 <body>
@@ -32,7 +32,6 @@
                 <select id="printer-select" class="printer-select-ctrl" onchange="DashboardService.onPrinterChange()"></select>
                 <button type="button" class="btn-icon-refresh" onclick="DashboardService.loadPrinters(false)" title="刷新状态">🔄</button>
             </div>
-            <!-- 状态标签迁移至顶部红圈位置 -->
             <div class="printer-bar-right-tags">
                 <span id="ai-engine-pill" class="ai-engine-tag">⚡ 端侧 AI 就绪 (WASM 兼容模式)</span>
                 <span id="printer-status-tag" class="printer-status-badge badge-idle">打印机状态: 空闲</span>
@@ -51,7 +50,7 @@
                 <div class="card-box" id="sec-upload-normal">
                     <div class="card-title">
                         <span>📁 上传文档/试卷 (支持多次追加多选)</span>
-                        <button type="button" class="btn-text-danger" onclick="PrintManager.clearFiles('normal')">清空列表</button>
+                        <button type="button" class="btn-text-danger" onclick="PrintManager.clearFiles()">清空列表</button>
                     </div>
                     <div class="upload-drag-area" id="drag-drop-zone-normal">
                         <div class="upload-drag-icon">📂</div>
@@ -73,7 +72,6 @@
                         <span>🪪 身份证规范排版 (单人上下 / 多人左右并排)</span>
                         <div style="display:flex; gap:6px;">
                             <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.addPerson()">➕ 增加一人</button>
-                            <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="IdCardManager.removePerson()">➖ 减少一人</button>
                             <button type="button" class="btn-text-danger" onclick="IdCardManager.clearAll()">清空照片</button>
                         </div>
                     </div>
@@ -144,7 +142,6 @@
                                 <option value="B5">B5 (176×250mm)</option>
                             </select>
                         </div>
-                        <!-- 动态隐藏表单项：去黑底增强 -->
                         <div class="form-item" id="item-enhance-box">
                             <label>去黑底增强 (全能王模式)</label>
                             <select id="p-enhance" class="form-ctrl" onchange="PrintManager.onEnhanceChange()">
@@ -152,7 +149,6 @@
                                 <option value="false">关闭 (原图直打)</option>
                             </select>
                         </div>
-                        <!-- 动态隐藏表单项：页面范围 -->
                         <div class="form-item" id="item-page-ranges-box" style="grid-column: span 2;">
                             <label>页面范围 (如: 1-5 8，留空打全部)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
@@ -164,7 +160,7 @@
                 </div>
             </div>
 
-            <!-- 右列：紧凑居中实时预览视窗 -->
+            <!-- 右列：实时预览视窗 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
@@ -187,13 +183,12 @@
 
                     <div class="viewport-wrapper" id="viewport-box" onclick="EnhanceEngine.onViewportClick()">
                         <div class="sheet-a4-viewport" id="a4-viewport">
-                            <div style="font-size:12px; color:#94a3b8; text-align:center;" id="viewport-empty-tip">上传文件后实时呈现效果</div>
+                            <div style="font-size:12px; color:#94a3b8; text-align:center; white-space:nowrap;" id="viewport-empty-tip">上传文件后实时呈现效果</div>
                             <canvas id="canvas-preview"></canvas>
                         </div>
                     </div>
                 </div>
 
-                <!-- 底部保留队列任务数 -->
                 <div class="printer-status-bar">
                     <div style="display:flex; align-items:center; gap:8px;">
                         <span>📋 队列等待任务数:</span>
@@ -238,7 +233,10 @@
                 <div class="card-box">
                     <div class="card-title">
                         <span>📁 扫描历史存档</span>
-                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="ScanService.loadScanList()">🔄 刷新</button>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="btn-text-danger" onclick="ScanService.clearAllScans()">清空记录</button>
+                            <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="ScanService.loadScanList()">🔄 刷新</button>
+                        </div>
                     </div>
                     <div id="scan-file-list" style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto;">
                         <div style="font-size:11px; color:#94a3b8;">暂无扫描文件</div>
@@ -252,7 +250,7 @@
                     </div>
                     <div class="viewport-wrapper">
                         <div class="sheet-a4-viewport" id="scan-a4-viewport">
-                            <div style="font-size:12px; color:#94a3b8; text-align:center;" id="scan-empty-tip">点击启动扫描后在此呈现原图</div>
+                            <div style="font-size:12px; color:#94a3b8; text-align:center; white-space:nowrap;" id="scan-empty-tip">点击启动扫描后在此呈现原图</div>
                             <img id="scan-live-img" style="max-width:100%; max-height:100%; object-fit:contain; display:none;" alt="扫描图">
                         </div>
                     </div>
@@ -360,68 +358,71 @@
         </div>
     </div>
 
-    <!-- 4. 云邮箱设置面板 -->
+    <!-- 4. 云邮箱设置面板（已去除宽度限制，保持全局对齐） -->
     <div id="panel-mail" class="tab-panel-container" style="display:none;">
-        <div class="card-box" style="max-width:760px; margin:0 auto;">
+        <div class="card-box">
             <div class="card-title">
                 <span>⚙ 云邮箱极速自动打印与微信通知设置</span>
                 <span style="font-size:11px; color:#64748b;">IMAP 常驻守护</span>
             </div>
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin-bottom:12px;">
-                <label style="display:flex; align-items:center; gap:8px; font-weight:700; font-size:13px; cursor:pointer;">
-                    <input type="checkbox" id="mail-enable" style="width:16px; height:16px;">
-                    <span>启用云邮箱自动轮询打印服务</span>
-                </label>
-                <div style="font-size:11px; color:#64748b; margin-top:4px;">
-                    邮箱收到包含附件（PDF / 照片）的未读邮件时，自动拉取直达 CUPS 队列出纸。主题包含“原图”时自动跳过算法增强。
+            
+            <form id="mail-cfg-form" onsubmit="MailService.saveConfig(event)">
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin-bottom:12px;">
+                    <label style="display:flex; align-items:center; gap:8px; font-weight:700; font-size:13px; cursor:pointer;">
+                        <input type="checkbox" id="mail-enable" name="enable" value="true" style="width:16px; height:16px;">
+                        <span>启用云邮箱自动轮询打印服务</span>
+                    </label>
+                    <div style="font-size:11px; color:#64748b; margin-top:4px;">
+                        邮箱收到包含附件（PDF / 照片）的未读邮件时，自动拉取直达 CUPS 队列出纸。主题包含“原图”时自动跳过算法增强。
+                    </div>
                 </div>
-            </div>
 
-            <div class="param-grid" style="grid-template-columns: 2fr 1fr;">
-                <div class="form-item">
-                    <label>IMAP 服务器地址</label>
-                    <input type="text" id="mail-server" class="form-ctrl" placeholder="imap.qq.com">
+                <div class="param-grid" style="grid-template-columns: 2fr 1fr;">
+                    <div class="form-item">
+                        <label>IMAP 服务器地址</label>
+                        <input type="text" id="mail-server" name="server" class="form-ctrl" placeholder="imap.qq.com">
+                    </div>
+                    <div class="form-item">
+                        <label>SSL 端口</label>
+                        <input type="number" id="mail-port" name="port" class="form-ctrl" value="993">
+                    </div>
                 </div>
-                <div class="form-item">
-                    <label>SSL 端口</label>
-                    <input type="number" id="mail-port" class="form-ctrl" value="993">
-                </div>
-            </div>
 
-            <div class="param-grid" style="margin-top:8px;">
-                <div class="form-item">
-                    <label>邮箱账号</label>
-                    <input type="text" id="mail-user" class="form-ctrl" placeholder="example@qq.com">
+                <div class="param-grid" style="margin-top:8px;">
+                    <div class="form-item">
+                        <label>邮箱账号</label>
+                        <input type="text" id="mail-user" name="user" class="form-ctrl" placeholder="example@qq.com">
+                    </div>
+                    <div class="form-item">
+                        <label>授权码 / 专用密码</label>
+                        <input type="password" id="mail-pwd" name="password" class="form-ctrl" placeholder="16位授权码">
+                    </div>
                 </div>
-                <div class="form-item">
-                    <label>授权码 / 专用密码</label>
-                    <input type="password" id="mail-pwd" class="form-ctrl" placeholder="16位授权码">
-                </div>
-            </div>
 
-            <div class="param-grid" style="margin-top:8px;">
-                <div class="form-item">
-                    <label>暗号关键词 (选填)</label>
-                    <input type="text" id="mail-keyword" class="form-ctrl" placeholder="例如：打印">
+                <div class="param-grid" style="margin-top:8px;">
+                    <div class="form-item">
+                        <label>暗号关键词 (选填)</label>
+                        <input type="text" id="mail-keyword" name="keyword" class="form-ctrl" placeholder="例如：打印">
+                    </div>
+                    <div class="form-item">
+                        <label>发件人白名单 (逗号分隔)</label>
+                        <input type="text" id="mail-whitelist" name="whitelist" class="form-ctrl" placeholder="例如：boss@qq.com">
+                    </div>
                 </div>
-                <div class="form-item">
-                    <label>发件人白名单 (逗号分隔)</label>
-                    <input type="text" id="mail-whitelist" class="form-ctrl" placeholder="例如：boss@qq.com">
-                </div>
-            </div>
 
-            <div class="param-grid" style="margin-top:8px;">
-                <div class="form-item">
-                    <label>默认出纸打印机</label>
-                    <select id="mail-default-printer" class="form-ctrl"></select>
+                <div class="param-grid" style="margin-top:8px;">
+                    <div class="form-item">
+                        <label>默认出纸打印机</label>
+                        <select id="mail-default-printer" name="default_printer" class="form-ctrl"></select>
+                    </div>
+                    <div class="form-item">
+                        <label>PushPlus 微信通知 Token (选填)</label>
+                        <input type="text" id="mail-pushplus-token" name="pushplus_token" class="form-ctrl" placeholder="微信推送 Token">
+                    </div>
                 </div>
-                <div class="form-item">
-                    <label>PushPlus 微信通知 Token (选填)</label>
-                    <input type="text" id="mail-pushplus-token" class="form-ctrl" placeholder="微信推送 Token">
-                </div>
-            </div>
 
-            <button type="button" class="btn-submit-green" style="margin-top:16px;" onclick="MailService.saveConfig()">💾 保存配置并立即生效</button>
+                <button type="submit" class="btn-submit-green" style="margin-top:16px;">💾 保存配置并立即生效</button>
+            </form>
             <div id="mail-alert" style="margin-top:6px; font-size:11px;"></div>
         </div>
     </div>
