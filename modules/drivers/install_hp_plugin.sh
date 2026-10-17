@@ -54,10 +54,12 @@ if [ -f plugin.run ]; then
     fi
 fi
 
+CURRENT_DATE=$(date +"%m/%d/%Y")
+
 printf "[installation]\nversion = %s\nplugin = 1\nplugin_version = %s\n" "${HPLIP_VER}" "${HPLIP_VER}" > /var/lib/hp/hplip-install.state
 printf "[plugin]\ninstalled = 1\neula = 1\nversion = %s\n" "${HPLIP_VER}" > /var/lib/hp/hplip.state
 
-printf "[hplip]\nversion=%s\n\n[dirs]\nhome=/usr/share/hplip\nrun=/var/run\nppd=/usr/share/ppd/HP\nppdbase=/usr/share/ppd\ndoc=/usr/share/doc/hplip\nhtml=/usr/share/doc/hplip\nicon=/usr/share/applications\ncupsbackend=/usr/lib/cups/backend\ncupsfilter=/usr/lib/cups/filter\ndrv=/usr/share/cups/drv\ninternal_tag=%s\n\n[installation]\ndate_time=09/22/2026\ninstalled_version=%s\ncommand_line=\n" "${HPLIP_VER}" "${HPLIP_VER}" "${HPLIP_VER}" > /etc/hp/hplip.conf
+printf "[hplip]\nversion=%s\n\n[dirs]\nhome=/usr/share/hplip\nrun=/var/run\nppd=/usr/share/ppd/HP\nppdbase=/usr/share/ppd\ndoc=/usr/share/doc/hplip\nhtml=/usr/share/doc/hplip\nicon=/usr/share/applications\ncupsbackend=/usr/lib/cups/backend\ncupsfilter=/usr/lib/cups/filter\ndrv=/usr/share/cups/drv\ninternal_tag=%s\n\n[installation]\ndate_time=%s\ninstalled_version=%s\ncommand_line=\n" "${HPLIP_VER}" "${HPLIP_VER}" "${CURRENT_DATE}" "${HPLIP_VER}" > /etc/hp/hplip.conf
 
 MODEL_PATH=$(find /usr -name "models.dat" 2>/dev/null | head -n 1)
 if [ -n "$MODEL_PATH" ]; then
