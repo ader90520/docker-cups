@@ -161,7 +161,7 @@
                 </div>
             </div>
 
-            <!-- 右列：实时预览视窗 -->
+            <!-- 右列：紧凑居中实时预览视窗 -->
             <div class="col-right">
                 <div class="preview-container">
                     <div class="preview-toolbar">
@@ -260,7 +260,7 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 -->
+    <!-- 3. 设备管理面板 (已集成智能驱动检索与自定义 PPD 上传) -->
     <div id="panel-devices" class="tab-panel-container" style="display:none;">
         <div class="pc-double-layout">
             <div class="col-left">
@@ -288,21 +288,31 @@
                     <div class="param-grid" style="margin-bottom:8px;">
                         <div class="form-item">
                             <label>打印机标识名称 (英文字母/下划线)</label>
-                            <input type="text" id="add-printer-name" class="form-ctrl" placeholder="例: HP_1020">
+                            <input type="text" id="add-printer-name" class="form-ctrl" placeholder="例: HP_LaserJet_1020">
                         </div>
                         <div class="form-item">
-                            <label>驱动关键字检索</label>
+                            <label>搜索系统驱动 (支持多关键字)</label>
                             <div style="display:flex; gap:4px;">
                                 <input type="text" id="driver-search-kw" class="form-ctrl" placeholder="如: 1020 / m126 / foo2zjs">
                                 <button type="button" class="nav-btn" style="background:#0284c7; color:#fff; border:none; padding:4px 8px;" onclick="DashboardService.searchDrivers()">搜</button>
                             </div>
                         </div>
                     </div>
-                    <div id="driver-search-results" style="display:none; max-height:120px; overflow-y:auto; background:#fff; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; margin-bottom:8px;"></div>
+                    <div id="driver-search-results" style="display:none; max-height:140px; overflow-y:auto; background:#fff; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; margin-bottom:8px;"></div>
+                    
                     <div class="form-item" style="margin-bottom:8px;">
                         <label>选定驱动 ID / PPD 标识</label>
                         <input type="text" id="driver-input-val" class="form-ctrl" readonly style="background:#f1f5f9;">
                     </div>
+
+                    <!-- 增加像 631 后台一样的自定义 PPD 驱动上传 -->
+                    <div style="margin-top:6px; margin-bottom:10px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:6px; padding:8px 10px;">
+                        <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
+                            💡 系统未收录此驱动？直接上传本地 PPD 驱动安装:
+                        </label>
+                        <input type="file" id="ppd-file-input" accept=".ppd" class="form-ctrl" style="font-size:11px;">
+                    </div>
+
                     <button type="button" class="btn-submit-green" onclick="DashboardService.submitAddPrinter()">✔ 一键添加打印机并上线</button>
                     <div id="add-printer-alert" style="margin-top:6px; font-size:11px;"></div>
                 </div>
@@ -353,13 +363,13 @@
                         <span style="font-size:12px; font-weight:700; color:#38bdf8;">📟 引擎诊断日志</span>
                         <button type="button" style="background:none; border:none; color:#94a3b8; font-size:11px; cursor:pointer;" onclick="document.getElementById('ai-diag-console').innerHTML=''">清屏</button>
                     </div>
-                    <div id="ai-diag-console" style="background:#1e293b; color:#e2e8f0; font-family:monospace; font-size:11px; padding:8px; height:240px; overflow-y:auto;"></div>
+                    <div id="ai-diag-console"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 4. 云邮箱设置面板（去除窄屏样式，全局对齐通栏） -->
+    <!-- 4. 云邮箱设置面板 -->
     <div id="panel-mail" class="tab-panel-container" style="display:none;">
         <div class="card-box">
             <div class="card-title">
