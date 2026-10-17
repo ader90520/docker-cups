@@ -1,12 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js)
- * 完整保留原有全部功能并全面优化：
- * 1. 端口智能型号解析与驱动自动匹配搜索
- * 2. 支持像 631 一样上传自定义 PPD 驱动并绑定
- * 3. 增强实时预览算法，消除黑白模式阴影脏斑
- * 4. 彻底修复模型缓存清空与刷新无反应问题
- * 5. 补齐 IdCardManager.removePerson() 减少一人
- * 6. 补齐扫描历史单个删除与清空全部
+ * CUPS 智能工作台前端核心驱动 (app.js) - 完整闭环交互版
  */
 
 function logToConsole(msg, level = "info") {
@@ -187,7 +180,6 @@ window.EnhanceEngine = {
         const data = imgData.data;
         const totalPixels = drawW * drawH;
 
-        // 计算全图光照均值估算背景
         let sumBrightness = 0;
         for (let i = 0; i < data.length; i += 16) {
             sumBrightness += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
@@ -328,7 +320,7 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互与追加管理 ====================
+// ==================== 2. 打印交互与追加管理 (闭环切边对接) ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
@@ -445,10 +437,12 @@ window.PrintManager = {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const img = new Image();
-                img.onload = () => {
-                    EnhanceEngine.currentRawImage = img;
+                img.onload = async () => {
+                    // 核心闭环注入：优先走端侧 AI 切边拉平；若未加载则无损原样返回，由后端 OpenCV 兜底
+                    const processedImg = await DocAI.processImageAuto(img);
+                    EnhanceEngine.currentRawImage = processedImg;
                     if (!this.loadedImages.some(item => item.name === file.name)) {
-                        this.loadedImages.push({ name: file.name, img: img });
+                        this.loadedImages.push({ name: file.name, img: processedImg });
                     }
                     EnhanceEngine.render();
                 };
@@ -1007,7 +1001,6 @@ window.DashboardService = {
         }
     },
 
-    // 像 631 页面一样，选中设备端口后自动提取型号并检索驱动
     onDiscoveredDeviceSelect: function(selectEl) {
         const val = selectEl.value;
         if (!val) return;
