@@ -152,7 +152,10 @@ def auto_perspective_crop_cv(cv_img):
         log_debug(f"OpenCV 透视拉平跳过: {e}")
     return cv_img
 
-def process_image_for_print(input_path, output_path, media="A4"):
+def process_image_for_print(input_path, output_path, media="A4", is_color=False):
+    """
+    全能王级白底去黑底滤镜（兼顾极黑字体与彩色饱和还原）
+    """
     try:
         t0 = time.time()
         with Image.open(input_path) as check_img:
@@ -176,55 +179,65 @@ def process_image_for_print(input_path, output_path, media="A4"):
             b, g, r = cv2.split(cv_img)
             b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
 
-            brightness = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
-            small_w, small_h = max(100, calc_w // 4), max(100, calc_h // 4)
-            small_b = cv2.resize(brightness, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            # 1. 估算全图低频光照阴影背景 (使用形态学大核平滑闭运算)
+            max_channel = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
+            small_w, small_h = max(60, calc_w // 6), max(60, calc_h // 6)
+            small_b = cv2.resize(max_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
 
-            kernel_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+            kernel_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
             bg_morph_small = cv2.morphologyEx(small_b, cv2.MORPH_CLOSE, kernel_bg)
             bg_morph = cv2.resize(bg_morph_small, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
-            bg_float = cv2.GaussianBlur(bg_morph, (15, 15), 0).astype(np.float32) + 1.0
+            bg_float = cv2.GaussianBlur(bg_morph, (21, 21), 0).astype(np.float32) + 1.0
 
-            r_div = (r_f / bg_float) * 255.0
-            g_div = (g_f / bg_float) * 255.0
-            b_div = (b_f / bg_float) * 255.0
+            # 2. 图像背景白化除法 (Division Normalization)
+            r_div = np.clip((r_f / bg_float) * 255.0, 0, 255)
+            g_div = np.clip((g_f / bg_float) * 255.0, 0, 255)
+            b_div = np.clip((b_f / bg_float) * 255.0, 0, 255)
 
-            red_excess = r_f - np.maximum(g_f, b_f)
-            is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
-            color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
-            all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
-
+            # 3. 灰度与梯度检测
             gray_div = (0.299 * r_div + 0.587 * g_div + 0.114 * b_div)
             grad_x = cv2.Sobel(gray_div, cv2.CV_32F, 1, 0, ksize=3)
             grad_y = cv2.Sobel(gray_div, cv2.CV_32F, 0, 1, ksize=3)
             grad_mag = np.sqrt(grad_x**2 + grad_y**2)
 
-            is_text_mask = (~all_color_mask) & (((gray_div < 220.0) & (grad_mag > 6.5)) | (gray_div < 178.0))
+            # 4. 彩色通道识别 (红印章、橘色标题、彩色图形、红色批注)
+            red_excess = r_f - np.maximum(g_f, b_f)
+            color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
+            # 放宽彩色判断，捕获所有非黑白颜色
+            is_color_element = (red_excess > 5.0) | (color_diff > 10.0)
 
+            # 5. 文字线稿高灵敏度遮罩 (强边缘 OR 灰度深度)
+            is_text_mask = (~is_color_element) & (((gray_div < 225.0) & (grad_mag > 5.0)) | (gray_div < 185.0))
+
+            # 初始背景纯白
             out_r = np.full_like(r_div, 255.0)
             out_g = np.full_like(g_div, 255.0)
             out_b = np.full_like(b_div, 255.0)
 
-            out_r[all_color_mask] = np.clip(r_div[all_color_mask] * 0.85, 0, 255)
-            out_g[all_color_mask] = np.clip(g_div[all_color_mask] * 0.75, 0, 255)
-            out_b[all_color_mask] = np.clip(b_div[all_color_mask] * 0.75, 0, 255)
+            if is_color:
+                # 彩色模式：增强色彩饱和度，原汁原味还原
+                out_r[is_color_element] = np.clip(r_div[is_color_element] * 0.95, 0, 255)
+                out_g[is_color_element] = np.clip(g_div[is_color_element] * 0.90, 0, 255)
+                out_b[is_color_element] = np.clip(b_div[is_color_element] * 0.90, 0, 255)
 
-            ink_vals = gray_div[is_text_mask]
-            enhanced_ink = np.clip(ink_vals * 0.36 + 18.0, 25.0, 90.0)
-            out_r[is_text_mask] = enhanced_ink
-            out_g[is_text_mask] = enhanced_ink
-            out_b[is_text_mask] = enhanced_ink
+            # 无论黑白还是彩色，纯文字字迹加深为深黑色 (极大解决字体不清晰发灰问题)
+            dark_ink = np.clip(gray_div[is_text_mask] * 0.28, 5.0, 55.0)
+            out_r[is_text_mask] = dark_ink
+            out_g[is_text_mask] = dark_ink
+            out_b[is_text_mask] = dark_ink
 
+            # 6. 轻量边缘裁切净边
             out_bgr = cv2.merge([out_b, out_g, out_r])
-            out_bgr = clean_extreme_edges_only(out_bgr, margin_ratio=0.010)
+            out_bgr = clean_extreme_edges_only(out_bgr, margin_ratio=0.012)
 
             res_uint8 = np.clip(out_bgr, 0, 255).astype(np.uint8)
             res_rgb = cv2.cvtColor(res_uint8, cv2.COLOR_BGR2RGB)
             sharp_pil = Image.fromarray(res_rgb)
             final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
-            final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
+            final_canvas.save(output_path, format="JPEG", quality=90, dpi=(200, 200))
 
         else:
+            # Pillow 回退管线
             with Image.open(input_path) as disk_img:
                 img = ImageOps.exif_transpose(disk_img).convert("RGB")
 
@@ -240,53 +253,45 @@ def process_image_for_print(input_path, output_path, media="A4"):
             g_arr = np.array(g, dtype=np.float32)
             b_arr = np.array(b, dtype=np.float32)
 
-            brightness = np.maximum(np.maximum(r_arr, g_arr), b_arr).astype(np.uint8)
-            contrast_img = Image.fromarray(brightness)
-            bg = contrast_img.filter(ImageFilter.BoxBlur(radius=25))
+            max_ch = np.maximum(np.maximum(r_arr, g_arr), b_arr).astype(np.uint8)
+            bg = Image.fromarray(max_ch).filter(ImageFilter.BoxBlur(radius=30))
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
-            r_div = (r_arr / bg_arr) * 255.0
-            g_div = (g_arr / bg_arr) * 255.0
-            b_div = (b_arr / bg_arr) * 255.0
-
-            red_excess = r_arr - np.maximum(g_arr, b_arr)
-            is_colored_stroke = (red_excess > 6.0) & (r_div < 245.0)
-            color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
-            all_color_mask = is_colored_stroke | ((color_diff > 12.0) & ((r_div < 240.0) | (g_div < 240.0)))
+            r_div = np.clip((r_arr / bg_arr) * 255.0, 0, 255)
+            g_div = np.clip((g_arr / bg_arr) * 255.0, 0, 255)
+            b_div = np.clip((b_arr / bg_arr) * 255.0, 0, 255)
 
             gray_div = 0.299 * r_div + 0.587 * g_div + 0.114 * b_div
-            grad_x = np.abs(gray_div[:, 2:] - gray_div[:, :-2])
-            grad_y = np.abs(gray_div[2:, :] - gray_div[:-2, :])
-            grad_pad = np.zeros_like(gray_div)
-            grad_pad[1:-1, 1:-1] = grad_x[1:-1, :] + grad_y[:, 1:-1]
+            color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
+            is_color_element = color_diff > 10.0
 
-            is_text_mask = (~all_color_mask) & (((gray_div < 220.0) & (grad_pad > 6.5)) | (gray_div < 178.0))
+            is_text_mask = (~is_color_element) & (gray_div < 210.0)
 
             out_r = np.full_like(r_div, 255.0)
             out_g = np.full_like(g_div, 255.0)
             out_b = np.full_like(b_div, 255.0)
 
-            out_r[all_color_mask] = np.clip(r_div[all_color_mask] * 0.85, 0, 255)
-            out_g[all_color_mask] = np.clip(g_div[all_color_mask] * 0.75, 0, 255)
-            out_b[all_color_mask] = np.clip(b_div[all_color_mask] * 0.75, 0, 255)
+            if is_color:
+                out_r[is_color_element] = r_div[is_color_element]
+                out_g[is_color_element] = g_div[is_color_element]
+                out_b[is_color_element] = b_div[is_color_element]
 
-            dark_ink = np.clip(gray_div[is_text_mask] * 0.36 + 18.0, 25.0, 90.0)
-            out_r[is_text_mask] = dark_ink
-            out_g[is_text_mask] = dark_ink
-            out_b[is_text_mask] = dark_ink
+            deep_ink = np.clip(gray_div[is_text_mask] * 0.28, 5.0, 55.0)
+            out_r[is_text_mask] = deep_ink
+            out_g[is_text_mask] = deep_ink
+            out_b[is_text_mask] = deep_ink
 
             rgb_stack = np.stack([out_r, out_g, out_b], axis=-1)
-            rgb_stack = clean_extreme_edges_only(rgb_stack, margin_ratio=0.010)
-
+            rgb_stack = clean_extreme_edges_only(rgb_stack, margin_ratio=0.012)
             res_uint8 = np.clip(rgb_stack, 0, 255).astype(np.uint8)
             sharp_pil = Image.fromarray(res_uint8, mode="RGB")
             final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
-            final_canvas.save(output_path, format="JPEG", quality=85, dpi=(200, 200))
+            final_canvas.save(output_path, format="JPEG", quality=90, dpi=(200, 200))
 
-        log_debug(f"图像增强耗时: {time.time() - t0:.2f}s -> {output_path}")
+        log_debug(f"去黑底增强耗时: {time.time() - t0:.2f}s -> {output_path}")
         return True
     except Exception as e:
-        log_debug(f"处理异常，自动回退: {e}")
+        log_debug(f"图像增强异常回退: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
@@ -367,6 +372,7 @@ class PrintHandler(BaseHandler):
                     other_files.append(src_path)
 
             tasks = []
+            is_color_task = (color_mode == "color")
 
             if image_raw_paths:
                 if multi_merge and len(image_raw_paths) > 1:
@@ -376,7 +382,7 @@ class PrintHandler(BaseHandler):
                     
                     if enhance:
                         opt_path = os.path.join(UPLOAD_DIR, f"opt_merged_{uuid.uuid4().hex[:8]}.jpg")
-                        if process_image_for_print(merged_path, opt_path, media=media):
+                        if process_image_for_print(merged_path, opt_path, media=media, is_color=is_color_task):
                             tasks.append({"path": opt_path, "is_pdf": False})
                         else:
                             tasks.append({"path": merged_path, "is_pdf": False})
@@ -388,7 +394,7 @@ class PrintHandler(BaseHandler):
                         if enhance:
                             token = uuid.uuid4().hex[:8]
                             opt_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
-                            if process_image_for_print(src_path, opt_path, media=media):
+                            if process_image_for_print(src_path, opt_path, media=media, is_color=is_color_task):
                                 target_f = opt_path
                         tasks.append({"path": target_f, "is_pdf": False})
 
@@ -423,7 +429,6 @@ class PrintHandler(BaseHandler):
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
-                # 仅当实体文件为 PDF 时才允许传递 page-ranges 选项，避免单页图像打印时被 CUPS 拒绝
                 if is_pdf and page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
