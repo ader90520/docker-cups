@@ -368,7 +368,6 @@ class PrintHandler(BaseHandler):
 
             tasks = []
 
-            # 1. 处理图像队列 (多图拼版或独立增强)
             if image_raw_paths:
                 if multi_merge and len(image_raw_paths) > 1:
                     merged_canvas = merge_images_n_up(image_raw_paths, media=media)
@@ -393,14 +392,12 @@ class PrintHandler(BaseHandler):
                                 target_f = opt_path
                         tasks.append({"path": target_f, "is_pdf": False})
 
-            # 2. PDF 文件队列
             for p_f in pdf_files:
                 tasks.append({"path": p_f, "is_pdf": True})
 
             for o_f in other_files:
                 tasks.append({"path": o_f, "is_pdf": False})
 
-            # 3. 逐个下发打印作业
             for item in tasks:
                 target_file = item["path"]
                 is_pdf = item["is_pdf"]
@@ -426,7 +423,7 @@ class PrintHandler(BaseHandler):
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
-                # 修复点：仅针对 PDF 实体文件附加 page-ranges，杜绝单页图片被拒绝
+                # 仅当实体文件为 PDF 时才允许传递 page-ranges 选项，避免单页图像打印时被 CUPS 拒绝
                 if is_pdf and page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
