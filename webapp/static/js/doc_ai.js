@@ -1,17 +1,20 @@
 /**
- * 端侧 ONNX 运算中枢 (彻底破除 SIMD 限制兼容版)
+ * 端侧 ONNX 运算中枢 (极致稳健防崩溃版)
+ * 1. 严格防护全局变量与非安全 HTTP 上下文，确保 100% 不白屏、不卡死
+ * 2. 自动探测或降级到 OpenCV，杜绝界面停留在“检测中...”
+ * 3. 兼容自适应文件上传与缓存清空
  */
 
-// 1. 全局环境锁定：强制关闭 SIMD 探测，指定使用基础 WASM 核心
-if (typeof ort !== 'undefined') {
-    ort.env.wasm = ort.env.wasm || {};
-    ort.env.wasm.simd = false;         // 强制不调用 simd.wasm
-    ort.env.wasm.proxy = false;        // 禁用 Worker 代理
-    ort.env.wasm.numThreads = 1;       // 单线程安全运行
-    // 强制指定使用通用的 ort-wasm.wasm，避免某些版本默认寻址 simd 版本
-    if (ort.env.wasm.wasmPaths === undefined) {
-        ort.env.wasm.wasmPaths = "/static/js/";
+// 1. 安全初始化环境（全面 try-catch 保护，防止环境未就绪时阻止脚本运行）
+try {
+    if (typeof ort !== 'undefined' && ort && ort.env) {
+        ort.env.wasm = ort.env.wasm || {};
+        ort.env.wasm.simd = false;
+        ort.env.wasm.proxy = false;
+        ort.env.wasm.numThreads = 1;
     }
+} catch (e) {
+    console.warn("ORT 环境预设跳过:", e);
 }
 
 window.DocAI = {
@@ -19,15 +22,19 @@ window.DocAI = {
     isReady: false,
 
     init: async function() {
-        logToConsole("端侧 AI 诊断守护启动...");
+        if (typeof logToConsole === 'function') {
+            logToConsole("端侧 AI 诊断守护启动...");
+        }
+
         try {
-            if (typeof ort === 'undefined') {
-                logToConsole("未检测到 onnxruntime-web 运行时，转用服务端轻量 OpenCV 通道", "warn");
-                this.fallbackToHost("未挂载运行时");
+            if (typeof ort === 'undefined' || !ort) {
+                if (typeof logToConsole === 'function') {
+                    logToConsole("未检测到 onnxruntime-web 运行时，转用服务端轻量 OpenCV 通道", "warn");
+                }
+                this.fallbackToHost("未挂载 WASM 库");
                 return;
             }
 
-            // 彻底去除图优化与内存池，确保低内存及 Safari 浏览器无视 SIMD 指令集
             const sessionOptions = {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'disabled',
@@ -36,16 +43,19 @@ window.DocAI = {
             };
 
             const t0 = performance.now();
-            logToConsole("正在装载本地轻量角点模型 /models/doc_corner.onnx...");
+            if (typeof logToConsole === 'function') {
+                logToConsole("正在装载本地轻量角点模型 /models/doc_corner.onnx...");
+            }
 
             try {
-                // 加时间戳防止浏览器协商缓存 304 读取旧的阻断状态
                 const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
                 this.isReady = true;
-                this.updateUIStatus("WASM (通用兼容模式)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
-                logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
+                this.updateUIStatus("WASM (通用兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
+                if (typeof logToConsole === 'function') {
+                    logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
+                }
 
                 const pill = document.getElementById("ai-engine-pill");
                 if (pill) {
@@ -54,12 +64,16 @@ window.DocAI = {
                     pill.style.color = "#166534";
                 }
             } catch (loadErr) {
-                let reason = loadErr.message || "加载受阻";
-                logToConsole(`ℹ 本地模型未就绪: ${reason}，系统已无缝切换至 OpenCV 轻量图像管线`, "warn");
+                const reason = loadErr.message || "文件未就绪";
+                if (typeof logToConsole === 'function') {
+                    logToConsole(`ℹ 本地模型未就绪: ${reason}，系统已无缝切换至 OpenCV 轻量图像管线`, "warn");
+                }
                 this.fallbackToHost("OpenCV 几何滤镜");
             }
         } catch (e) {
-            logToConsole(`端侧环境初始化跳过: ${e.message}`, "warn");
+            if (typeof logToConsole === 'function') {
+                logToConsole(`端侧环境初始化跳过: ${e.message}`, "warn");
+            }
             this.fallbackToHost("系统级自动增强");
         }
     },
@@ -87,7 +101,6 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：归一化为 1x3x256x256 Float32Array RGB Tensor
     preprocess: function(img) {
         const targetW = 256, targetH = 256;
         const canvas = document.createElement("canvas");
@@ -109,7 +122,6 @@ window.DocAI = {
         return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
     },
 
-    // 从模型输出解析 4 个角点坐标
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
@@ -153,7 +165,6 @@ window.DocAI = {
         return null;
     },
 
-    // 前端 Canvas 透视变换拉直切边
     warpPerspective: function(img, pts) {
         const [tl, tr, br, bl] = pts;
         const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
@@ -207,7 +218,7 @@ window.DocAI = {
             const c = (u0*(v1*x2 - v2*x1) - u1*(v0*x2 - v2*x0) + u2*(v0*x1 - v1*x0)) / delta;
             const d = (y0*(v1 - v2) - y1*(v0 - v2) + y2*(v0 - v1)) / delta;
             const e = (u0*(y1 - y2) - u1*(y0 - y2) + u2*(y0 - y1)) / delta;
-            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*y1 - v1*y0)) / delta;
+            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*x1 - v1*x0)) / delta;
 
             ctx.transform(a, d, b, e, c, f);
             ctx.drawImage(im, 0, 0);
@@ -215,7 +226,6 @@ window.DocAI = {
         ctx.restore();
     },
 
-    // 闭环调度：端侧切边，失败自动返回原图交由 OpenCV 兜底
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
@@ -223,7 +233,6 @@ window.DocAI = {
         try {
             const t0 = performance.now();
             const inputTensor = this.preprocess(rawImg);
-            
             const inputName = this.session.inputNames && this.session.inputNames.length > 0 
                 ? this.session.inputNames[0] 
                 : "input";
@@ -234,22 +243,42 @@ window.DocAI = {
             const outputTensor = results[Object.keys(results)[0]];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
             const cost = (performance.now() - t0).toFixed(1);
-            document.getElementById("diag-metric-speed")?.innerText = `${cost}ms`;
+            
+            const elSpeed = document.getElementById("diag-metric-speed");
+            if (elSpeed) elSpeed.innerText = `${cost}ms`;
 
             if (corners) {
-                logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行智能平整 (${cost}ms)`, "success");
+                if (typeof logToConsole === 'function') {
+                    logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行智能平整 (${cost}ms)`, "success");
+                }
                 return await this.warpPerspective(rawImg, corners);
             }
         } catch (e) {
-            logToConsole(`端侧推理跳过，转由后端 OpenCV 兜底: ${e.message}`, "warn");
+            if (typeof logToConsole === 'function') {
+                logToConsole(`端侧推理跳过，转由后端 OpenCV 兜底: ${e.message}`, "warn");
+            }
         }
         return rawImg;
     },
 
+    // 智能定位 Input 元素（即使页面没有传 inputId 也能自适应获取）
     inspectAndUploadModel: async function(inputId) {
-        const fileInput = document.getElementById(inputId);
+        let fileInput = null;
+        if (inputId) {
+            fileInput = document.getElementById(inputId);
+        }
+        if (!fileInput) {
+            // 自动寻找页面中属于模型上传的 input
+            fileInput = document.getElementById("model-file-input") || 
+                        document.querySelector("input[type='file'][accept*='.onnx']") ||
+                        document.querySelectorAll("#panel-devices input[type='file']")[1] ||
+                        document.querySelector("#panel-devices input[type='file']");
+        }
+
         const alertBox = document.getElementById("model-alert");
+
         if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+            alert("请先点击【选取文件】选择一个 .onnx 模型！");
             if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">请选取 .onnx 文件</span>';
             return;
         }
@@ -257,12 +286,15 @@ window.DocAI = {
         const file = fileInput.files[0];
         const rawFileName = file.name || "";
         if (!rawFileName.toLowerCase().endsWith(".onnx")) {
+            alert("文件格式不正确，仅支持 .onnx 模型！");
             if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">仅允许上传 .onnx 格式二进制模型</span>';
             return;
         }
 
         const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
-        logToConsole(`正在校验并上传模型: ${rawFileName} (${sizeMb} MB)...`);
+        if (typeof logToConsole === 'function') {
+            logToConsole(`正在校验并上传模型: ${rawFileName} (${sizeMb} MB)...`);
+        }
 
         const fd = new FormData();
         fd.append("model_file", file, "doc_corner.onnx");
@@ -278,16 +310,22 @@ window.DocAI = {
             }
 
             if (res.success) {
-                logToConsole(`✔ ${res.msg}`, "success");
+                if (typeof logToConsole === 'function') {
+                    logToConsole(`✔ ${res.msg}`, "success");
+                }
                 if (alertBox) alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
                 this.fetchDeployedModels();
                 this.init();
             } else {
-                logToConsole(`模型部署拒绝: ${res.msg}`, "error");
+                if (typeof logToConsole === 'function') {
+                    logToConsole(`模型部署拒绝: ${res.msg}`, "error");
+                }
                 if (alertBox) alertBox.innerHTML = `<span style="color:#ef4444;">${res.msg}</span>`;
             }
         } catch (e) {
-            logToConsole(`模型写入异常: ${e.message}`, "error");
+            if (typeof logToConsole === 'function') {
+                logToConsole(`模型写入异常: ${e.message}`, "error");
+            }
             if (alertBox) alertBox.innerHTML = `<span style="color:#ef4444;">传输异常: ${e.message}</span>`;
         }
     },
@@ -319,29 +357,52 @@ window.DocAI = {
         try {
             const resp = await fetch(`/api/models?name=${encodeURIComponent(name)}`, { method: "DELETE" });
             const res = await resp.json();
-            logToConsole(res.msg, res.success ? "success" : "error");
+            if (typeof logToConsole === 'function') {
+                logToConsole(res.msg, res.success ? "success" : "error");
+            }
             this.fetchDeployedModels();
             this.init();
         } catch (e) {
-            logToConsole(`移除异常: ${e.message}`, "error");
+            if (typeof logToConsole === 'function') {
+                logToConsole(`移除异常: ${e.message}`, "error");
+            }
         }
     },
 
+    // 安全清空缓存（完全兼顾 Safari HTTP 环境）
     clearCacheAndReload: async function() {
-        logToConsole("正在清理端侧运行时缓存与离线存储...");
+        if (typeof logToConsole === 'function') {
+            logToConsole("正在清理端侧运行时缓存与离线存储...");
+        }
         try {
-            if (window.caches && caches.keys) {
+            // 防护：Safari 在 HTTP 下不支持 caches.keys()
+            if (window.isSecureContext && window.caches && typeof caches.keys === 'function') {
                 const keys = await caches.keys();
                 await Promise.all(keys.map(k => caches.delete(k)));
             }
+        } catch (e) {
+            console.warn("跳过 CacheStorage 抹除:", e);
+        }
+
+        try {
             localStorage.clear();
             sessionStorage.clear();
         } catch (e) {}
-        logToConsole("✔ 缓存已全部抹除，正在重新载入工作台...", "success");
-        setTimeout(() => window.location.reload(true), 300);
+
+        if (typeof logToConsole === 'function') {
+            logToConsole("✔ 缓存已全部抹除，正在重新载入工作台...", "success");
+        }
+        setTimeout(() => {
+            window.location.reload(true);
+        }, 300);
     }
 };
 
-document.addEventListener("DOMContentLoaded", () => {
+// 确保 DOM 准备好后执行
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+        window.DocAI.init();
+    });
+} else {
     window.DocAI.init();
-});
+}
