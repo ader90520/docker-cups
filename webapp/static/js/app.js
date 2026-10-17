@@ -5,6 +5,8 @@
  * 2. 支持像 631 一样上传自定义 PPD 驱动并绑定
  * 3. 增强实时预览算法，消除黑白模式阴影脏斑
  * 4. 彻底修复模型缓存清空与刷新无反应问题
+ * 5. 补齐 IdCardManager.removePerson() 减少一人
+ * 6. 补齐扫描历史单个删除与清空全部
  */
 
 function logToConsole(msg, level = "info") {
@@ -168,8 +170,8 @@ window.EnhanceEngine = {
         const bboxH = isSwapped ? img.width : img.height;
 
         const scale = Math.min((targetW * 0.95) / bboxW, (targetH * 0.95) / bboxH) * this.zoomScale;
-        const drawW = img.width * scale;
-        const drawH = img.height * scale;
+        const drawW = Math.round(img.width * scale);
+        const drawH = Math.round(img.height * scale);
 
         ctx.save();
         ctx.translate(targetW / 2, targetH / 2);
@@ -183,31 +185,66 @@ window.EnhanceEngine = {
 
         const imgData = offCtx.getImageData(0, 0, drawW, drawH);
         const data = imgData.data;
+        const totalPixels = drawW * drawH;
+
+        // 计算全图光照均值估算背景
+        let sumBrightness = 0;
+        for (let i = 0; i < data.length; i += 16) {
+            sumBrightness += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        }
+        const avgBrightness = Math.max(90, (sumBrightness / (totalPixels / 4)));
 
         for (let i = 0; i < data.length; i += 4) {
             let r = data[i];
             let g = data[i + 1];
             let b = data[i + 2];
 
+            const colorDiff = Math.abs(r - g) + Math.abs(g - b) + Math.abs(b - r);
+            const isColorPixel = (colorDiff > 16 && (r > g || b > g));
+
             if (enhance) {
-                const maxVal = Math.max(r, g, b);
-                const bgFactor = maxVal > 95 ? 255 / (maxVal + 8) : 1.0;
-                r = Math.min(255, r * bgFactor);
-                g = Math.min(255, g * bgFactor);
-                b = Math.min(255, b * bgFactor);
+                const localFactor = 255 / Math.max(avgBrightness, Math.max(r, Math.max(g, b)) + 10);
+                r = Math.min(255, r * localFactor);
+                g = Math.min(255, g * localFactor);
+                b = Math.min(255, b * localFactor);
             }
 
             if (colorMode === "monochrome") {
-                const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                // 修复：自适应黑白滤镜，去除阴影脏块，还原深墨字迹
-                const ink = gray < 192 ? Math.max(15, gray * 0.38 + 10) : 255;
-                data[i] = ink;
-                data[i + 1] = ink;
-                data[i + 2] = ink;
+                const normGray = 0.299 * r + 0.587 * g + 0.114 * b;
+                if (normGray < 185) {
+                    const ink = Math.max(10, normGray * 0.32);
+                    data[i] = ink;
+                    data[i + 1] = ink;
+                    data[i + 2] = ink;
+                } else {
+                    data[i] = 255;
+                    data[i + 1] = 255;
+                    data[i + 2] = 255;
+                }
             } else {
-                data[i] = r;
-                data[i + 1] = g;
-                data[i + 2] = b;
+                if (enhance) {
+                    if (isColorPixel) {
+                        data[i] = Math.min(255, r * 1.1);
+                        data[i + 1] = Math.min(255, g * 1.05);
+                        data[i + 2] = Math.min(255, b * 1.05);
+                    } else {
+                        const localGray = 0.299 * r + 0.587 * g + 0.114 * b;
+                        if (localGray < 185) {
+                            const ink = Math.max(10, localGray * 0.35);
+                            data[i] = ink;
+                            data[i + 1] = ink;
+                            data[i + 2] = ink;
+                        } else {
+                            data[i] = 255;
+                            data[i + 1] = 255;
+                            data[i + 2] = 255;
+                        }
+                    }
+                } else {
+                    data[i] = r;
+                    data[i + 1] = g;
+                    data[i + 2] = b;
+                }
             }
         }
 
@@ -580,7 +617,7 @@ window.IdCardManager = {
         this.persons.pop();
         const card = document.getElementById(`idcard-person-${idx}`);
         if (card) card.remove();
-        logToConsole(`已移除第 ${idx + 1} 人身份证信息`);
+        logToConsole(`已移除第 ${idx + 1} 人身份证卡片`);
         this.updateCanvasPreview();
     },
 
@@ -970,7 +1007,7 @@ window.DashboardService = {
         }
     },
 
-    // 核心新增：像 631 页面一样，选中设备端口后自动提取型号并检索驱动
+    // 像 631 页面一样，选中设备端口后自动提取型号并检索驱动
     onDiscoveredDeviceSelect: function(selectEl) {
         const val = selectEl.value;
         if (!val) return;
@@ -988,7 +1025,6 @@ window.DashboardService = {
 
         if (nameInput) nameInput.value = guess;
 
-        // 提取型号数字或关键名自动搜索驱动
         const match = searchKeyword.match(/\b([A-Za-z]+)?\s*([0-9]{3,4}[A-Za-z]*)\b/) || searchKeyword.match(/([0-9]{3,4})/);
         const kw = match ? match[0] : searchKeyword;
         if (kw) {
@@ -1030,7 +1066,6 @@ window.DashboardService = {
         logToConsole(`✔ 已选定驱动: ${drvId}`, "success");
     },
 
-    // 核心强化：支持选定系统驱动或直接上传本地 PPD 驱动
     submitAddPrinter: async function() {
         const uri = document.getElementById("discovered-device-select")?.value;
         const name = document.getElementById("add-printer-name")?.value.trim();
@@ -1052,7 +1087,6 @@ window.DashboardService = {
         fd.append("uri", uri);
         fd.append("name", name);
 
-        // 如果用户选择了本地 PPD 文件，优先以 PPD 文件形式上传并绑定
         if (ppdFileInput && ppdFileInput.files.length > 0) {
             fd.append("ppd_file", ppdFileInput.files[0]);
             logToConsole(`正在使用本地 PPD 驱动 [${ppdFileInput.files[0].name}] 部署设备...`);
