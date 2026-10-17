@@ -1,6 +1,10 @@
 /**
  * CUPS 智能工作台前端核心驱动 (app.js)
- * 完整保留全部原有功能：修复响应式预览高低平齐、补齐 removePerson、完善扫描文件删除与清空闭环
+ * 完整保留原有全部功能并全面优化：
+ * 1. 端口智能型号解析与驱动自动匹配搜索
+ * 2. 支持像 631 一样上传自定义 PPD 驱动并绑定
+ * 3. 增强实时预览算法，消除黑白模式阴影脏斑
+ * 4. 彻底修复模型缓存清空与刷新无反应问题
  */
 
 function logToConsole(msg, level = "info") {
@@ -187,7 +191,7 @@ window.EnhanceEngine = {
 
             if (enhance) {
                 const maxVal = Math.max(r, g, b);
-                const bgFactor = maxVal > 110 ? 255 / (maxVal + 15) : 1.0;
+                const bgFactor = maxVal > 95 ? 255 / (maxVal + 8) : 1.0;
                 r = Math.min(255, r * bgFactor);
                 g = Math.min(255, g * bgFactor);
                 b = Math.min(255, b * bgFactor);
@@ -195,7 +199,8 @@ window.EnhanceEngine = {
 
             if (colorMode === "monochrome") {
                 const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                const ink = gray < 185 ? Math.max(0, gray * 0.7 - 10) : 255;
+                // 修复：自适应黑白滤镜，去除阴影脏块，还原深墨字迹
+                const ink = gray < 192 ? Math.max(15, gray * 0.38 + 10) : 255;
                 data[i] = ink;
                 data[i + 1] = ink;
                 data[i + 2] = ink;
@@ -690,7 +695,7 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 扫描硬件交互服务 (支持单项与清空删除) ====================
+// ==================== 4. 扫描硬件交互服务 ====================
 window.ScanService = {
     loadScanDevices: async function() {
         try {
@@ -965,18 +970,34 @@ window.DashboardService = {
         }
     },
 
+    // 核心新增：像 631 页面一样，选中设备端口后自动提取型号并检索驱动
     onDiscoveredDeviceSelect: function(selectEl) {
         const val = selectEl.value;
         if (!val) return;
         const nameInput = document.getElementById("add-printer-name");
-        if (nameInput && !nameInput.value) {
-            let guess = "Printer_Device";
-            if (val.includes("model=")) {
-                guess = val.split("model=")[1].split("&")[0].replace(/\+/g, "_");
-            } else if (val.includes("hp:/usb/")) {
-                guess = val.split("hp:/usb/")[1].split("?")[0].replace(/[^a-zA-Z0-9]/g, "_");
+        let guess = "Printer_Device";
+        let searchKeyword = "";
+
+        if (val.includes("model=")) {
+            guess = val.split("model=")[1].split("&")[0].replace(/\+/g, "_");
+            searchKeyword = guess.replace(/_/g, " ");
+        } else if (val.includes("hp:/usb/")) {
+            guess = val.split("hp:/usb/")[1].split("?")[0].replace(/[^a-zA-Z0-9]/g, "_");
+            searchKeyword = guess.replace(/_/g, " ");
+        }
+
+        if (nameInput) nameInput.value = guess;
+
+        // 提取型号数字或关键名自动搜索驱动
+        const match = searchKeyword.match(/\b([A-Za-z]+)?\s*([0-9]{3,4}[A-Za-z]*)\b/) || searchKeyword.match(/([0-9]{3,4})/);
+        const kw = match ? match[0] : searchKeyword;
+        if (kw) {
+            const kwInput = document.getElementById("driver-search-kw");
+            if (kwInput) {
+                kwInput.value = kw.trim();
+                logToConsole(`💡 已自动识别硬件型号: ${kw.trim()}，正在匹配最佳驱动...`);
+                this.searchDrivers();
             }
-            nameInput.value = guess;
         }
     },
 
@@ -991,29 +1012,30 @@ window.DashboardService = {
             box.style.display = "block";
             const drvs = res.data || [];
             box.innerHTML = drvs.map(d => `
-                <div style="padding:5px 8px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
-                    <b>${d.id}</b> - <span style="color:#64748b;">${d.name || d.info}</span>
+                <div style="padding:6px 8px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
+                    <b style="color:#0284c7;">${d.id}</b><br>
+                    <span style="color:#64748b; font-size:10px;">${d.name || d.info}</span>
                 </div>
-            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动</div>';
+            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动，建议直接在下方上传 .ppd 驱动文件</div>';
         } catch (e) {
             logToConsole(`驱动搜索失败: ${e.message}`, "error");
         }
     },
 
     pickDriver: function(drvId) {
-        const inputVal = document.getElementById("driver-search-kw");
-        if (inputVal) inputVal.value = drvId;
         const hiddenDriver = document.getElementById("driver-input-val");
         if (hiddenDriver) hiddenDriver.value = drvId;
         const box = document.getElementById("driver-search-results");
         if (box) box.style.display = "none";
-        logToConsole(`已选定驱动: ${drvId}`);
+        logToConsole(`✔ 已选定驱动: ${drvId}`, "success");
     },
 
+    // 核心强化：支持选定系统驱动或直接上传本地 PPD 驱动
     submitAddPrinter: async function() {
         const uri = document.getElementById("discovered-device-select")?.value;
         const name = document.getElementById("add-printer-name")?.value.trim();
         const driver = document.getElementById("driver-input-val")?.value.trim();
+        const ppdFileInput = document.getElementById("ppd-file-input");
         const alertBox = document.getElementById("add-printer-alert");
 
         if (!uri) {
@@ -1029,14 +1051,24 @@ window.DashboardService = {
         fd.append("action", "add_printer");
         fd.append("uri", uri);
         fd.append("name", name);
-        fd.append("driver", driver || "raw");
+
+        // 如果用户选择了本地 PPD 文件，优先以 PPD 文件形式上传并绑定
+        if (ppdFileInput && ppdFileInput.files.length > 0) {
+            fd.append("ppd_file", ppdFileInput.files[0]);
+            logToConsole(`正在使用本地 PPD 驱动 [${ppdFileInput.files[0].name}] 部署设备...`);
+        } else {
+            fd.append("driver", driver || "raw");
+        }
 
         try {
             const resp = await fetch("/api/printer_admin", { method: "POST", body: fd });
             const res = await resp.json();
             if (alertBox) alertBox.innerHTML = `<span style="color:${res.success ? '#10b981' : '#ef4444'};">${res.msg}</span>`;
             logToConsole(res.msg, res.success ? "success" : "error");
-            if (res.success) this.loadPrinters(true);
+            if (res.success) {
+                this.loadPrinters(true);
+                if (ppdFileInput) ppdFileInput.value = "";
+            }
         } catch (e) {
             logToConsole(`添加设备异常: ${e.message}`, "error");
         }
