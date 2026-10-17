@@ -197,17 +197,20 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
-/* PC 端双列网格布局 */
+/* PC 端双列弹性自适应网格布局（强化对齐） */
 .pc-double-layout {
     display: grid;
     grid-template-columns: 0.95fr 1.05fr;
     gap: 12px;
     width: 100%;
+    align-items: stretch;
 }
 
 .col-left, .col-right {
     min-width: 0;
     width: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .card-box {
@@ -267,7 +270,7 @@ body {
     color: var(--text-sub);
 }
 
-/* 身份证 85.6 : 54 黄金双列网格 */
+/* 身份证 85.6 : 54 网格 */
 .idcard-ratio-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -397,8 +400,12 @@ body {
     background: var(--primary-green-hover);
 }
 
-/* 紧凑优化的实时预览容器 */
-.preview-container {
+/* 预览容器自适应填满与绝对对齐 */
+.col-right .preview-container {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
@@ -435,25 +442,27 @@ body {
     color: #166534;
 }
 
-/* 优化视窗高度与内边距，消除空旷黑框感 */
+/* 视窗容器：使用弹性填充确保与左列底部严丝合缝 */
 .viewport-wrapper {
     position: relative;
     background: #1e293b;
     border-radius: 6px;
-    height: 440px; /* 从 520px 收缩至 440px，比例更紧凑 */
+    flex: 1 1 auto;
+    min-height: 480px;
     width: 100%;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 12px; /* 留出适度呼吸边距 */
+    padding: 14px;
+    box-sizing: border-box;
 }
 
 .sheet-a4-viewport {
     background: #ffffff;
     width: auto;
     height: 100%;
-    max-height: 416px;
+    max-height: 100%;
     aspect-ratio: 210 / 297;
     box-shadow: 0 4px 18px rgba(0,0,0,0.5);
     position: relative;
@@ -462,7 +471,7 @@ body {
     justify-content: center;
     box-sizing: border-box;
     padding: 2px;
-    transition: aspect-ratio 0.2s, max-height 0.2s;
+    transition: aspect-ratio 0.2s;
 }
 
 .sheet-a4-viewport.landscape {
@@ -488,16 +497,29 @@ body {
 }
 
 /* 底部队列任务数条 */
-.printer-status-bar {
+.col-right .printer-status-bar {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-main);
     padding: 10px 14px;
-    margin-top: 12px;
+    margin-top: 10px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     font-size: 12px;
+}
+
+/* 设备管理页面右侧控制台拉伸对齐 */
+#panel-devices .col-right .card-box:last-child {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#panel-devices #ai-diag-console {
+    flex: 1 1 auto;
+    height: auto !important;
+    min-height: 250px;
 }
 
 /* 移动端紧凑自适应 */
@@ -528,15 +550,8 @@ body {
     }
 
     .viewport-wrapper {
-        height: 340px !important; /* 手机端紧凑高度 */
+        min-height: 320px !important;
+        height: 320px !important;
         padding: 8px;
-    }
-
-    .sheet-a4-viewport {
-        max-height: 324px !important;
-    }
-
-    .sheet-a4-viewport.landscape {
-        max-height: 220px !important;
     }
 }
