@@ -153,7 +153,6 @@ def auto_perspective_crop_cv(cv_img):
     return cv_img
 
 def process_image_for_print(input_path, output_path, media="A4"):
-    """双引擎鲁棒增强处理流水线"""
     try:
         t0 = time.time()
         with Image.open(input_path) as check_img:
@@ -247,7 +246,7 @@ def process_image_for_print(input_path, output_path, media="A4"):
             bg_arr = np.array(bg, dtype=np.float32) + 1.0
 
             r_div = (r_arr / bg_arr) * 255.0
-            g_div = (g_f := (g_arr / bg_arr) * 255.0)
+            g_div = (g_arr / bg_arr) * 255.0
             b_div = (b_arr / bg_arr) * 255.0
 
             red_excess = r_arr - np.maximum(g_arr, b_arr)
@@ -344,7 +343,8 @@ class PrintHandler(BaseHandler):
             env["LANG"] = "C"
 
             image_raw_paths = []
-            non_image_files = []
+            pdf_files = []
+            other_files = []
 
             for f in files:
                 raw_ext = os.path.splitext(f["filename"])[-1].lower()
@@ -361,11 +361,14 @@ class PrintHandler(BaseHandler):
 
                 if clean_ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
                     image_raw_paths.append(src_path)
+                elif clean_ext == ".pdf":
+                    pdf_files.append(src_path)
                 else:
-                    non_image_files.append(src_path)
+                    other_files.append(src_path)
 
-            target_files_to_print = []
+            tasks = []
 
+            # 1. 处理图像队列 (多图拼版或独立增强)
             if image_raw_paths:
                 if multi_merge and len(image_raw_paths) > 1:
                     merged_canvas = merge_images_n_up(image_raw_paths, media=media)
@@ -375,11 +378,11 @@ class PrintHandler(BaseHandler):
                     if enhance:
                         opt_path = os.path.join(UPLOAD_DIR, f"opt_merged_{uuid.uuid4().hex[:8]}.jpg")
                         if process_image_for_print(merged_path, opt_path, media=media):
-                            target_files_to_print.append(opt_path)
+                            tasks.append({"path": opt_path, "is_pdf": False})
                         else:
-                            target_files_to_print.append(merged_path)
+                            tasks.append({"path": merged_path, "is_pdf": False})
                     else:
-                        target_files_to_print.append(merged_path)
+                        tasks.append({"path": merged_path, "is_pdf": False})
                 else:
                     for src_path in image_raw_paths:
                         target_f = src_path
@@ -388,11 +391,20 @@ class PrintHandler(BaseHandler):
                             opt_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
                             if process_image_for_print(src_path, opt_path, media=media):
                                 target_f = opt_path
-                        target_files_to_print.append(target_f)
+                        tasks.append({"path": target_f, "is_pdf": False})
 
-            target_files_to_print.extend(non_image_files)
+            # 2. PDF 文件队列
+            for p_f in pdf_files:
+                tasks.append({"path": p_f, "is_pdf": True})
 
-            for target_file in target_files_to_print:
+            for o_f in other_files:
+                tasks.append({"path": o_f, "is_pdf": False})
+
+            # 3. 逐个下发打印作业
+            for item in tasks:
+                target_file = item["path"]
+                is_pdf = item["is_pdf"]
+
                 cmd = [
                     "lp",
                     "-d", printer,
@@ -414,7 +426,8 @@ class PrintHandler(BaseHandler):
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
-                if page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
+                # 修复点：仅针对 PDF 实体文件附加 page-ranges，杜绝单页图片被拒绝
+                if is_pdf and page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
                 cmd.append(target_file)
@@ -427,7 +440,7 @@ class PrintHandler(BaseHandler):
                     return
 
             clean_old_tmp_files(UPLOAD_DIR)
-            self.write_json(True, f"共 {len(target_files_to_print)} 个文件成功送达打印队列", job=", ".join(jobs))
+            self.write_json(True, f"共 {len(tasks)} 个文件成功送达打印队列", job=", ".join(jobs))
         except subprocess.TimeoutExpired:
             self.write_json(False, "打印任务派发超时，打印机可能处于离线、卡纸或通信受阻状态")
         except Exception as e:
