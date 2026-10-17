@@ -92,7 +92,7 @@ def merge_images_n_up(image_paths, media="A4"):
 
     return canvas
 
-def clean_extreme_edges_only(arr, margin_ratio=0.010):
+def clean_extreme_edges_only(arr, margin_ratio=0.012):
     h, w = arr.shape[:2]
     top_h = int(h * margin_ratio)
     bot_h = int(h * (1.0 - margin_ratio))
@@ -105,6 +105,7 @@ def clean_extreme_edges_only(arr, margin_ratio=0.010):
     arr[:, right_w:w] = 255.0
     return arr
 
+# 核心降级：轻量 OpenCV 边缘轮廓检测与四点透视拉平
 def auto_perspective_crop_cv(cv_img):
     try:
         orig = cv_img.copy()
@@ -126,7 +127,7 @@ def auto_perspective_crop_cv(cv_img):
         for c in cnts:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small_w * 600 * 0.55):
+            if len(approx) == 4 and cv2.contourArea(c) > (small_w * 600 * 0.45):
                 screen_cnt = approx
                 break
 
@@ -147,6 +148,7 @@ def auto_perspective_crop_cv(cv_img):
             if max_w > 100 and max_h > 100:
                 dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
                 M = cv2.getPerspectiveTransform(rect, dst)
+                log_debug(f"✔ 触发 OpenCV 几何拉平透视切边: {max_w}x{max_h}")
                 return cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_LINEAR)
     except Exception as e:
         log_debug(f"OpenCV 透视拉平跳过: {e}")
@@ -171,6 +173,7 @@ def process_image_for_print(input_path, output_path, media="A4", is_color=False)
             if w > h:
                 cv_img = cv2.rotate(cv_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
+            # 自动执行轻量 OpenCV 切边与矫正
             cv_img = auto_perspective_crop_cv(cv_img)
             calc_w = 1654
             calc_h = int(cv_img.shape[0] * (calc_w / float(cv_img.shape[1])))
@@ -418,7 +421,6 @@ class PrintHandler(BaseHandler):
                 elif duplex == "short":
                     cmd.extend(["-o", "sides=two-sided-short-edge"])
 
-                # 仅针对 PDF 实体文件附加 page-ranges，杜绝单页图片被拒绝
                 if is_pdf and page_ranges and re.match(r'^[0-9,\-]+$', page_ranges):
                     cmd.extend(["-o", f"page-ranges={page_ranges}"])
 
