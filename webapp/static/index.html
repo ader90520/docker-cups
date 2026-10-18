@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
     <!-- 引入样式表并附带版本戳，防止样式缓存 -->
-    <link rel="stylesheet" href="/static/css/style.css?v=20261018_03">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261018_04">
     
     <!-- 内嵌高亮色彩规则：确保子标签切换选中时与打印参数一致呈现绿色高亮主题 -->
     <style>
@@ -42,10 +42,11 @@
     </style>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+    <!-- 替换为原生自带纯净非 SIMD wasm 核心的 1.17.3 兼容版，彻底破除 iOS Safari 报错 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/ort.min.js"></script>
     <!-- 携带版本号参数，彻底破除 iOS Safari 304 强缓存 -->
-    <script src="/static/js/doc_ai.js?v=20261018_03"></script>
-    <script src="/static/js/app.js?v=20261018_03" defer></script>
+    <script src="/static/js/doc_ai.js?v=20261018_04"></script>
+    <script src="/static/js/app.js?v=20261018_04" defer></script>
 </head>
 <body>
 
@@ -343,7 +344,7 @@
                         <input type="text" id="driver-input-val" class="form-ctrl" readonly style="background:#f1f5f9;">
                     </div>
 
-                    <!-- 像 631 后台一样的自定义 PPD 驱动上传 -->
+                    <!-- 自定义 PPD 驱动上传 -->
                     <div style="margin-top:6px; margin-bottom:10px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:6px; padding:8px 10px;">
                         <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
                             💡 系统未收录此驱动？直接上传本地 PPD 驱动安装:
