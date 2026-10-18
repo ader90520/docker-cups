@@ -1,21 +1,18 @@
 /**
- * 端侧 ONNX 运算中枢 (完整闭环与自动降级版 - 深度优化防崩溃)
- * 1. 自动前处理 (256x256 RGB Tensor)
- * 2. 推理角点热力图并提取 4 个顶点
- * 3. 前端 Canvas 双三角形映射透视拉平
- * 4. 模型损坏、SIMD 受限或加载失败时，零报错自动透明降级到服务端 OpenCV 处理
+ * 端侧 ONNX 运算中枢 (工业级稳固底层与全模型通用闭环版)
+ * 1. 强制载入纯净通用指令集 WASM 核心，彻底免疫 WebAssembly SIMD 缺失异常
+ * 2. 具备动态图算子输入自适应与多格式输出解包（适配直接 8 坐标回归或多通道 Heatmap 峰值）
+ * 3. 任何外部环境或网络阻断均实现零报错降级，保障工作台稳定运行
  */
 
-// 1. 全局环境安全预设：防止在 ort.min.js 未完全就绪或环境缺失时抛出未捕获异常
-try {
-    if (typeof ort !== 'undefined' && ort && ort.env) {
-        ort.env.wasm = ort.env.wasm || {};
-        ort.env.wasm.simd = false;         // 强制关闭 SIMD 算子，防止老旧设备与 Safari 报错
-        ort.env.wasm.proxy = false;        // 关闭 WebWorker 代理，防止跨域拦截
-        ort.env.wasm.numThreads = 1;       // 单线程安全运行
-    }
-} catch (envErr) {
-    console.warn("ORT 运行环境安全初始化跳过:", envErr);
+// 1. 全局环境安全预设：指定使用 1.17.3 纯净无 SIMD 版 WASM 核心
+if (typeof ort !== 'undefined' && ort && ort.env) {
+    ort.env.wasm = ort.env.wasm || {};
+    ort.env.wasm.simd = false;         // 强制使用非 SIMD 的标准通用指令集
+    ort.env.wasm.proxy = false;        // 关闭代理，防止跨域或非 HTTPS 阻断
+    ort.env.wasm.numThreads = 1;       // 单线程，确保 iOS Safari 内存平稳
+    // 显式指定 WASM 二进制核心寻址路径，防止自动寻址错误的 SIMD 包
+    ort.env.wasm.wasmPaths = "https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/";
 }
 
 window.DocAI = {
@@ -36,7 +33,7 @@ window.DocAI = {
                 return;
             }
 
-            // 彻底去除图优化与动态内存分配，确保移动端浏览器与 Safari 零报错载入
+            // 彻底去除图优化与内存池，确保在 Safari 及不同算力设备上零阻碍加载
             const sessionOptions = {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'disabled',
@@ -50,12 +47,12 @@ window.DocAI = {
             }
 
             try {
-                // 加时间戳防止浏览器读取 304 缓存状态
+                // 携带防 304 缓存时间戳
                 const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
                 this.isReady = true;
-                this.updateUIStatus("WASM (通用兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
+                this.updateUIStatus("WASM (纯净兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
                 if (typeof logToConsole === 'function') {
                     logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
                 }
@@ -104,7 +101,7 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：归一化为 1x3x256x256 Float32Array
+    // 图像前处理：归一化为 1x3x256x256 Float32Array RGB Tensor
     preprocess: function(img) {
         const targetW = 256, targetH = 256;
         const canvas = document.createElement("canvas");
@@ -126,21 +123,24 @@ window.DocAI = {
         return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
     },
 
-    // 从模型输出解析 4 个角点坐标
+    // 强大通用的角点坐标提取：自适应多种模型结构输出 (直接坐标回归 / 热力图峰值)
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
         const dims = outputTensor.dims;
         let corners = [];
 
-        if (dims.length === 2 && dims[1] === 8) {
+        // 格式 A: 输出 8 个坐标点标量 [1, 8] 或 [8]
+        if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
             for (let i = 0; i < 4; i++) {
                 corners.push({
                     x: data[i * 2] * origW,
                     y: data[i * 2 + 1] * origH
                 });
             }
-        } else if (dims.length === 4 && dims[1] === 4) {
+        } 
+        // 格式 B: 4 通道角点热力图 [1, 4, H, W]
+        else if (dims.length === 4 && dims[1] === 4) {
             const h = dims[2], w = dims[3];
             const planeSize = h * w;
             for (let c = 0; c < 4; c++) {
@@ -160,12 +160,22 @@ window.DocAI = {
                 });
             }
         }
+        // 格式 C: 坐标点直接以 [1, 4, 2] 矩阵输出
+        else if (dims.length === 3 && dims[1] === 4 && dims[2] === 2) {
+            for (let i = 0; i < 4; i++) {
+                corners.push({
+                    x: data[i * 2] * origW,
+                    y: data[i * 2 + 1] * origH
+                });
+            }
+        }
 
+        // 顶点几何拓扑排序：左上(TL)、右上(TR)、右下(BR)、左下(BL)
         if (corners.length === 4) {
             corners.sort((a, b) => a.y - b.y);
             const top = [corners[0], corners[1]].sort((a, b) => a.x - b.x);
             const bottom = [corners[2], corners[3]].sort((a, b) => a.x - b.x);
-            return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
+            return [top[0], top[1], bottom[1], bottom[0]];
         }
         return null;
     },
@@ -181,6 +191,7 @@ window.DocAI = {
         const outW = Math.max(widthTop, widthBottom);
         const outH = Math.max(heightLeft, heightRight);
 
+        // 若角点区域过小，视为无效识别，安全退出
         if (outW < img.width * 0.35 || outH < img.height * 0.35) {
             return Promise.resolve(img);
         }
@@ -224,7 +235,7 @@ window.DocAI = {
             const c = (u0*(v1*x2 - v2*x1) - u1*(v0*x2 - v2*x0) + u2*(v0*x1 - v1*x0)) / delta;
             const d = (y0*(v1 - v2) - y1*(v0 - v2) + y2*(v0 - v1)) / delta;
             const e = (u0*(y1 - y2) - u1*(y0 - y2) + u2*(y0 - y1)) / delta;
-            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*x1 - v1*x0)) / delta;
+            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*y1 - v1*y0)) / delta;
 
             ctx.transform(a, d, b, e, c, f);
             ctx.drawImage(im, 0, 0);
@@ -232,7 +243,7 @@ window.DocAI = {
         ctx.restore();
     },
 
-    // 闭环总调度入口：模型成功则端侧切边，未加载或失败则自动透明降级
+    // 闭环总调度入口：端侧 AI 优先切边拉平，异常或未就绪时自动透明降级
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
@@ -240,6 +251,8 @@ window.DocAI = {
         try {
             const t0 = performance.now();
             const inputTensor = this.preprocess(rawImg);
+            
+            // 自动侦测并匹配模型实际输入节点名（input / images / data 等）
             const inputName = this.session.inputNames && this.session.inputNames.length > 0 
                 ? this.session.inputNames[0] 
                 : "input";
@@ -275,7 +288,7 @@ window.DocAI = {
             fileInput = document.getElementById(inputId);
         }
         if (!fileInput) {
-            fileInput = document.getElementById("model-file-input") || 
+            fileInput = document.getElementById("onnx-model-file-input") || 
                         document.querySelector("input[type='file'][accept*='.onnx']") ||
                         document.querySelector("#panel-devices input[type='file']");
         }
@@ -302,7 +315,7 @@ window.DocAI = {
         }
 
         const fd = new FormData();
-        // 自动纠偏为规范的标准模型名称 doc_corner.onnx
+        // 自动标准化为系统默认挂载名 doc_corner.onnx
         fd.append("model_file", file, "doc_corner.onnx");
 
         try {
