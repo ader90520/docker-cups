@@ -1,8 +1,8 @@
 /**
- * 端侧 ONNX 运算中枢 (工业级稳固底层与全模型通用闭环版)
- * 1. 强制载入纯净通用指令集 WASM 核心，彻底免疫 WebAssembly SIMD 缺失异常
- * 2. 具备动态图算子输入自适应与多格式输出解包（适配直接 8 坐标回归或多通道 Heatmap 峰值）
- * 3. 任何外部环境或网络阻断均实现零报错降级，保障工作台稳定运行
+ * 端侧 ONNX 运算中枢 (全模型自适应与通用参数配置版)
+ * 1. 强制兼容纯净无 SIMD WASM 核心，彻底免疫 Safari 指令集报错
+ * 2. 深度自省模型输入结构，在诊断日志输出模型参数规格与调优建议
+ * 3. 支持前端面板可视化修改参数 (排布格式/尺寸/归一化)，无需改动任何源码
  */
 
 // 1. 全局环境安全预设：指定使用 1.17.3 纯净无 SIMD 版 WASM 核心
@@ -18,6 +18,16 @@ if (typeof ort !== 'undefined' && ort && ort.env) {
 window.DocAI = {
     session: null,
     isReady: false,
+
+    // 当前模型运行核心参数 (优先读取用户在界面上保存的配置)
+    cfg: {
+        layout: localStorage.getItem("docai_layout") || "auto",     // auto / NCHW / NHWC
+        inputSize: parseInt(localStorage.getItem("docai_size") || "256", 10), // 256 / 512
+        norm: localStorage.getItem("docai_norm") || "div255"        // div255 (0~1) / tanh (-1~1) / imagenet
+    },
+
+    // 实际执行时锁定的布局
+    actualLayout: "NCHW",
 
     init: async function() {
         if (typeof logToConsole === 'function') {
@@ -52,9 +62,13 @@ window.DocAI = {
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
                 this.isReady = true;
+
+                // 核心加固：自动分析模型结构并在日志中给出规格提示
+                this.inspectModelSpecs();
+
                 this.updateUIStatus("WASM (纯净兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
                 if (typeof logToConsole === 'function') {
-                    logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms)`, "success");
+                    logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms, 当前生效排布: ${this.actualLayout})`, "success");
                 }
 
                 const pill = document.getElementById("ai-engine-pill");
@@ -76,6 +90,85 @@ window.DocAI = {
             }
             this.fallbackToHost("系统级自动增强");
         }
+    },
+
+    // 模型结构自省并在诊断日志中打印调试指引
+    inspectModelSpecs: function() {
+        try {
+            if (!this.session) return;
+            const inNames = this.session.inputNames || [];
+            const outNames = this.session.outputNames || [];
+            let inDims = "未知";
+            let detected = "NCHW";
+
+            // 提取模型第一个输入节点的维度属性
+            if (inNames.length > 0 && this.session.inputs && this.session.inputs.length > 0) {
+                const dims = this.session.inputs[0].dims;
+                if (dims && dims.length === 4) {
+                    inDims = `[${dims.join(', ')}]`;
+                    if (dims[1] === 3) {
+                        detected = "NCHW";
+                    } else if (dims[3] === 3) {
+                        detected = "NHWC";
+                    }
+                    if (dims[2] === 512 || dims[1] === 512) {
+                        this.cfg.inputSize = 512;
+                    }
+                }
+            }
+
+            if (this.cfg.layout === "auto") {
+                this.actualLayout = detected;
+            } else {
+                this.actualLayout = this.cfg.layout;
+            }
+
+            // 更新面板上的控制参数显示
+            this.syncConfigUI();
+
+            if (typeof logToConsole === 'function') {
+                logToConsole(`💡 [模型规格解析] 输入节点: [${inNames.join(', ')}], 输出节点: [${outNames.join(', ')}]`);
+                logToConsole(`💡 [模型维度探测] 输入形状: ${inDims} | 智能判定排布: [${detected}] | 当前采用: [${this.actualLayout}]`, "success");
+                if (detected === "NHWC") {
+                    logToConsole(`👉 提示: 该模型为 TF/Keras 格式(通道在末尾)。系统已自动切换至 NHWC，若手动配置请选【NHWC (通道后置)】。`);
+                } else {
+                    logToConsole(`👉 提示: 该模型为 PyTorch 标准格式(通道居前)。系统已自动切换至 NCHW。`);
+                }
+            }
+        } catch (specErr) {
+            this.actualLayout = (this.cfg.layout === "auto") ? "NCHW" : this.cfg.layout;
+        }
+    },
+
+    // 同步参数配置到界面下拉框
+    syncConfigUI: function() {
+        const selLayout = document.getElementById("ai-cfg-layout");
+        const selSize = document.getElementById("ai-cfg-size");
+        const selNorm = document.getElementById("ai-cfg-norm");
+        if (selLayout) selLayout.value = this.cfg.layout;
+        if (selSize) selSize.value = String(this.cfg.inputSize);
+        if (selNorm) selNorm.value = this.cfg.norm;
+    },
+
+    // 用户在界面修改配置时触发更新
+    applyCustomConfig: function() {
+        const selLayout = document.getElementById("ai-cfg-layout");
+        const selSize = document.getElementById("ai-cfg-size");
+        const selNorm = document.getElementById("ai-cfg-norm");
+
+        if (selLayout) this.cfg.layout = selLayout.value;
+        if (selSize) this.cfg.inputSize = parseInt(selSize.value, 10);
+        if (selNorm) this.cfg.norm = selNorm.value;
+
+        localStorage.setItem("docai_layout", this.cfg.layout);
+        localStorage.setItem("docai_size", String(this.cfg.inputSize));
+        localStorage.setItem("docai_norm", this.cfg.norm);
+
+        this.inspectModelSpecs();
+        if (typeof logToConsole === 'function') {
+            logToConsole(`✔ 模型运行参数已更新并记忆保存: 排布=${this.cfg.layout}(实际:${this.actualLayout}), 尺寸=${this.cfg.inputSize}, 归一化=${this.cfg.norm}`, "success");
+        }
+        alert("模型适配参数已保存并实时生效！");
     },
 
     fallbackToHost: function(modelDesc) {
@@ -101,9 +194,10 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：归一化为 1x3x256x256 Float32Array RGB Tensor
-    preprocess: function(img) {
-        const targetW = 256, targetH = 256;
+    // 图像前处理：根据参数自适应构造 [1, 3, H, W] 或 [1, H, W, 3] Float32Array RGB Tensor
+    preprocess: function(img, forceLayout) {
+        const targetW = this.cfg.inputSize || 256;
+        const targetH = this.cfg.inputSize || 256;
         const canvas = document.createElement("canvas");
         canvas.width = targetW;
         canvas.height = targetH;
@@ -111,16 +205,36 @@ window.DocAI = {
         ctx.drawImage(img, 0, 0, targetW, targetH);
         const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
 
+        const layout = forceLayout || this.actualLayout || "NCHW";
         const floatData = new Float32Array(3 * targetW * targetH);
-        const channelSize = targetW * targetH;
+        const totalPixels = targetW * targetH;
+        const normMode = this.cfg.norm || "div255";
 
-        for (let i = 0; i < channelSize; i++) {
-            floatData[i] = imgData[i * 4] / 255.0;
-            floatData[channelSize + i] = imgData[i * 4 + 1] / 255.0;
-            floatData[2 * channelSize + i] = imgData[i * 4 + 2] / 255.0;
+        // 单像素色彩转换
+        const transformPixel = (v) => {
+            if (normMode === "tanh") {
+                return (v / 127.5) - 1.0; // [-1.0, 1.0]
+            }
+            return v / 255.0; // [0.0, 1.0]
+        };
+
+        if (layout === "NHWC") {
+            // [1, H, W, 3] 通道后置排布
+            for (let i = 0; i < totalPixels; i++) {
+                floatData[i * 3 + 0] = transformPixel(imgData[i * 4 + 0]); // R
+                floatData[i * 3 + 1] = transformPixel(imgData[i * 4 + 1]); // G
+                floatData[i * 3 + 2] = transformPixel(imgData[i * 4 + 2]); // B
+            }
+            return new ort.Tensor("float32", floatData, [1, targetH, targetW, 3]);
+        } else {
+            // [1, 3, H, W] 通道前置排布
+            for (let i = 0; i < totalPixels; i++) {
+                floatData[i] = transformPixel(imgData[i * 4 + 0]);                   // R
+                floatData[totalPixels + i] = transformPixel(imgData[i * 4 + 1]);     // G
+                floatData[2 * totalPixels + i] = transformPixel(imgData[i * 4 + 2]); // B
+            }
+            return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
         }
-
-        return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
     },
 
     // 强大通用的角点坐标提取：自适应多种模型结构输出 (直接坐标回归 / 热力图峰值)
@@ -243,23 +357,47 @@ window.DocAI = {
         ctx.restore();
     },
 
-    // 闭环总调度入口：端侧 AI 优先切边拉平，异常或未就绪时自动透明降级
+    // 闭环调度：具备动态自动容错与错误诊断引导的推理入口
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
         }
         try {
             const t0 = performance.now();
-            const inputTensor = this.preprocess(rawImg);
-            
-            // 自动侦测并匹配模型实际输入节点名（input / images / data 等）
             const inputName = this.session.inputNames && this.session.inputNames.length > 0 
                 ? this.session.inputNames[0] 
                 : "input";
-            const feeds = {};
-            feeds[inputName] = inputTensor;
 
-            const results = await this.session.run(feeds);
+            let results = null;
+
+            // 优先按照当前生效的排布运行
+            try {
+                const inputTensor = this.preprocess(rawImg, this.actualLayout);
+                const feeds = {};
+                feeds[inputName] = inputTensor;
+                results = await this.session.run(feeds);
+            } catch (runErr) {
+                const errMsg = runErr.message || "";
+                if (errMsg.includes("Expected: 3") || errMsg.includes("Expected: 256") || errMsg.includes("invalid dimensions")) {
+                    // 自动对调尝试 NCHW <-> NHWC
+                    const altLayout = (this.actualLayout === "NCHW") ? "NHWC" : "NCHW";
+                    if (typeof logToConsole === 'function') {
+                        logToConsole(`⚠️ 捕获维度异常: [${errMsg}]，正在自动切换排布至 [${altLayout}] 重新对齐...`, "warn");
+                    }
+                    const retryTensor = this.preprocess(rawImg, altLayout);
+                    const retryFeeds = {};
+                    retryFeeds[inputName] = retryTensor;
+                    results = await this.session.run(retryFeeds);
+                    // 成功后自动将生效格式锁定，免除下次再错
+                    this.actualLayout = altLayout;
+                    if (typeof logToConsole === 'function') {
+                        logToConsole(`✔ 自适应排布切换至 [${altLayout}] 成功，已自动设为当前模型默认！`, "success");
+                    }
+                } else {
+                    throw runErr;
+                }
+            }
+
             const outputTensor = results[Object.keys(results)[0]];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
             const cost = (performance.now() - t0).toFixed(1);
@@ -272,10 +410,15 @@ window.DocAI = {
                     logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行智能平整 (${cost}ms)`, "success");
                 }
                 return await this.warpPerspective(rawImg, corners);
+            } else {
+                if (typeof logToConsole === 'function') {
+                    logToConsole("ℹ 未检出高置信度角点，保持原画幅", "info");
+                }
             }
         } catch (e) {
             if (typeof logToConsole === 'function') {
                 logToConsole(`端侧推理跳过，转由后端 OpenCV 兜底: ${e.message}`, "warn");
+                logToConsole(`👉 调试排错建议: 请检查设备管理面板中的【排布格式】(当前:${this.actualLayout}) 与【输入尺寸】是否与模型匹配`, "warn");
             }
         }
         return rawImg;
