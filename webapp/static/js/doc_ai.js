@@ -1,8 +1,8 @@
 /**
- * 端侧 ONNX 运算中枢 (全模型自适应与通用参数配置版)
+ * 端侧 ONNX 运算中枢 (全模型自适应与通用参数配置版 - 几何透视校正修正)
  * 1. 强制兼容纯净无 SIMD WASM 核心，彻底免疫 Safari 指令集报错
- * 2. 深度自省模型输入结构，在诊断日志输出模型参数规格与调优建议
- * 3. 支持前端面板可视化修改参数 (排布格式/尺寸/归一化)，无需改动任何源码
+ * 2. 精准适配 coords 输出解包，消除对角线撕裂异常
+ * 3. 顺时针顶点自适应归正，确保透视拉平撑满 A4 页面
  */
 
 // 1. 全局环境安全预设：指定使用 1.17.3 纯净无 SIMD 版 WASM 核心
@@ -11,7 +11,6 @@ if (typeof ort !== 'undefined' && ort && ort.env) {
     ort.env.wasm.simd = false;         // 强制使用非 SIMD 的标准通用指令集
     ort.env.wasm.proxy = false;        // 关闭代理，防止跨域或非 HTTPS 阻断
     ort.env.wasm.numThreads = 1;       // 单线程，确保 iOS Safari 内存平稳
-    // 显式指定 WASM 二进制核心寻址路径，防止自动寻址错误的 SIMD 包
     ort.env.wasm.wasmPaths = "https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/";
 }
 
@@ -23,11 +22,11 @@ window.DocAI = {
     cfg: {
         layout: localStorage.getItem("docai_layout") || "auto",     // auto / NCHW / NHWC
         inputSize: parseInt(localStorage.getItem("docai_size") || "256", 10), // 256 / 512
-        norm: localStorage.getItem("docai_norm") || "div255"        // div255 (0~1) / tanh (-1~1) / imagenet
+        norm: localStorage.getItem("docai_norm") || "div255"        // div255 (0~1) / tanh (-1~1)
     },
 
     // 实际执行时锁定的布局
-    actualLayout: "NCHW",
+    actualLayout: "NHWC",
 
     init: async function() {
         if (typeof logToConsole === 'function') {
@@ -43,7 +42,6 @@ window.DocAI = {
                 return;
             }
 
-            // 彻底去除图优化与内存池，确保在 Safari 及不同算力设备上零阻碍加载
             const sessionOptions = {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'disabled',
@@ -57,13 +55,11 @@ window.DocAI = {
             }
 
             try {
-                // 携带防 304 缓存时间戳
                 const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
                 this.isReady = true;
 
-                // 核心加固：自动分析模型结构并在日志中给出规格提示
                 this.inspectModelSpecs();
 
                 this.updateUIStatus("WASM (纯净兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
@@ -92,16 +88,14 @@ window.DocAI = {
         }
     },
 
-    // 模型结构自省并在诊断日志中打印调试指引
     inspectModelSpecs: function() {
         try {
             if (!this.session) return;
             const inNames = this.session.inputNames || [];
             const outNames = this.session.outputNames || [];
             let inDims = "未知";
-            let detected = "NCHW";
+            let detected = "NHWC";
 
-            // 提取模型第一个输入节点的维度属性
             if (inNames.length > 0 && this.session.inputs && this.session.inputs.length > 0) {
                 const dims = this.session.inputs[0].dims;
                 if (dims && dims.length === 4) {
@@ -110,9 +104,6 @@ window.DocAI = {
                         detected = "NCHW";
                     } else if (dims[3] === 3) {
                         detected = "NHWC";
-                    }
-                    if (dims[2] === 512 || dims[1] === 512) {
-                        this.cfg.inputSize = 512;
                     }
                 }
             }
@@ -123,24 +114,17 @@ window.DocAI = {
                 this.actualLayout = this.cfg.layout;
             }
 
-            // 更新面板上的控制参数显示
             this.syncConfigUI();
 
             if (typeof logToConsole === 'function') {
                 logToConsole(`💡 [模型规格解析] 输入节点: [${inNames.join(', ')}], 输出节点: [${outNames.join(', ')}]`);
-                logToConsole(`💡 [模型维度探测] 输入形状: ${inDims} | 智能判定排布: [${detected}] | 当前采用: [${this.actualLayout}]`, "success");
-                if (detected === "NHWC") {
-                    logToConsole(`👉 提示: 该模型为 TF/Keras 格式(通道在末尾)。系统已自动切换至 NHWC，若手动配置请选【NHWC (通道后置)】。`);
-                } else {
-                    logToConsole(`👉 提示: 该模型为 PyTorch 标准格式(通道居前)。系统已自动切换至 NCHW。`);
-                }
+                logToConsole(`💡 [模型维度探测] 输入形状: ${inDims} | 采用排布: [${this.actualLayout}]`, "success");
             }
         } catch (specErr) {
-            this.actualLayout = (this.cfg.layout === "auto") ? "NCHW" : this.cfg.layout;
+            this.actualLayout = (this.cfg.layout === "auto") ? "NHWC" : this.cfg.layout;
         }
     },
 
-    // 同步参数配置到界面下拉框
     syncConfigUI: function() {
         const selLayout = document.getElementById("ai-cfg-layout");
         const selSize = document.getElementById("ai-cfg-size");
@@ -150,7 +134,6 @@ window.DocAI = {
         if (selNorm) selNorm.value = this.cfg.norm;
     },
 
-    // 用户在界面修改配置时触发更新
     applyCustomConfig: function() {
         const selLayout = document.getElementById("ai-cfg-layout");
         const selSize = document.getElementById("ai-cfg-size");
@@ -166,9 +149,9 @@ window.DocAI = {
 
         this.inspectModelSpecs();
         if (typeof logToConsole === 'function') {
-            logToConsole(`✔ 模型运行参数已更新并记忆保存: 排布=${this.cfg.layout}(实际:${this.actualLayout}), 尺寸=${this.cfg.inputSize}, 归一化=${this.cfg.norm}`, "success");
+            logToConsole(`✔ 模型参数已更新: 排布=${this.cfg.layout}(实际:${this.actualLayout}), 尺寸=${this.cfg.inputSize}`, "success");
         }
-        alert("模型适配参数已保存并实时生效！");
+        alert("参数已更新生效！");
     },
 
     fallbackToHost: function(modelDesc) {
@@ -194,7 +177,7 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：根据参数自适应构造 [1, 3, H, W] 或 [1, H, W, 3] Float32Array RGB Tensor
+    // 图像前处理：根据实际尺寸与排布构造 Float32Array RGB Tensor
     preprocess: function(img, forceLayout) {
         const targetW = this.cfg.inputSize || 256;
         const targetH = this.cfg.inputSize || 256;
@@ -205,21 +188,19 @@ window.DocAI = {
         ctx.drawImage(img, 0, 0, targetW, targetH);
         const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
 
-        const layout = forceLayout || this.actualLayout || "NCHW";
+        const layout = forceLayout || this.actualLayout || "NHWC";
         const floatData = new Float32Array(3 * targetW * targetH);
         const totalPixels = targetW * targetH;
         const normMode = this.cfg.norm || "div255";
 
-        // 单像素色彩转换
         const transformPixel = (v) => {
             if (normMode === "tanh") {
-                return (v / 127.5) - 1.0; // [-1.0, 1.0]
+                return (v / 127.5) - 1.0;
             }
-            return v / 255.0; // [0.0, 1.0]
+            return v / 255.0;
         };
 
         if (layout === "NHWC") {
-            // [1, H, W, 3] 通道后置排布
             for (let i = 0; i < totalPixels; i++) {
                 floatData[i * 3 + 0] = transformPixel(imgData[i * 4 + 0]); // R
                 floatData[i * 3 + 1] = transformPixel(imgData[i * 4 + 1]); // G
@@ -227,7 +208,6 @@ window.DocAI = {
             }
             return new ort.Tensor("float32", floatData, [1, targetH, targetW, 3]);
         } else {
-            // [1, 3, H, W] 通道前置排布
             for (let i = 0; i < totalPixels; i++) {
                 floatData[i] = transformPixel(imgData[i * 4 + 0]);                   // R
                 floatData[totalPixels + i] = transformPixel(imgData[i * 4 + 1]);     // G
@@ -237,23 +217,73 @@ window.DocAI = {
         }
     },
 
-    // 强大通用的角点坐标提取：自适应多种模型结构输出 (直接坐标回归 / 热力图峰值)
+    // 关键修正：拓扑几何顺时针排序，彻底避免对角线撕裂
+    orderPointsClockwise: function(pts) {
+        // pts: [{x, y}, {x, y}, {x, y}, {x, y}]
+        // 1. 计算四边形几何中心
+        const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+        const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+
+        // 2. 根据相对于中心的极角顺时针排序
+        const sorted = pts.slice().sort((a, b) => {
+            const angleA = Math.atan2(a.y - cy, a.x - cx);
+            const angleB = Math.atan2(b.y - cy, b.x - cx);
+            return angleA - angleB;
+        });
+
+        // 3. 找到距离 (0, 0) 最近的点作为 Top-Left (左上角)
+        let minIdx = 0, minDist = Infinity;
+        for (let i = 0; i < 4; i++) {
+            const dist = sorted[i].x * sorted[i].x + sorted[i].y * sorted[i].y;
+            if (dist < minDist) {
+                minDist = dist;
+                minIdx = i;
+            }
+        }
+
+        // 4. 从 Top-Left 开始按顺时针依次排列: TL, TR, BR, BL
+        return [
+            sorted[minIdx],
+            sorted[(minIdx + 1) % 4],
+            sorted[(minIdx + 2) % 4],
+            sorted[(minIdx + 3) % 4]
+        ];
+    },
+
+    // 角点坐标解析：精准适配 coords [1, 4, 2] 及各类回归标量
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
         const dims = outputTensor.dims;
-        let corners = [];
+        let rawCorners = [];
 
-        // 格式 A: 输出 8 个坐标点标量 [1, 8] 或 [8]
-        if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
+        // 格式 1: coords 矩阵输出 [1, 4, 2] 或 [4, 2]
+        if ((dims.length === 3 && dims[1] === 4 && dims[2] === 2) || 
+            (dims.length === 2 && dims[0] === 4 && dims[1] === 2)) {
             for (let i = 0; i < 4; i++) {
-                corners.push({
-                    x: data[i * 2] * origW,
-                    y: data[i * 2 + 1] * origH
-                });
+                let px = data[i * 2 + 0];
+                let py = data[i * 2 + 1];
+                // 若输出是 0~1 的归一化比例，映射至原始宽高
+                if (px <= 1.5 && py <= 1.5) {
+                    px *= origW;
+                    py *= origH;
+                }
+                rawCorners.push({ x: px, y: py });
             }
-        } 
-        // 格式 B: 4 通道角点热力图 [1, 4, H, W]
+        }
+        // 格式 2: 扁平回归 [1, 8] 或 [8]
+        else if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
+            for (let i = 0; i < 4; i++) {
+                let px = data[i * 2 + 0];
+                let py = data[i * 2 + 1];
+                if (px <= 1.5 && py <= 1.5) {
+                    px *= origW;
+                    py *= origH;
+                }
+                rawCorners.push({ x: px, y: py });
+            }
+        }
+        // 格式 3: 4 通道热力图 [1, 4, H, W]
         else if (dims.length === 4 && dims[1] === 4) {
             const h = dims[2], w = dims[3];
             const planeSize = h * w;
@@ -266,35 +296,21 @@ window.DocAI = {
                         maxIdx = i;
                     }
                 }
-                const py = Math.floor(maxIdx / w);
-                const px = maxIdx % w;
-                corners.push({
-                    x: (px / w) * origW,
-                    y: (py / h) * origH
-                });
-            }
-        }
-        // 格式 C: 坐标点直接以 [1, 4, 2] 矩阵输出
-        else if (dims.length === 3 && dims[1] === 4 && dims[2] === 2) {
-            for (let i = 0; i < 4; i++) {
-                corners.push({
-                    x: data[i * 2] * origW,
-                    y: data[i * 2 + 1] * origH
+                rawCorners.push({
+                    x: (maxIdx % w / w) * origW,
+                    y: (Math.floor(maxIdx / w) / h) * origH
                 });
             }
         }
 
-        // 顶点几何拓扑排序：左上(TL)、右上(TR)、右下(BR)、左下(BL)
-        if (corners.length === 4) {
-            corners.sort((a, b) => a.y - b.y);
-            const top = [corners[0], corners[1]].sort((a, b) => a.x - b.x);
-            const bottom = [corners[2], corners[3]].sort((a, b) => a.x - b.x);
-            return [top[0], top[1], bottom[1], bottom[0]];
+        if (rawCorners.length === 4) {
+            // 使用严格的几何中心极角算法建立正确的顺时针映射，杜绝交叉撕裂
+            return this.orderPointsClockwise(rawCorners);
         }
         return null;
     },
 
-    // 前端 Canvas 透视变换拉直切边
+    // 透视拉平变换（两三角形仿射贴图）
     warpPerspective: function(img, pts) {
         const [tl, tr, br, bl] = pts;
         const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
@@ -305,8 +321,8 @@ window.DocAI = {
         const outW = Math.max(widthTop, widthBottom);
         const outH = Math.max(heightLeft, heightRight);
 
-        // 若角点区域过小，视为无效识别，安全退出
-        if (outW < img.width * 0.35 || outH < img.height * 0.35) {
+        // 有效性保护：过小区域放弃拉伸
+        if (outW < img.width * 0.3 || outH < img.height * 0.3) {
             return Promise.resolve(img);
         }
 
@@ -315,6 +331,7 @@ window.DocAI = {
         canvas.height = Math.round(outH);
         const ctx = canvas.getContext("2d");
 
+        // 三角形剖分拉平：分割为 (TL, TR, BR) 和 (TL, BR, BL)
         this.drawTriangleWarp(ctx, img, [tl, tr, br], [{x:0, y:0}, {x:outW, y:0}, {x:outW, y:outH}]);
         this.drawTriangleWarp(ctx, img, [tl, br, bl], [{x:0, y:0}, {x:outW, y:outH}, {x:0, y:outH}]);
 
@@ -349,7 +366,7 @@ window.DocAI = {
             const c = (u0*(v1*x2 - v2*x1) - u1*(v0*x2 - v2*x0) + u2*(v0*x1 - v1*x0)) / delta;
             const d = (y0*(v1 - v2) - y1*(v0 - v2) + y2*(v0 - v1)) / delta;
             const e = (u0*(y1 - y2) - u1*(y0 - y2) + u2*(y0 - y1)) / delta;
-            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*y1 - v1*y0)) / delta;
+            const f = (u0*(v1*y2 - v2*y1) - u1*(v0*y2 - v2*y0) + u2*(v0*x1 - v1*x0)) / delta;
 
             ctx.transform(a, d, b, e, c, f);
             ctx.drawImage(im, 0, 0);
@@ -357,7 +374,6 @@ window.DocAI = {
         ctx.restore();
     },
 
-    // 闭环调度：具备动态自动容错与错误诊断引导的推理入口
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
@@ -370,7 +386,6 @@ window.DocAI = {
 
             let results = null;
 
-            // 优先按照当前生效的排布运行
             try {
                 const inputTensor = this.preprocess(rawImg, this.actualLayout);
                 const feeds = {};
@@ -379,26 +394,23 @@ window.DocAI = {
             } catch (runErr) {
                 const errMsg = runErr.message || "";
                 if (errMsg.includes("Expected: 3") || errMsg.includes("Expected: 256") || errMsg.includes("invalid dimensions")) {
-                    // 自动对调尝试 NCHW <-> NHWC
                     const altLayout = (this.actualLayout === "NCHW") ? "NHWC" : "NCHW";
                     if (typeof logToConsole === 'function') {
-                        logToConsole(`⚠️ 捕获维度异常: [${errMsg}]，正在自动切换排布至 [${altLayout}] 重新对齐...`, "warn");
+                        logToConsole(`⚠️ 自动纠偏排布格式至 [${altLayout}]...`, "warn");
                     }
                     const retryTensor = this.preprocess(rawImg, altLayout);
                     const retryFeeds = {};
                     retryFeeds[inputName] = retryTensor;
                     results = await this.session.run(retryFeeds);
-                    // 成功后自动将生效格式锁定，免除下次再错
                     this.actualLayout = altLayout;
-                    if (typeof logToConsole === 'function') {
-                        logToConsole(`✔ 自适应排布切换至 [${altLayout}] 成功，已自动设为当前模型默认！`, "success");
-                    }
                 } else {
                     throw runErr;
                 }
             }
 
-            const outputTensor = results[Object.keys(results)[0]];
+            // 优先查找名为 coords 的特征输出节点
+            const outputKey = this.session.outputNames.find(n => n.includes("coord")) || Object.keys(results)[0];
+            const outputTensor = results[outputKey];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
             const cost = (performance.now() - t0).toFixed(1);
             
@@ -407,24 +419,18 @@ window.DocAI = {
 
             if (corners) {
                 if (typeof logToConsole === 'function') {
-                    logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行智能平整 (${cost}ms)`, "success");
+                    logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行顺时针几何平直校正 (${cost}ms)`, "success");
                 }
                 return await this.warpPerspective(rawImg, corners);
-            } else {
-                if (typeof logToConsole === 'function') {
-                    logToConsole("ℹ 未检出高置信度角点，保持原画幅", "info");
-                }
             }
         } catch (e) {
             if (typeof logToConsole === 'function') {
                 logToConsole(`端侧推理跳过，转由后端 OpenCV 兜底: ${e.message}`, "warn");
-                logToConsole(`👉 调试排错建议: 请检查设备管理面板中的【排布格式】(当前:${this.actualLayout}) 与【输入尺寸】是否与模型匹配`, "warn");
             }
         }
         return rawImg;
     },
 
-    // 智能上传模型：若未传参 inputId，则自适应寻找页面中的模型文件输入框
     inspectAndUploadModel: async function(inputId) {
         let fileInput = null;
         if (inputId) {
@@ -458,7 +464,6 @@ window.DocAI = {
         }
 
         const fd = new FormData();
-        // 自动标准化为系统默认挂载名 doc_corner.onnx
         fd.append("model_file", file, "doc_corner.onnx");
 
         try {
@@ -531,7 +536,6 @@ window.DocAI = {
         }
     },
 
-    // 安全清空缓存与离线存储 (兼顾 Safari 非 HTTPS HTTP 协议)
     clearCacheAndReload: async function() {
         if (typeof logToConsole === 'function') {
             logToConsole("正在清理端侧运行时缓存与离线存储...");
@@ -559,7 +563,6 @@ window.DocAI = {
     }
 };
 
-// 确保 DOM 准备好后执行加载
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         window.DocAI.init();
