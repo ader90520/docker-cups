@@ -4,11 +4,48 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- 引入样式表并附带版本戳，防止样式缓存 -->
+    <link rel="stylesheet" href="/static/css/style.css?v=20261018_03">
+    
+    <!-- 内嵌高亮色彩规则：确保子标签切换选中时与打印参数一致呈现绿色高亮主题 -->
+    <style>
+        .sub-nav-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 8px;
+        }
+        .sub-nav-item {
+            flex: 1;
+            text-align: center;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #64748b;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .sub-nav-item.active {
+            background: #10b981 !important;
+            color: #ffffff !important;
+            border-color: #10b981 !important;
+            font-weight: 700;
+            box-shadow: 0 2px 6px rgba(16, 185, 129, 0.35);
+        }
+    </style>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
-    <script src="/static/js/doc_ai.js"></script>
-    <script src="/static/js/app.js" defer></script>
+    <!-- 携带版本号参数，彻底破除 iOS Safari 304 强缓存 -->
+    <script src="/static/js/doc_ai.js?v=20261018_03"></script>
+    <script src="/static/js/app.js?v=20261018_03" defer></script>
 </head>
 <body>
 
@@ -38,6 +75,7 @@
             </div>
         </div>
 
+        <!-- 带有选中高亮色的子标签切换栏 -->
         <div class="sub-nav-tabs">
             <div class="sub-nav-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档/试卷</div>
             <div class="sub-nav-item" id="tab-sub-idcard" onclick="PrintManager.switchSubTab('idcard')">🪪 身份证专属打印</div>
@@ -404,7 +442,7 @@
                         <label>邮箱账号</label>
                         <input type="text" id="mail-user" name="user" class="form-ctrl" placeholder="example@qq.com">
                     </div>
-                    <div class="form-item">
+                    <div class="param-item">
                         <label>授权码 / 专用密码</label>
                         <input type="password" id="mail-pwd" name="password" class="form-ctrl" placeholder="16位授权码">
                     </div>
