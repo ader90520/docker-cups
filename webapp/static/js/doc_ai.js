@@ -1,20 +1,21 @@
 /**
- * 端侧 ONNX 运算中枢 (极致稳健防崩溃版)
- * 1. 严格防护全局变量与非安全 HTTP 上下文，确保 100% 不白屏、不卡死
- * 2. 自动探测或降级到 OpenCV，杜绝界面停留在“检测中...”
- * 3. 兼容自适应文件上传与缓存清空
+ * 端侧 ONNX 运算中枢 (完整闭环与自动降级版 - 深度优化防崩溃)
+ * 1. 自动前处理 (256x256 RGB Tensor)
+ * 2. 推理角点热力图并提取 4 个顶点
+ * 3. 前端 Canvas 双三角形映射透视拉平
+ * 4. 模型损坏、SIMD 受限或加载失败时，零报错自动透明降级到服务端 OpenCV 处理
  */
 
-// 1. 安全初始化环境（全面 try-catch 保护，防止环境未就绪时阻止脚本运行）
+// 1. 全局环境安全预设：防止在 ort.min.js 未完全就绪或环境缺失时抛出未捕获异常
 try {
     if (typeof ort !== 'undefined' && ort && ort.env) {
         ort.env.wasm = ort.env.wasm || {};
-        ort.env.wasm.simd = false;
-        ort.env.wasm.proxy = false;
-        ort.env.wasm.numThreads = 1;
+        ort.env.wasm.simd = false;         // 强制关闭 SIMD 算子，防止老旧设备与 Safari 报错
+        ort.env.wasm.proxy = false;        // 关闭 WebWorker 代理，防止跨域拦截
+        ort.env.wasm.numThreads = 1;       // 单线程安全运行
     }
-} catch (e) {
-    console.warn("ORT 环境预设跳过:", e);
+} catch (envErr) {
+    console.warn("ORT 运行环境安全初始化跳过:", envErr);
 }
 
 window.DocAI = {
@@ -31,10 +32,11 @@ window.DocAI = {
                 if (typeof logToConsole === 'function') {
                     logToConsole("未检测到 onnxruntime-web 运行时，转用服务端轻量 OpenCV 通道", "warn");
                 }
-                this.fallbackToHost("未挂载 WASM 库");
+                this.fallbackToHost("未挂载运行时");
                 return;
             }
 
+            // 彻底去除图优化与动态内存分配，确保移动端浏览器与 Safari 零报错载入
             const sessionOptions = {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'disabled',
@@ -48,6 +50,7 @@ window.DocAI = {
             }
 
             try {
+                // 加时间戳防止浏览器读取 304 缓存状态
                 const modelUrl = "/models/doc_corner.onnx?t=" + new Date().getTime();
                 this.session = await ort.InferenceSession.create(modelUrl, sessionOptions);
                 const cost = (performance.now() - t0).toFixed(1);
@@ -101,6 +104,7 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
+    // 图像前处理：归一化为 1x3x256x256 Float32Array
     preprocess: function(img) {
         const targetW = 256, targetH = 256;
         const canvas = document.createElement("canvas");
@@ -122,6 +126,7 @@ window.DocAI = {
         return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
     },
 
+    // 从模型输出解析 4 个角点坐标
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
@@ -160,11 +165,12 @@ window.DocAI = {
             corners.sort((a, b) => a.y - b.y);
             const top = [corners[0], corners[1]].sort((a, b) => a.x - b.x);
             const bottom = [corners[2], corners[3]].sort((a, b) => a.x - b.x);
-            return [top[0], top[1], bottom[1], bottom[0]];
+            return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
         }
         return null;
     },
 
+    // 前端 Canvas 透视变换拉直切边
     warpPerspective: function(img, pts) {
         const [tl, tr, br, bl] = pts;
         const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
@@ -226,6 +232,7 @@ window.DocAI = {
         ctx.restore();
     },
 
+    // 闭环总调度入口：模型成功则端侧切边，未加载或失败则自动透明降级
     processImageAuto: async function(rawImg) {
         if (!this.isReady || !this.session) {
             return rawImg;
@@ -261,17 +268,15 @@ window.DocAI = {
         return rawImg;
     },
 
-    // 智能定位 Input 元素（即使页面没有传 inputId 也能自适应获取）
+    // 智能上传模型：若未传参 inputId，则自适应寻找页面中的模型文件输入框
     inspectAndUploadModel: async function(inputId) {
         let fileInput = null;
         if (inputId) {
             fileInput = document.getElementById(inputId);
         }
         if (!fileInput) {
-            // 自动寻找页面中属于模型上传的 input
             fileInput = document.getElementById("model-file-input") || 
                         document.querySelector("input[type='file'][accept*='.onnx']") ||
-                        document.querySelectorAll("#panel-devices input[type='file']")[1] ||
                         document.querySelector("#panel-devices input[type='file']");
         }
 
@@ -297,6 +302,7 @@ window.DocAI = {
         }
 
         const fd = new FormData();
+        // 自动纠偏为规范的标准模型名称 doc_corner.onnx
         fd.append("model_file", file, "doc_corner.onnx");
 
         try {
@@ -369,13 +375,12 @@ window.DocAI = {
         }
     },
 
-    // 安全清空缓存（完全兼顾 Safari HTTP 环境）
+    // 安全清空缓存与离线存储 (兼顾 Safari 非 HTTPS HTTP 协议)
     clearCacheAndReload: async function() {
         if (typeof logToConsole === 'function') {
             logToConsole("正在清理端侧运行时缓存与离线存储...");
         }
         try {
-            // 防护：Safari 在 HTTP 下不支持 caches.keys()
             if (window.isSecureContext && window.caches && typeof caches.keys === 'function') {
                 const keys = await caches.keys();
                 await Promise.all(keys.map(k => caches.delete(k)));
@@ -398,7 +403,7 @@ window.DocAI = {
     }
 };
 
-// 确保 DOM 准备好后执行
+// 确保 DOM 准备好后执行加载
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
         window.DocAI.init();
