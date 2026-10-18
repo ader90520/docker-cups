@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 完整闭环交互版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 硬件自适应与驱动闭环优化版
  */
 
 function logToConsole(msg, level = "info") {
@@ -320,7 +320,7 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互与追加管理 (闭环切边对接) ====================
+// ==================== 2. 打印交互管理器 ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
@@ -438,7 +438,6 @@ window.PrintManager = {
             reader.onload = (e) => {
                 const img = new Image();
                 img.onload = async () => {
-                    // 核心闭环注入：优先走端侧 AI 切边拉平；若未加载则无损原样返回，由后端 OpenCV 兜底
                     const processedImg = await DocAI.processImageAuto(img);
                     EnhanceEngine.currentRawImage = processedImg;
                     if (!this.loadedImages.some(item => item.name === file.name)) {
@@ -726,7 +725,7 @@ window.IdCardManager = {
     }
 };
 
-// ==================== 4. 扫描硬件交互服务 ====================
+// ==================== 4. 扫描硬件服务 ====================
 window.ScanService = {
     loadScanDevices: async function() {
         try {
@@ -866,7 +865,7 @@ window.ScanService = {
     }
 };
 
-// ==================== 5. 设备管理与运维服务 ====================
+// ==================== 5. 设备管理与硬件自适应服务 (重点强化) ====================
 window.DashboardService = {
     loadPrinters: async function(showToast = false) {
         try {
@@ -980,8 +979,9 @@ window.DashboardService = {
         }
     },
 
+    // 重点优化 1：扫描硬件物理端口，直接自动选中物理打印机并触发自动匹配
     loadDiscoveredDevices: async function() {
-        logToConsole("正在扫描硬件物理端口与 USB URI...");
+        logToConsole("正在扫描硬件物理端口与 USB 直通设备...");
         const select = document.getElementById("discovered-device-select");
         if (!select) return;
         try {
@@ -989,18 +989,34 @@ window.DashboardService = {
             const res = await resp.json();
             select.innerHTML = '<option value="">-- 请选择硬件端口 --</option>';
             const devs = res.data || [];
+
+            if (devs.length === 0) {
+                logToConsole("未发现可用的物理打印机端口", "warn");
+                return;
+            }
+
             devs.forEach(d => {
                 const opt = document.createElement("option");
                 opt.value = d.uri;
                 opt.text = `${d.name || d.info} (${d.uri})`;
                 select.appendChild(opt);
             });
+
             logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
+
+            // 自动化：如果发现物理硬件设备，直接默认选中第一台，免除手动选择
+            let targetDevice = devs.find(d => !d.uri.includes("socket://") && !d.uri.includes("ipp://")) || devs[0];
+            if (targetDevice) {
+                select.value = targetDevice.uri;
+                logToConsole(`✔ 已自动选定物理打印机: ${targetDevice.name || targetDevice.info}`, "success");
+                this.onDiscoveredDeviceSelect(select);
+            }
         } catch (e) {
             logToConsole(`扫描端口失败: ${e.message}`, "error");
         }
     },
 
+    // 重点优化 2：根据直连端口智能提炼型号，并自动在容器内检索驱动
     onDiscoveredDeviceSelect: function(selectEl) {
         const val = selectEl.value;
         if (!val) return;
@@ -1014,38 +1030,82 @@ window.DashboardService = {
         } else if (val.includes("hp:/usb/")) {
             guess = val.split("hp:/usb/")[1].split("?")[0].replace(/[^a-zA-Z0-9]/g, "_");
             searchKeyword = guess.replace(/_/g, " ");
+        } else if (val.includes("usb://")) {
+            const cleanUri = decodeURIComponent(val.replace("usb://", ""));
+            guess = cleanUri.split("?")[0].replace(/[^a-zA-Z0-9]/g, "_");
+            searchKeyword = guess.replace(/_/g, " ");
         }
 
         if (nameInput) nameInput.value = guess;
 
+        // 提取型号中的数字和核心系列（如 M126a, 1020, P1106, 1102 等）
         const match = searchKeyword.match(/\b([A-Za-z]+)?\s*([0-9]{3,4}[A-Za-z]*)\b/) || searchKeyword.match(/([0-9]{3,4})/);
         const kw = match ? match[0] : searchKeyword;
+
         if (kw) {
             const kwInput = document.getElementById("driver-search-kw");
             if (kwInput) {
                 kwInput.value = kw.trim();
-                logToConsole(`💡 已自动识别硬件型号: ${kw.trim()}，正在匹配最佳驱动...`);
-                this.searchDrivers();
+                logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，正在容器内自动检索最佳驱动...`);
+                this.searchDrivers(true); // 传参 true 表示自动选择模式
             }
         }
     },
 
-    searchDrivers: async function() {
+    // 重点优化 3：检索容器内置驱动；若找到则自动填充；若未收录则自动提示并激活 PPD 上传选区
+    searchDrivers: async function(autoPick = false) {
         const kw = document.getElementById("driver-search-kw")?.value.trim();
         const box = document.getElementById("driver-search-results");
-        if (!kw || !box) return;
-        logToConsole(`检索驱动: ${kw}...`);
+        const hiddenDriver = document.getElementById("driver-input-val");
+        const ppdBox = document.querySelector("#panel-devices .ppd-upload-box") || document.getElementById("ppd-file-input")?.parentElement;
+
+        if (!kw) return;
+        logToConsole(`正在检索容器内驱动: ${kw}...`);
+
         try {
             const resp = await fetch(`/api/printer_admin?action=drivers&q=${encodeURIComponent(kw)}`);
             const res = await resp.json();
-            box.style.display = "block";
             const drvs = res.data || [];
-            box.innerHTML = drvs.map(d => `
-                <div style="padding:6px 8px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
-                    <b style="color:#0284c7;">${d.id}</b><br>
-                    <span style="color:#64748b; font-size:10px;">${d.name || d.info}</span>
-                </div>
-            `).join('') || '<div style="padding:6px; color:#94a3b8;">未找到匹配驱动，建议直接在下方上传 .ppd 驱动文件</div>';
+
+            if (box) box.style.display = "block";
+
+            if (drvs.length > 0) {
+                // 容器内自带驱动：自动匹配最佳的一项
+                const bestDrv = drvs.find(d => d.id.includes("foo2zjs") || d.id.includes("hplip") || d.id.includes("splix")) || drvs[0];
+
+                if (box) {
+                    box.innerHTML = drvs.map(d => `
+                        <div style="padding:6px 8px; border-bottom:1px solid #f1f5f9; cursor:pointer;" onclick="DashboardService.pickDriver('${d.id}')">
+                            <b style="color:#0284c7;">${d.id}</b><br>
+                            <span style="color:#64748b; font-size:10px;">${d.name || d.info}</span>
+                        </div>
+                    `).join('');
+                }
+
+                if (autoPick && bestDrv) {
+                    this.pickDriver(bestDrv.id);
+                    logToConsole(`✔ 已自动选定容器内置最佳驱动: ${bestDrv.id}`, "success");
+                    if (box) box.style.display = "none";
+                    if (ppdBox) ppdBox.style.border = "1px dashed #cbd5e1";
+                }
+            } else {
+                // 容器内未找到驱动：自动引导进入 PPD 上传
+                if (hiddenDriver) {
+                    hiddenDriver.value = "";
+                    hiddenDriver.placeholder = "未找到内置驱动，请在下方上传 PPD 驱动文件";
+                }
+                if (box) {
+                    box.innerHTML = '<div style="padding:8px; color:#ef4444; font-size:11px;">⚠️ 容器未收录该型号驱动，已自动切换为【上传本地 PPD 驱动安装】</div>';
+                }
+                logToConsole(`⚠️ 容器内未匹配到 [${kw}] 的预置驱动，请直接上传 .ppd 驱动文件`, "warn");
+
+                // 视觉高亮 PPD 上传选区
+                if (ppdBox) {
+                    ppdBox.style.border = "2px dashed #f59e0b";
+                    ppdBox.style.backgroundColor = "#fffbeb";
+                    ppdBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
         } catch (e) {
             logToConsole(`驱动搜索失败: ${e.message}`, "error");
         }
@@ -1053,7 +1113,10 @@ window.DashboardService = {
 
     pickDriver: function(drvId) {
         const hiddenDriver = document.getElementById("driver-input-val");
-        if (hiddenDriver) hiddenDriver.value = drvId;
+        if (hiddenDriver) {
+            hiddenDriver.value = drvId;
+            hiddenDriver.placeholder = drvId;
+        }
         const box = document.getElementById("driver-search-results");
         if (box) box.style.display = "none";
         logToConsole(`✔ 已选定驱动: ${drvId}`, "success");
@@ -1084,7 +1147,11 @@ window.DashboardService = {
             fd.append("ppd_file", ppdFileInput.files[0]);
             logToConsole(`正在使用本地 PPD 驱动 [${ppdFileInput.files[0].name}] 部署设备...`);
         } else {
-            fd.append("driver", driver || "raw");
+            if (!driver) {
+                if (alertBox) alertBox.innerHTML = '<span style="color:#ef4444;">未匹配到内置驱动，请在下方选取 .ppd 驱动文件后再安装</span>';
+                return;
+            }
+            fd.append("driver", driver);
         }
 
         try {
