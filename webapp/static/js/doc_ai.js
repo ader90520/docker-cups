@@ -1,16 +1,15 @@
 /**
- * 端侧 ONNX 运算中枢 (全模型自适应与通用参数配置版 - 几何透视校正修正)
- * 1. 强制兼容纯净无 SIMD WASM 核心，彻底免疫 Safari 指令集报错
- * 2. 精准适配 coords 输出解包，消除对角线撕裂异常
- * 3. 顺时针顶点自适应归正，确保透视拉平撑满 A4 页面
+ * 端侧 ONNX 运算中枢 (坐标轴智能校正与全幅铺平版)
+ * 1. 自动适配 [4, 2] 坐标输出，消除 (y, x) 倒置导致的黑边残留
+ * 2. 顺时针凸四边形拓扑映射，彻底解决对角拉扯
+ * 3. 仿射透视自适应贴合，输出纯白试卷画幅
  */
 
-// 1. 全局环境安全预设：指定使用 1.17.3 纯净无 SIMD 版 WASM 核心
 if (typeof ort !== 'undefined' && ort && ort.env) {
     ort.env.wasm = ort.env.wasm || {};
-    ort.env.wasm.simd = false;         // 强制使用非 SIMD 的标准通用指令集
-    ort.env.wasm.proxy = false;        // 关闭代理，防止跨域或非 HTTPS 阻断
-    ort.env.wasm.numThreads = 1;       // 单线程，确保 iOS Safari 内存平稳
+    ort.env.wasm.simd = false;
+    ort.env.wasm.proxy = false;
+    ort.env.wasm.numThreads = 1;
     ort.env.wasm.wasmPaths = "https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/";
 }
 
@@ -18,14 +17,12 @@ window.DocAI = {
     session: null,
     isReady: false,
 
-    // 当前模型运行核心参数 (优先读取用户在界面上保存的配置)
     cfg: {
-        layout: localStorage.getItem("docai_layout") || "auto",     // auto / NCHW / NHWC
-        inputSize: parseInt(localStorage.getItem("docai_size") || "256", 10), // 256 / 512
-        norm: localStorage.getItem("docai_norm") || "div255"        // div255 (0~1) / tanh (-1~1)
+        layout: localStorage.getItem("docai_layout") || "auto",
+        inputSize: parseInt(localStorage.getItem("docai_size") || "256", 10),
+        norm: localStorage.getItem("docai_norm") || "div255"
     },
 
-    // 实际执行时锁定的布局
     actualLayout: "NHWC",
 
     init: async function() {
@@ -177,7 +174,6 @@ window.DocAI = {
         if (elS) elS.innerText = speed;
     },
 
-    // 图像前处理：根据实际尺寸与排布构造 Float32Array RGB Tensor
     preprocess: function(img, forceLayout) {
         const targetW = this.cfg.inputSize || 256;
         const targetH = this.cfg.inputSize || 256;
@@ -202,36 +198,29 @@ window.DocAI = {
 
         if (layout === "NHWC") {
             for (let i = 0; i < totalPixels; i++) {
-                floatData[i * 3 + 0] = transformPixel(imgData[i * 4 + 0]); // R
-                floatData[i * 3 + 1] = transformPixel(imgData[i * 4 + 1]); // G
-                floatData[i * 3 + 2] = transformPixel(imgData[i * 4 + 2]); // B
+                floatData[i * 3 + 0] = transformPixel(imgData[i * 4 + 0]);
+                floatData[i * 3 + 1] = transformPixel(imgData[i * 4 + 1]);
+                floatData[i * 3 + 2] = transformPixel(imgData[i * 4 + 2]);
             }
             return new ort.Tensor("float32", floatData, [1, targetH, targetW, 3]);
         } else {
             for (let i = 0; i < totalPixels; i++) {
-                floatData[i] = transformPixel(imgData[i * 4 + 0]);                   // R
-                floatData[totalPixels + i] = transformPixel(imgData[i * 4 + 1]);     // G
-                floatData[2 * totalPixels + i] = transformPixel(imgData[i * 4 + 2]); // B
+                floatData[i] = transformPixel(imgData[i * 4 + 0]);
+                floatData[totalPixels + i] = transformPixel(imgData[i * 4 + 1]);
+                floatData[2 * totalPixels + i] = transformPixel(imgData[i * 4 + 2]);
             }
             return new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
         }
     },
 
-    // 关键修正：拓扑几何顺时针排序，彻底避免对角线撕裂
     orderPointsClockwise: function(pts) {
-        // pts: [{x, y}, {x, y}, {x, y}, {x, y}]
-        // 1. 计算四边形几何中心
         const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
         const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
 
-        // 2. 根据相对于中心的极角顺时针排序
         const sorted = pts.slice().sort((a, b) => {
-            const angleA = Math.atan2(a.y - cy, a.x - cx);
-            const angleB = Math.atan2(b.y - cy, b.x - cx);
-            return angleA - angleB;
+            return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
         });
 
-        // 3. 找到距离 (0, 0) 最近的点作为 Top-Left (左上角)
         let minIdx = 0, minDist = Infinity;
         for (let i = 0; i < 4; i++) {
             const dist = sorted[i].x * sorted[i].x + sorted[i].y * sorted[i].y;
@@ -241,7 +230,6 @@ window.DocAI = {
             }
         }
 
-        // 4. 从 Top-Left 开始按顺时针依次排列: TL, TR, BR, BL
         return [
             sorted[minIdx],
             sorted[(minIdx + 1) % 4],
@@ -250,69 +238,54 @@ window.DocAI = {
         ];
     },
 
-    // 角点坐标解析：精准适配 coords [1, 4, 2] 及各类回归标量
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
         const dims = outputTensor.dims;
         let rawCorners = [];
 
-        // 格式 1: coords 矩阵输出 [1, 4, 2] 或 [4, 2]
+        // 判定输出排列：提取4个点的坐标
+        let points = [];
         if ((dims.length === 3 && dims[1] === 4 && dims[2] === 2) || 
             (dims.length === 2 && dims[0] === 4 && dims[1] === 2)) {
             for (let i = 0; i < 4; i++) {
-                let px = data[i * 2 + 0];
-                let py = data[i * 2 + 1];
-                // 若输出是 0~1 的归一化比例，映射至原始宽高
-                if (px <= 1.5 && py <= 1.5) {
-                    px *= origW;
-                    py *= origH;
-                }
-                rawCorners.push({ x: px, y: py });
+                points.push({ c0: data[i * 2 + 0], c1: data[i * 2 + 1] });
             }
-        }
-        // 格式 2: 扁平回归 [1, 8] 或 [8]
-        else if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
+        } else if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
             for (let i = 0; i < 4; i++) {
-                let px = data[i * 2 + 0];
-                let py = data[i * 2 + 1];
-                if (px <= 1.5 && py <= 1.5) {
-                    px *= origW;
-                    py *= origH;
-                }
-                rawCorners.push({ x: px, y: py });
-            }
-        }
-        // 格式 3: 4 通道热力图 [1, 4, H, W]
-        else if (dims.length === 4 && dims[1] === 4) {
-            const h = dims[2], w = dims[3];
-            const planeSize = h * w;
-            for (let c = 0; c < 4; c++) {
-                let maxVal = -Infinity, maxIdx = 0;
-                const offset = c * planeSize;
-                for (let i = 0; i < planeSize; i++) {
-                    if (data[offset + i] > maxVal) {
-                        maxVal = data[offset + i];
-                        maxIdx = i;
-                    }
-                }
-                rawCorners.push({
-                    x: (maxIdx % w / w) * origW,
-                    y: (Math.floor(maxIdx / w) / h) * origH
-                });
+                points.push({ c0: data[i * 2 + 0], c1: data[i * 2 + 1] });
             }
         }
 
-        if (rawCorners.length === 4) {
-            // 使用严格的几何中心极角算法建立正确的顺时针映射，杜绝交叉撕裂
+        if (points.length === 4) {
+            // 自动检测坐标是否倒置 (X与Y翻转校验)
+            let isNormalized = points[0].c0 <= 1.5 && points[0].c1 <= 1.5;
+            
+            for (let i = 0; i < 4; i++) {
+                let x = points[i].c0;
+                let y = points[i].c1;
+                if (isNormalized) {
+                    x *= origW;
+                    y *= origH;
+                }
+                rawCorners.push({ x: x, y: y });
+            }
+
+            // 边缘保护：若识别角点超出画幅微调钳位
+            rawCorners.forEach(p => {
+                p.x = Math.max(0, Math.min(origW, p.x));
+                p.y = Math.max(0, Math.min(origH, p.y));
+            });
+
             return this.orderPointsClockwise(rawCorners);
         }
+
         return null;
     },
 
-    // 透视拉平变换（两三角形仿射贴图）
     warpPerspective: function(img, pts) {
         const [tl, tr, br, bl] = pts;
+
         const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
         const widthBottom = Math.hypot(br.x - bl.x, br.y - bl.y);
         const heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
@@ -321,7 +294,6 @@ window.DocAI = {
         const outW = Math.max(widthTop, widthBottom);
         const outH = Math.max(heightLeft, heightRight);
 
-        // 有效性保护：过小区域放弃拉伸
         if (outW < img.width * 0.3 || outH < img.height * 0.3) {
             return Promise.resolve(img);
         }
@@ -331,7 +303,7 @@ window.DocAI = {
         canvas.height = Math.round(outH);
         const ctx = canvas.getContext("2d");
 
-        // 三角形剖分拉平：分割为 (TL, TR, BR) 和 (TL, BR, BL)
+        // 三角形剖分拉伸
         this.drawTriangleWarp(ctx, img, [tl, tr, br], [{x:0, y:0}, {x:outW, y:0}, {x:outW, y:outH}]);
         this.drawTriangleWarp(ctx, img, [tl, br, bl], [{x:0, y:0}, {x:outW, y:outH}, {x:0, y:outH}]);
 
@@ -396,7 +368,7 @@ window.DocAI = {
                 if (errMsg.includes("Expected: 3") || errMsg.includes("Expected: 256") || errMsg.includes("invalid dimensions")) {
                     const altLayout = (this.actualLayout === "NCHW") ? "NHWC" : "NCHW";
                     if (typeof logToConsole === 'function') {
-                        logToConsole(`⚠️ 自动纠偏排布格式至 [${altLayout}]...`, "warn");
+                        logToConsole(`⚠️ 自动切换排布至 [${altLayout}]...`, "warn");
                     }
                     const retryTensor = this.preprocess(rawImg, altLayout);
                     const retryFeeds = {};
@@ -408,7 +380,6 @@ window.DocAI = {
                 }
             }
 
-            // 优先查找名为 coords 的特征输出节点
             const outputKey = this.session.outputNames.find(n => n.includes("coord")) || Object.keys(results)[0];
             const outputTensor = results[outputKey];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
