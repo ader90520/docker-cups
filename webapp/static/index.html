@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
     <!-- 引入样式表并附带版本戳，防止样式缓存 -->
-    <link rel="stylesheet" href="/static/css/style.css?v=20261018_04">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261018_05">
     
     <!-- 内嵌高亮色彩规则：确保子标签切换选中时与打印参数一致呈现绿色高亮主题 -->
     <style>
@@ -45,8 +45,8 @@
     <!-- 替换为原生自带纯净非 SIMD wasm 核心的 1.17.3 兼容版，彻底破除 iOS Safari 报错 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/ort.min.js"></script>
     <!-- 携带版本号参数，彻底破除 iOS Safari 304 强缓存 -->
-    <script src="/static/js/doc_ai.js?v=20261018_04"></script>
-    <script src="/static/js/app.js?v=20261018_04" defer></script>
+    <script src="/static/js/doc_ai.js?v=20261018_05"></script>
+    <script src="/static/js/app.js?v=20261018_05" defer></script>
 </head>
 <body>
 
@@ -299,7 +299,7 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 (已集成智能驱动检索与自定义 PPD 上传) -->
+    <!-- 3. 设备管理面板 (已集成智能驱动检索、自定义 PPD 上传与 AI 模型参数调优中枢) -->
     <div id="panel-devices" class="tab-panel-container" style="display:none;">
         <div class="pc-double-layout">
             <div class="col-left">
@@ -367,6 +367,7 @@
             </div>
 
             <div class="col-right">
+                <!-- 升级版：端侧 AI 模型中枢 (ONNX) - 增加可视化调优参数与引导 -->
                 <div class="card-box" style="border:1px solid #c7d2fe; background:#f8faff;">
                     <div class="card-title" style="color:#3730a3;">
                         <span>🧠 端侧 AI 模型中枢 (ONNX)</span>
@@ -390,11 +391,45 @@
                             <b id="diag-metric-speed" style="font-size:11px; color:#16a34a;">-</b>
                         </div>
                     </div>
+
+                    <!-- 模型高级适配参数（无需改代码，页面即调即用） -->
+                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:8px; margin-bottom:10px;">
+                        <div style="font-size:11px; font-weight:700; color:#334155; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                            <span>⚙️ 模型结构与适配参数 (免改代码调优)</span>
+                            <span style="font-size:10px; color:#10b981; font-weight:normal;">自动记忆到本地</span>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:6px;">
+                            <div>
+                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">排布格式 (Layout)</label>
+                                <select id="ai-cfg-layout" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
+                                    <option value="auto">自动感知 (推荐)</option>
+                                    <option value="NHWC">NHWC (通道后置/TF)</option>
+                                    <option value="NCHW">NCHW (通道居前/Torch)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">输入尺寸 (Size)</label>
+                                <select id="ai-cfg-size" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
+                                    <option value="256">256 × 256 (轻量)</option>
+                                    <option value="512">512 × 512 (高清)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">色彩归一 (Norm)</label>
+                                <select id="ai-cfg-norm" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
+                                    <option value="div255">0.0 ~ 1.0 (标准)</option>
+                                    <option value="tanh">-1.0 ~ 1.0 (双极)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
                     <div style="display:flex; gap:6px; align-items:center;">
                         <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;">
                         <button type="button" class="btn-submit-green" style="width:auto; margin-top:0; padding:6px 12px; font-size:11px;" onclick="DocAI.inspectAndUploadModel('onnx-model-file-input')">上传部署</button>
                     </div>
                     <div id="model-alert" style="margin-top:6px; font-size:11px;"></div>
+                    <div id="deployed-models-container" style="margin-top:8px;"></div>
                 </div>
 
                 <div class="card-box" style="padding:0; overflow:hidden;">
