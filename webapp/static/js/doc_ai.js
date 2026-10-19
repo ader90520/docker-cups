@@ -1,8 +1,8 @@
 /**
- * 端侧 ONNX 运算中枢 (工业级稳固底层 - 彻底消除对角撕裂空洞版)
- * 1. 采用经典四角极值判别法 (sum & diff)，彻底根除顶点顺序交叉折叠
- * 2. 自动适配 [4, 2] 坐标输出与通道自适应
- * 3. 仿射透视拉平并安全贴合，输出完整平整试卷
+ * 端侧 ONNX 运算中枢 (精准适配 DocCornerNet 官方标准版)
+ * 1. 严格遵循官方 Corner Order: 0:TL -> 1:TR -> 2:BR -> 3:BL
+ * 2. 彻底剔除二次重排，根治对角三角凹坑与撕裂折叠
+ * 3. 仿射透视自适应校正，输出完整平整试卷
  */
 
 if (typeof ort !== 'undefined' && ort && ort.env) {
@@ -61,7 +61,7 @@ window.DocAI = {
 
                 this.updateUIStatus("WASM (纯净兼容)", "持久化挂载", "doc_corner.onnx", `${cost}ms`);
                 if (typeof logToConsole === 'function') {
-                    logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms, 当前生效排布: ${this.actualLayout})`, "success");
+                    logToConsole(`✔ 端侧角点定位引擎装载完成 (耗时: ${cost}ms, 当前排布: ${this.actualLayout})`, "success");
                 }
 
                 const pill = document.getElementById("ai-engine-pill");
@@ -213,99 +213,43 @@ window.DocAI = {
         }
     },
 
-    // 核心重构：OpenCV 标准四角几何排序法（基于和差判别，100% 不交叉、不翻转）
-    orderPointsStandard: function(pts) {
-        // pts 是 4 个点的数组: [{x, y}, ...]
-        // 1. 计算每个点的 (x + y)
-        // 左上角 TL 的 (x + y) 最小；右下角 BR 的 (x + y) 最大
-        let sum = pts.map(p => p.x + p.y);
-        let tlIdx = 0, brIdx = 0;
-        for (let i = 1; i < 4; i++) {
-            if (sum[i] < sum[tlIdx]) tlIdx = i;
-            if (sum[i] > sum[brIdx]) brIdx = i;
-        }
-
-        // 2. 计算每个点的 (y - x)
-        // 右上角 TR 的 (y - x) 最小；左下角 BL 的 (y - x) 最大
-        let diff = pts.map(p => p.y - p.x);
-        let trIdx = 0, blIdx = 0;
-        for (let i = 1; i < 4; i++) {
-            if (diff[i] < diff[trIdx]) trIdx = i;
-            if (diff[i] > diff[blIdx]) blIdx = i;
-        }
-
-        // 严格按照 [TL (左上), TR (右上), BR (右下), BL (左下)] 输出
-        return [pts[tlIdx], pts[trIdx], pts[brIdx], pts[blIdx]];
-    },
-
+    // 严格遵循 DocCornerNet 官方顺序提取四角：[TL, TR, BR, BL]
     extractCorners: function(outputTensor, origW, origH) {
         if (!outputTensor || !outputTensor.data) return null;
         const data = outputTensor.data;
-        const dims = outputTensor.dims;
+        const len = data.length;
+        if (len < 8) return null;
+
         let points = [];
+        for (let i = 0; i < 4; i++) {
+            let x = data[i * 2 + 0];
+            let y = data[i * 2 + 1];
 
-        // 格式 1: coords [1, 4, 2] 或 [4, 2]
-        if ((dims.length === 3 && dims[1] === 4 && dims[2] === 2) || 
-            (dims.length === 2 && dims[0] === 4 && dims[1] === 2)) {
-            for (let i = 0; i < 4; i++) {
-                points.push({ c0: data[i * 2 + 0], c1: data[i * 2 + 1] });
+            // 比例归一化判定 (若是 0~1 的浮点比例则转换为真实像素)
+            if (x <= 1.5 && y <= 1.5) {
+                x *= origW;
+                y *= origH;
+            } else if (x <= 260 && y <= 260 && (origW > 300 || origH > 300)) {
+                // 如果是基于 256 尺度的绝对像素坐标
+                x = (x / 256.0) * origW;
+                y = (y / 256.0) * origH;
             }
-        } 
-        // 格式 2: 扁平回归 [1, 8] 或 [8]
-        else if ((dims.length === 2 && dims[1] === 8) || (dims.length === 1 && dims[0] === 8)) {
-            for (let i = 0; i < 4; i++) {
-                points.push({ c0: data[i * 2 + 0], c1: data[i * 2 + 1] });
-            }
-        }
-        // 格式 3: 4 通道热力图 [1, 4, H, W]
-        else if (dims.length === 4 && dims[1] === 4) {
-            const h = dims[2], w = dims[3];
-            const planeSize = h * w;
-            for (let c = 0; c < 4; c++) {
-                let maxVal = -Infinity, maxIdx = 0;
-                const offset = c * planeSize;
-                for (let i = 0; i < planeSize; i++) {
-                    if (data[offset + i] > maxVal) {
-                        maxVal = data[offset + i];
-                        maxIdx = i;
-                    }
-                }
-                points.push({
-                    c0: (maxIdx % w) / w,
-                    c1: Math.floor(maxIdx / w) / h
-                });
-            }
+
+            // 边界保护
+            x = Math.max(0, Math.min(origW, x));
+            y = Math.max(0, Math.min(origH, y));
+
+            points.push({ x: x, y: y });
         }
 
-        if (points.length === 4) {
-            let isNormalized = points[0].c0 <= 1.5 && points[0].c1 <= 1.5;
-            let rawCorners = [];
-
-            for (let i = 0; i < 4; i++) {
-                let x = points[i].c0;
-                let y = points[i].c1;
-                if (isNormalized) {
-                    x *= origW;
-                    y *= origH;
-                }
-                // 坐标边界钳位
-                x = Math.max(0, Math.min(origW, x));
-                y = Math.max(0, Math.min(origH, y));
-                rawCorners.push({ x: x, y: y });
-            }
-
-            // 使用 OpenCV 标准极值法重排四角，彻底杜绝折叠交叉
-            return this.orderPointsStandard(rawCorners);
-        }
-
-        return null;
+        // 直接遵循官方原生定义的顺序 [TL, TR, BR, BL]，不执行任何可能引发对角错乱的重排
+        return points;
     },
 
     // 透视拉直变换
     warpPerspective: function(img, pts) {
         const [tl, tr, br, bl] = pts;
 
-        // 计算拉平后的目标输出矩形宽高
         const widthTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
         const widthBottom = Math.hypot(br.x - bl.x, br.y - bl.y);
         const heightLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
@@ -314,7 +258,6 @@ window.DocAI = {
         const outW = Math.max(widthTop, widthBottom);
         const outH = Math.max(heightLeft, heightRight);
 
-        // 异常尺寸保护
         if (outW < img.width * 0.25 || outH < img.height * 0.25) {
             return Promise.resolve(img);
         }
@@ -324,7 +267,6 @@ window.DocAI = {
         canvas.height = Math.round(outH);
         const ctx = canvas.getContext("2d");
 
-        // 使用正确的对角剖分绘制：
         // 三角形 1: 左上(TL) -> 右上(TR) -> 右下(BR)
         this.drawTriangleWarp(ctx, img, [tl, tr, br], [
             { x: 0, y: 0 },
@@ -412,6 +354,7 @@ window.DocAI = {
                 }
             }
 
+            // 精准匹配 coords 节点输出
             const outputKey = this.session.outputNames.find(n => n.includes("coord")) || Object.keys(results)[0];
             const outputTensor = results[outputKey];
             const corners = this.extractCorners(outputTensor, rawImg.width, rawImg.height);
@@ -422,7 +365,7 @@ window.DocAI = {
 
             if (corners) {
                 if (typeof logToConsole === 'function') {
-                    logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，执行标准极值几何平直校正 (${cost}ms)`, "success");
+                    logToConsole(`✔ 端侧 AI 锁定文档 4 个顶点，按官方标准几何平直校正 (${cost}ms)`, "success");
                 }
                 return await this.warpPerspective(rawImg, corners);
             }
