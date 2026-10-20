@@ -31,12 +31,10 @@ from handlers.scan_handler import (
 from handlers.enhance_handler import EnhancePreviewHandler
 
 STATIC_PATH = os.path.join(BASE_DIR, "static")
-MODELS_PATH = os.path.join(BASE_DIR, "models")
 SCANS_PATH = "/scans"
 
 os.makedirs(SCANS_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
-os.makedirs(MODELS_PATH, exist_ok=True)
 
 class ScanListHandler(tornado.web.RequestHandler):
     def get(self):
@@ -72,87 +70,6 @@ class ScanDeleteHandler(tornado.web.RequestHandler):
             self.set_status(500)
             self.write(json.dumps({"success": False, "msg": str(e)}))
 
-class ModelManagerHandler(tornado.web.RequestHandler):
-    def set_default_headers(self):
-        self.set_header("Content-Type", "application/json; charset=UTF-8")
-        self.set_header("Access-Control-Allow-Origin", "*")
-        self.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
-
-    def options(self):
-        self.set_status(204)
-        self.finish()
-
-    def get(self):
-        models = []
-        try:
-            if os.path.exists(MODELS_PATH):
-                for fname in sorted(os.listdir(MODELS_PATH)):
-                    if fname.lower().endswith('.onnx'):
-                        fpath = os.path.join(MODELS_PATH, fname)
-                        size_mb = round(os.path.getsize(fpath) / (1024 * 1024), 2)
-                        models.append({
-                            "name": fname,
-                            "size": f"{size_mb} MB"
-                        })
-            self.write(json.dumps({"success": True, "models": models}))
-        except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
-
-    def post(self):
-        try:
-            files = self.request.files.get("model_file", []) or self.request.files.get("model", [])
-            if not files:
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "未接收到模型文件"}))
-                return
-
-            upload_file = files[0]
-            filename = os.path.basename(upload_file["filename"])
-            if not filename.lower().endswith(".onnx"):
-                self.set_status(400)
-                self.write(json.dumps({"success": False, "msg": "仅支持上传 .onnx 格式的模型文件"}))
-                return
-
-            target_path = os.path.join(MODELS_PATH, filename)
-            with open(target_path, "wb") as f:
-                f.write(upload_file["body"])
-
-            default_corner_path = os.path.join(MODELS_PATH, "doc_corner.onnx")
-            if "corner" in filename.lower() or not os.path.exists(default_corner_path):
-                with open(default_corner_path, "wb") as f:
-                    f.write(upload_file["body"])
-
-            self.write(json.dumps({
-                "success": True,
-                "msg": f"模型 {filename} 已成功上传并部署至 /models/{filename}"
-            }))
-        except Exception as e:
-            self.set_status(500)
-            self.write(json.dumps({"success": False, "msg": str(e)}))
-        finally:
-            gc.collect()
-
-    def delete(self):
-        name = self.get_argument("name", "").strip()
-        if not name or "/" in name or "\\" in name or not name.lower().endswith('.onnx'):
-            self.set_status(400)
-            self.write(json.dumps({"success": False, "msg": "非法模型文件名"}))
-            return
-
-        target = os.path.join(MODELS_PATH, name)
-        if os.path.exists(target):
-            try:
-                os.remove(target)
-                self.write(json.dumps({"success": True, "msg": f"模型 {name} 已彻底删除"}))
-            except Exception as e:
-                self.set_status(500)
-                self.write(json.dumps({"success": False, "msg": f"删除失败: {str(e)}"}))
-        else:
-            self.set_status(404)
-            self.write(json.dumps({"success": False, "msg": "模型文件不存在"}))
-
 class SystemAdminRouteAdapter(PrinterAdminHandler):
     def get(self, route_type):
         if route_type == "discover":
@@ -179,7 +96,6 @@ def make_app():
     handlers = [
         (r"/scans/(.*)", StaticFileHandler, {"path": SCANS_PATH}),
         (r"/static/(.*)", StaticFileHandler, {"path": STATIC_PATH}),
-        (r"/models/(.*)", StaticFileHandler, {"path": MODELS_PATH}),
         (r"/(favicon\.ico)", StaticFileHandler, {"path": STATIC_PATH}),
         (r"/()", StaticFileHandler, {"path": STATIC_PATH, "default_filename": "index.html"}),
 
@@ -201,9 +117,6 @@ def make_app():
         (r"/api/mail_config", MailConfigHandler),
         (r"/api/mail/config", MailConfigHandler),
 
-        (r"/api/models", ModelManagerHandler),
-        (r"/api/model/upload", ModelManagerHandler),
-
         (r"/api/scan/devices", ScanProbeHandler),
         (r"/api/scan", ScanHandler),
         (r"/api/scan/download", DownloadScanHandler),
@@ -219,12 +132,11 @@ if __name__ == "__main__":
     app = make_app()
     server = tornado.httpserver.HTTPServer(
         app,
-        max_buffer_size=20971520,  # 严格限制单次上传最大缓冲为 20MB
+        max_buffer_size=20971520,
         idle_connection_timeout=25
     )
     server.listen(8088, address="0.0.0.0")
     print(">>> [Web] CUPS 智能工作台已在 8088 端口启动 (0.0.0.0:8088)", flush=True)
 
-    # 每隔 60 秒触发垃圾回收，阻断 Arena 驻留
     tornado.ioloop.PeriodicCallback(periodic_memory_cleanup, 60000).start()
     tornado.ioloop.IOLoop.current().start()
