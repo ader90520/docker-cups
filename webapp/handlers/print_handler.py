@@ -7,15 +7,9 @@ import time
 import uuid
 import subprocess
 import numpy as np
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps
 from handlers.base_handler import BaseHandler, UPLOAD_DIR
-
-HAVE_OPENCV = False
-try:
-    import cv2
-    HAVE_OPENCV = True
-except Exception:
-    HAVE_OPENCV = False
+from handlers.enhance_handler import enhance_camscanner_precise
 
 ALLOWED_PRINT_EXTS = {'.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.webp', '.heic'}
 
@@ -43,7 +37,7 @@ def fit_to_a4_fast_frame(img, fill_ratio=0.96, media="A4"):
     new_w = max(1, int(orig_w * ratio))
     new_h = max(1, int(orig_h * ratio))
 
-    resized_img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+    resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
     canvas = Image.new("RGB", (target_w, target_h), (255, 255, 255))
     pos_x = (target_w - new_w) // 2
     pos_y = (target_h - new_h) // 2
@@ -80,7 +74,7 @@ def merge_images_n_up(image_paths, media="A4"):
                 ratio = min((cell_w - margin * 2) / img.width, (cell_h - margin * 2) / img.height)
                 target_w = max(10, int(img.width * ratio))
                 target_h = max(10, int(img.height * ratio))
-                resized = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
+                resized = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
                 col = idx % cols
                 row = idx // cols
@@ -92,198 +86,26 @@ def merge_images_n_up(image_paths, media="A4"):
 
     return canvas
 
-def clean_extreme_edges_only(arr, margin_ratio=0.012):
-    h, w = arr.shape[:2]
-    top_h = int(h * margin_ratio)
-    bot_h = int(h * (1.0 - margin_ratio))
-    left_w = int(w * margin_ratio)
-    right_w = int(w * (1.0 - margin_ratio))
-
-    arr[0:top_h, :] = 255.0
-    arr[bot_h:h, :] = 255.0
-    arr[:, 0:left_w] = 255.0
-    arr[:, right_w:w] = 255.0
-    return arr
-
-# 核心降级：轻量 OpenCV 边缘轮廓检测与四点透视拉平
-def auto_perspective_crop_cv(cv_img):
-    try:
-        orig = cv_img.copy()
-        h, w = cv_img.shape[:2]
-        ratio = h / 600.0
-        small_w = int(w / ratio)
-        small = cv2.resize(cv_img, (small_w, 600), interpolation=cv2.INTER_AREA)
-
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 30, 120)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
-
-        cnts, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
-
-        screen_cnt = None
-        for c in cnts:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4 and cv2.contourArea(c) > (small_w * 600 * 0.45):
-                screen_cnt = approx
-                break
-
-        if screen_cnt is not None:
-            pts = screen_cnt.reshape(4, 2) * ratio
-            rect = np.zeros((4, 2), dtype="float32")
-            s = pts.sum(axis=1)
-            rect[0] = pts[np.argmin(s)]
-            rect[2] = pts[np.argmax(s)]
-            diff = np.diff(pts, axis=1)
-            rect[1] = pts[np.argmin(diff)]
-            rect[3] = pts[np.argmax(diff)]
-
-            (tl, tr, br, bl) = rect
-            max_w = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
-            max_h = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
-
-            if max_w > 100 and max_h > 100:
-                dst = np.array([[0, 0], [max_w - 1, 0], [max_w - 1, max_h - 1], [0, max_h - 1]], dtype="float32")
-                M = cv2.getPerspectiveTransform(rect, dst)
-                log_debug(f"✔ 触发 OpenCV 几何拉平透视切边: {max_w}x{max_h}")
-                return cv2.warpPerspective(orig, M, (max_w, max_h), flags=cv2.INTER_LINEAR)
-    except Exception as e:
-        log_debug(f"OpenCV 透视拉平跳过: {e}")
-    return cv_img
-
-def process_image_for_print(input_path, output_path, media="A4", is_color=False):
-    """
-    全能王级白底去黑底滤镜（兼顾极黑字体与彩色饱和还原）
-    """
+def execute_camscanner_engine(input_path, output_path, media="A4", color_mode="monochrome"):
+    """直接接入 enhance_handler 的工业级 OpenCV 扫描全能王管线"""
     try:
         t0 = time.time()
-        with Image.open(input_path) as check_img:
-            if check_img.width < 10 or check_img.height < 10:
-                return False
+        with open(input_path, "rb") as f:
+            raw_bytes = f.read()
 
-        if HAVE_OPENCV:
-            cv_img = cv2.imread(input_path)
-            if cv_img is None:
-                return False
+        # 调用已验证生效的全局扫描王处理模块
+        processed_bytes = enhance_camscanner_precise(raw_bytes, color_mode=color_mode)
+        
+        # 封装进标准页面画幅
+        import io
+        pil_img = Image.open(io.BytesIO(processed_bytes)).convert("RGB")
+        final_canvas = fit_to_a4_fast_frame(pil_img, fill_ratio=0.96, media=media)
+        final_canvas.save(output_path, format="JPEG", quality=95, dpi=(200, 200))
 
-            h, w = cv_img.shape[:2]
-            if w > h:
-                cv_img = cv2.rotate(cv_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-            # 自动执行轻量 OpenCV 切边与矫正
-            cv_img = auto_perspective_crop_cv(cv_img)
-            calc_w = 1654
-            calc_h = int(cv_img.shape[0] * (calc_w / float(cv_img.shape[1])))
-            cv_img = cv2.resize(cv_img, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
-
-            b, g, r = cv2.split(cv_img)
-            b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
-
-            max_channel = np.maximum(np.maximum(r_f, g_f), b_f).astype(np.uint8)
-            small_w, small_h = max(60, calc_w // 6), max(60, calc_h // 6)
-            small_b = cv2.resize(max_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
-
-            kernel_bg = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
-            bg_morph_small = cv2.morphologyEx(small_b, cv2.MORPH_CLOSE, kernel_bg)
-            bg_morph = cv2.resize(bg_morph_small, (calc_w, calc_h), interpolation=cv2.INTER_LINEAR)
-            bg_float = cv2.GaussianBlur(bg_morph, (21, 21), 0).astype(np.float32) + 1.0
-
-            r_div = np.clip((r_f / bg_float) * 255.0, 0, 255)
-            g_div = np.clip((g_f / bg_float) * 255.0, 0, 255)
-            b_div = np.clip((b_f / bg_float) * 255.0, 0, 255)
-
-            gray_div = (0.299 * r_div + 0.587 * g_div + 0.114 * b_div)
-            grad_x = cv2.Sobel(gray_div, cv2.CV_32F, 1, 0, ksize=3)
-            grad_y = cv2.Sobel(gray_div, cv2.CV_32F, 0, 1, ksize=3)
-            grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-
-            red_excess = r_f - np.maximum(g_f, b_f)
-            color_diff = np.abs(r_f - g_f) + np.abs(g_f - b_f) + np.abs(b_f - r_f)
-            is_color_element = (red_excess > 5.0) | (color_diff > 10.0)
-
-            is_text_mask = (~is_color_element) & (((gray_div < 225.0) & (grad_mag > 5.0)) | (gray_div < 185.0))
-
-            out_r = np.full_like(r_div, 255.0)
-            out_g = np.full_like(g_div, 255.0)
-            out_b = np.full_like(b_div, 255.0)
-
-            if is_color:
-                out_r[is_color_element] = np.clip(r_div[is_color_element] * 0.95, 0, 255)
-                out_g[is_color_element] = np.clip(g_div[is_color_element] * 0.90, 0, 255)
-                out_b[is_color_element] = np.clip(b_div[is_color_element] * 0.90, 0, 255)
-
-            dark_ink = np.clip(gray_div[is_text_mask] * 0.28, 5.0, 55.0)
-            out_r[is_text_mask] = dark_ink
-            out_g[is_text_mask] = dark_ink
-            out_b[is_text_mask] = dark_ink
-
-            out_bgr = cv2.merge([out_b, out_g, out_r])
-            out_bgr = clean_extreme_edges_only(out_bgr, margin_ratio=0.012)
-
-            res_uint8 = np.clip(out_bgr, 0, 255).astype(np.uint8)
-            res_rgb = cv2.cvtColor(res_uint8, cv2.COLOR_BGR2RGB)
-            sharp_pil = Image.fromarray(res_rgb)
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
-            final_canvas.save(output_path, format="JPEG", quality=90, dpi=(200, 200))
-
-        else:
-            with Image.open(input_path) as disk_img:
-                img = ImageOps.exif_transpose(disk_img).convert("RGB")
-
-            if img.width > img.height:
-                img = img.rotate(270, expand=True)
-
-            calc_w = 1654
-            calc_h = int(img.height * (calc_w / float(img.width)))
-            work_img = img.resize((calc_w, calc_h), Image.Resampling.BILINEAR)
-
-            r, g, b = work_img.split()
-            r_arr = np.array(r, dtype=np.float32)
-            g_arr = np.array(g, dtype=np.float32)
-            b_arr = np.array(b, dtype=np.float32)
-
-            max_ch = np.maximum(np.maximum(r_arr, g_arr), b_arr).astype(np.uint8)
-            bg = Image.fromarray(max_ch).filter(ImageFilter.BoxBlur(radius=30))
-            bg_arr = np.array(bg, dtype=np.float32) + 1.0
-
-            r_div = np.clip((r_arr / bg_arr) * 255.0, 0, 255)
-            g_div = np.clip((g_arr / bg_arr) * 255.0, 0, 255)
-            b_div = np.clip((b_arr / bg_arr) * 255.0, 0, 255)
-
-            gray_div = 0.299 * r_div + 0.587 * g_div + 0.114 * b_div
-            color_diff = np.abs(r_arr - g_arr) + np.abs(g_arr - b_arr) + np.abs(b_arr - r_arr)
-            is_color_element = color_diff > 10.0
-
-            is_text_mask = (~is_color_element) & (gray_div < 210.0)
-
-            out_r = np.full_like(r_div, 255.0)
-            out_g = np.full_like(g_div, 255.0)
-            out_b = np.full_like(b_div, 255.0)
-
-            if is_color:
-                out_r[is_color_element] = r_div[is_color_element]
-                out_g[is_color_element] = g_div[is_color_element]
-                out_b[is_color_element] = b_div[is_color_element]
-
-            deep_ink = np.clip(gray_div[is_text_mask] * 0.28, 5.0, 55.0)
-            out_r[is_text_mask] = deep_ink
-            out_g[is_text_mask] = deep_ink
-            out_b[is_text_mask] = deep_ink
-
-            rgb_stack = np.stack([out_r, out_g, out_b], axis=-1)
-            rgb_stack = clean_extreme_edges_only(rgb_stack, margin_ratio=0.012)
-            res_uint8 = np.clip(rgb_stack, 0, 255).astype(np.uint8)
-            sharp_pil = Image.fromarray(res_uint8, mode="RGB")
-            final_canvas = fit_to_a4_fast_frame(sharp_pil, fill_ratio=0.96, media=media)
-            final_canvas.save(output_path, format="JPEG", quality=90, dpi=(200, 200))
-
-        log_debug(f"去黑底增强耗时: {time.time() - t0:.2f}s -> {output_path}")
+        log_debug(f"✔ 打印图像经扫描王引擎增强完成: {time.time() - t0:.2f}s -> {output_path}")
         return True
     except Exception as e:
-        log_debug(f"图像增强异常回退: {e}")
+        log_debug(f"扫描王打印增强异常: {e}")
         return False
 
 def clean_old_tmp_files(directory, max_age_seconds=1800):
@@ -364,17 +186,16 @@ class PrintHandler(BaseHandler):
                     other_files.append(src_path)
 
             tasks = []
-            is_color_task = (color_mode == "color")
 
             if image_raw_paths:
                 if multi_merge and len(image_raw_paths) > 1:
                     merged_canvas = merge_images_n_up(image_raw_paths, media=media)
                     merged_path = os.path.join(UPLOAD_DIR, f"merged_{uuid.uuid4().hex[:8]}.jpg")
-                    merged_canvas.save(merged_path, format="JPEG", quality=90, dpi=(200, 200))
+                    merged_canvas.save(merged_path, format="JPEG", quality=95, dpi=(200, 200))
                     
                     if enhance:
                         opt_path = os.path.join(UPLOAD_DIR, f"opt_merged_{uuid.uuid4().hex[:8]}.jpg")
-                        if process_image_for_print(merged_path, opt_path, media=media, is_color=is_color_task):
+                        if execute_camscanner_engine(merged_path, opt_path, media=media, color_mode=color_mode):
                             tasks.append({"path": opt_path, "is_pdf": False})
                         else:
                             tasks.append({"path": merged_path, "is_pdf": False})
@@ -386,7 +207,7 @@ class PrintHandler(BaseHandler):
                         if enhance:
                             token = uuid.uuid4().hex[:8]
                             opt_path = os.path.join(UPLOAD_DIR, f"opt_{token}.jpg")
-                            if process_image_for_print(src_path, opt_path, media=media, is_color=is_color_task):
+                            if execute_camscanner_engine(src_path, opt_path, media=media, color_mode=color_mode):
                                 target_f = opt_path
                         tasks.append({"path": target_f, "is_pdf": False})
 
