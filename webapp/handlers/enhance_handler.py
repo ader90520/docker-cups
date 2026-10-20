@@ -15,68 +15,85 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
-MODELS_PATH = "/opt/webapp/models"
-MODEL_PATH = os.path.join(MODELS_PATH, "doc_corner.onnx")
-net = None
+def smart_clean_page_borders(img):
+    """自适应切除外部桌面木纹、折页暗角与装订中缝黑边"""
+    h, w = img.shape[:2]
+    scale = 450.0 / max(h, w)
+    small = cv2.resize(img, (int(w * scale), int(h * scale)))
 
-def init_onnx_model():
-    global net
-    if not HAVE_OPENCV:
-        net = None
-        return
-    if os.path.exists(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 1024 * 1024:
-        try:
-            loaded = cv2.dnn.readNetFromONNX(MODEL_PATH)
-            loaded.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-            loaded.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-            net = loaded
-        except Exception:
-            net = None
-    else:
-        net = None
+    # 转为灰度并提取纸面主体
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-init_onnx_model()
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        x, y, cw, ch = cv2.boundingRect(c)
+        # 满足纸张主体覆盖面积时，实施安全内切
+        if cw > small.shape[1] * 0.4 and ch > small.shape[0] * 0.4:
+            rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
+            # 安全内切 2.5%，剔除书角黑斑与外露杂色
+            pad_x = int(rcw * 0.025)
+            pad_y = int(rch * 0.025)
+            x1 = max(0, rx + pad_x)
+            y1 = max(0, ry + pad_y)
+            x2 = min(w, rx + rcw - pad_x)
+            y2 = min(h, ry + rch - pad_y)
+            cropped = img[y1:y2, x1:x2]
+            return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+    # 兜底裁切 2%
+    px, py = int(w * 0.02), int(h * 0.02)
+    cropped = img[py:h-py, px:w-px]
+    return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
 def camscanner_core_render(img, is_color=False):
-    """大核形态学光照估计除法归一化"""
+    """自适应光照除法归一化：兼顾全能王纯白底与浅色彩保护"""
     if img is None:
         return None
-    h, w = img.shape[:2]
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (51, 51))
-    bg_l = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, kernel)
-    bg_l = cv2.GaussianBlur(bg_l, (45, 45), 0).astype(np.float32) + 1.0
+    # 1. 优先切除黑边与外围木桌杂边
+    img = smart_clean_page_borders(img)
 
-    norm_l = np.clip((l_channel.astype(np.float32) / bg_l) * 255.0, 0, 255).astype(np.uint8)
-
-    lut_text = np.zeros(256, dtype=np.uint8)
-    for i in range(256):
-        if i >= 185:
-            lut_text[i] = 255
-        elif i <= 130:
-            lut_text[i] = int((i / 130.0) ** 1.35 * 35.0)
-        else:
-            lut_text[i] = int(35.0 + ((i - 130.0) / 55.0) * (255.0 - 35.0))
-    enhanced_l = cv2.LUT(norm_l, lut_text)
+    # 2. 大核高斯滤波估计全局平缓光照底色
+    bg = cv2.GaussianBlur(img, (0, 0), sigmaX=35, sigmaY=35)
+    norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        return cv2.cvtColor(enhanced_l, cv2.COLOR_GRAY2BGR)
+        # ================= 极清黑白模式 (保护红字与细虚线，防止发虚) =================
+        # 取 BGR 各通道最小值，使红色题号在绿色/蓝色通道呈现深色，避免直接被抹白
+        min_gray = np.min(norm, axis=2)
+        _, thresh = cv2.threshold(min_gray, 185, 255, cv2.THRESH_BINARY)
+        # 形态学微闭运算紧致笔画，消除断线发虚
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        return cv2.cvtColor(closed, cv2.COLOR_GRAY2BGR)
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    _, s_c, v_c = cv2.split(hsv)
-    color_mask = (s_c > 38) & (v_c > 45)
-    color_mask = cv2.GaussianBlur(color_mask.astype(np.uint8) * 255, (5, 5), 0) > 100
+    # ================= 扫描全能王级纯正彩色保真 =================
+    # 转换至 HSV 色彩空间进行独立的色彩与照度分离增强
+    hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
 
-    a_new = np.where(color_mask, a_channel, 128)
-    b_new = np.where(color_mask, b_channel, 128)
-    l_final = np.where(color_mask & (enhanced_l < 240), np.clip(l_channel * 1.1, 0, 245).astype(np.uint8), enhanced_l)
+    # 色彩感知掩模：降低饱和度门槛（s > 20），使浅红题号、淡橙虚线与浅彩插图均能被锁定
+    color_mask = (s > 20) & (v > 40)
 
-    lab_merged = cv2.merge([l_final, a_new.astype(np.uint8), b_new.astype(np.uint8)])
-    out_bgr = cv2.cvtColor(lab_merged, cv2.COLOR_LAB2BGR)
-    out_bgr[enhanced_l >= 252] = [255, 255, 255]
-    return out_bgr
+    # 对有色彩区域适度增益饱和度 30%，使红笔批改与图画更鲜明
+    s_boost = np.clip(s * 1.30, 0, 255)
+    hsv[:, :, 1] = np.where(color_mask, s_boost, s)
+
+    # 对黑白文字与灰白纸面区域做白场色阶拉伸，将泛黄杂底直接推平至纯白
+    v_stretched = np.clip((v - 35.0) / (225.0 - 35.0) * 255.0, 0, 255)
+    hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
+
+    result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    # 将极浅的微弱泛黄杂点（灰度 >= 238）直接锁定为纯白 #FFFFFF
+    gray_check = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+    result[gray_check >= 238] = [255, 255, 255]
+    return result
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
     try:
@@ -97,7 +114,7 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
         if result is None:
             result = img
 
-        _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return enc.tobytes()
     except Exception:
         return raw_bytes
@@ -106,6 +123,7 @@ class EnhancePreviewHandler(BaseHandler):
     def post(self):
         try:
             files = self.request.files.get("file", [])
+            # 默认接收并解析请求中的 color_mode，防止前端未指定时误回退至黑白
             color_mode = self.get_argument("color_mode", "monochrome").strip()
             if not files:
                 self.set_status(400)
