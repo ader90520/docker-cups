@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 硬件自适应与驱动闭环优化版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 纯 OpenCV 高清闭环版
  */
 
 function logToConsole(msg, level = "info") {
@@ -32,9 +32,6 @@ function switchNavTab(tabName) {
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
         DashboardService.loadDiscoveredDevices();
-        if (window.DocAI && typeof DocAI.fetchDeployedModels === 'function') {
-            DocAI.fetchDeployedModels();
-        }
     } else if (tabName === "scan") {
         ScanService.loadScanDevices();
         ScanService.loadScanList();
@@ -43,7 +40,7 @@ function switchNavTab(tabName) {
     }
 }
 
-// ==================== 1. 响应式实时渲染引擎 ====================
+// ==================== 1. 后端 OpenCV 直通渲染引擎 ====================
 window.EnhanceEngine = {
     canvas: null,
     ctx: null,
@@ -138,7 +135,16 @@ window.EnhanceEngine = {
             return;
         }
 
-        const img = this.currentRawImage;
+        // 选择当前模式下对应的图像源
+        let img = this.currentRawImage;
+        if (enhance) {
+            if (colorMode === "color" && img._enhancedColor) {
+                img = img._enhancedColor;
+            } else if (colorMode === "monochrome" && img._enhancedMono) {
+                img = img._enhancedMono;
+            }
+        }
+
         const canvas = this.canvas;
         const ctx = this.ctx;
 
@@ -162,86 +168,15 @@ window.EnhanceEngine = {
         const bboxW = isSwapped ? img.height : img.width;
         const bboxH = isSwapped ? img.width : img.height;
 
-        const scale = Math.min((targetW * 0.95) / bboxW, (targetH * 0.95) / bboxH) * this.zoomScale;
+        const scale = Math.min((targetW * 0.96) / bboxW, (targetH * 0.96) / bboxH) * this.zoomScale;
         const drawW = Math.round(img.width * scale);
         const drawH = Math.round(img.height * scale);
 
         ctx.save();
         ctx.translate(targetW / 2, targetH / 2);
         ctx.rotate(rad);
-
-        const offCanvas = document.createElement("canvas");
-        offCanvas.width = drawW;
-        offCanvas.height = drawH;
-        const offCtx = offCanvas.getContext("2d");
-        offCtx.drawImage(img, 0, 0, drawW, drawH);
-
-        const imgData = offCtx.getImageData(0, 0, drawW, drawH);
-        const data = imgData.data;
-        const totalPixels = drawW * drawH;
-
-        let sumBrightness = 0;
-        for (let i = 0; i < data.length; i += 16) {
-            sumBrightness += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-        }
-        const avgBrightness = Math.max(90, (sumBrightness / (totalPixels / 4)));
-
-        for (let i = 0; i < data.length; i += 4) {
-            let r = data[i];
-            let g = data[i + 1];
-            let b = data[i + 2];
-
-            const colorDiff = Math.abs(r - g) + Math.abs(g - b) + Math.abs(b - r);
-            const isColorPixel = (colorDiff > 16 && (r > g || b > g));
-
-            if (enhance) {
-                const localFactor = 255 / Math.max(avgBrightness, Math.max(r, Math.max(g, b)) + 10);
-                r = Math.min(255, r * localFactor);
-                g = Math.min(255, g * localFactor);
-                b = Math.min(255, b * localFactor);
-            }
-
-            if (colorMode === "monochrome") {
-                const normGray = 0.299 * r + 0.587 * g + 0.114 * b;
-                if (normGray < 185) {
-                    const ink = Math.max(10, normGray * 0.32);
-                    data[i] = ink;
-                    data[i + 1] = ink;
-                    data[i + 2] = ink;
-                } else {
-                    data[i] = 255;
-                    data[i + 1] = 255;
-                    data[i + 2] = 255;
-                }
-            } else {
-                if (enhance) {
-                    if (isColorPixel) {
-                        data[i] = Math.min(255, r * 1.1);
-                        data[i + 1] = Math.min(255, g * 1.05);
-                        data[i + 2] = Math.min(255, b * 1.05);
-                    } else {
-                        const localGray = 0.299 * r + 0.587 * g + 0.114 * b;
-                        if (localGray < 185) {
-                            const ink = Math.max(10, localGray * 0.35);
-                            data[i] = ink;
-                            data[i + 1] = ink;
-                            data[i + 2] = ink;
-                        } else {
-                            data[i] = 255;
-                            data[i + 1] = 255;
-                            data[i + 2] = 255;
-                        }
-                    }
-                } else {
-                    data[i] = r;
-                    data[i + 1] = g;
-                    data[i + 2] = b;
-                }
-            }
-        }
-
-        offCtx.putImageData(imgData, 0, 0);
-        ctx.drawImage(offCanvas, -drawW / 2, -drawH / 2);
+        // 直接将清晰位图渲染在画板上，避免前端低质滤镜重擦
+        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
     },
 
@@ -271,7 +206,12 @@ window.EnhanceEngine = {
         imgs.slice(0, cols * rows).forEach((item, idx) => {
             const col = idx % cols;
             const row = Math.floor(idx / cols);
-            const img = item.img;
+            let img = item.img;
+            if (PrintManager.colorMode === "monochrome" && img._enhancedMono) {
+                img = img._enhancedMono;
+            } else if (PrintManager.colorMode === "color" && img._enhancedColor) {
+                img = img._enhancedColor;
+            }
 
             const maxBoxW = cellW - padding * 2;
             const maxBoxH = cellH - padding * 2;
@@ -410,6 +350,22 @@ window.PrintManager = {
         this.loadSelectedFile(this.selectedFiles.length - 1);
     },
 
+    // 核心网络请求：从后端 Tornado OpenCV 获取高清增强位图
+    fetchEnhancedImage: async function(file, mode) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("color_mode", mode);
+        const resp = await fetch("/api/preview/enhance?t=" + Date.now(), { method: "POST", body: fd });
+        if (!resp.ok) throw new Error("处理错误: " + resp.status);
+        const blob = await resp.blob();
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = URL.createObjectURL(blob);
+        });
+    },
+
     loadSelectedFile: function(idx) {
         if (idx < 0 || idx >= this.selectedFiles.length) return;
         this.currentActiveIndex = idx;
@@ -435,17 +391,37 @@ window.PrintManager = {
         } else {
             EnhanceEngine.pdfDoc = null;
             const reader = new FileReader();
-            reader.onload = (e) => {
-                const img = new Image();
-                img.onload = async () => {
-                    const processedImg = await DocAI.processImageAuto(img);
-                    EnhanceEngine.currentRawImage = processedImg;
-                    if (!this.loadedImages.some(item => item.name === file.name)) {
-                        this.loadedImages.push({ name: file.name, img: processedImg });
-                    }
+            reader.onload = async (e) => {
+                const rawImg = new Image();
+                rawImg.onload = async () => {
+                    EnhanceEngine.currentRawImage = rawImg;
                     EnhanceEngine.render();
+
+                    // 异步调用后端原生 OpenCV 处理
+                    try {
+                        const t0 = performance.now();
+                        const [monoImg, colorImg] = await Promise.all([
+                            this.fetchEnhancedImage(file, "monochrome"),
+                            this.fetchEnhancedImage(file, "color")
+                        ]);
+                        rawImg._enhancedMono = monoImg;
+                        rawImg._enhancedColor = colorImg;
+
+                        const speed = Math.round(performance.now() - t0);
+                        const speedTag = document.getElementById("diag-metric-speed");
+                        if (speedTag) speedTag.innerText = `${speed}ms`;
+
+                        logToConsole(`✔ 宿主 OpenCV 处理完成: 纯白底与净边就绪 (${speed}ms)`, "success");
+                        EnhanceEngine.render();
+                    } catch (err) {
+                        logToConsole(`后端图像增强跳过: ${err.message}`, "warn");
+                    }
                 };
-                img.src = e.target.result;
+                rawImg.src = e.target.result;
+
+                if (!this.loadedImages.some(item => item.name === file.name)) {
+                    this.loadedImages.push({ name: file.name, img: rawImg });
+                }
             };
             reader.readAsDataURL(file);
         }
@@ -865,7 +841,7 @@ window.ScanService = {
     }
 };
 
-// ==================== 5. 设备管理与硬件自适应服务 (重点强化) ====================
+// ==================== 5. 设备管理与硬件自适应服务 ====================
 window.DashboardService = {
     loadPrinters: async function(showToast = false) {
         try {
@@ -979,7 +955,6 @@ window.DashboardService = {
         }
     },
 
-    // 重点优化 1：扫描硬件物理端口，直接自动选中物理打印机并触发自动匹配
     loadDiscoveredDevices: async function() {
         logToConsole("正在扫描硬件物理端口与 USB 直通设备...");
         const select = document.getElementById("discovered-device-select");
@@ -1004,7 +979,6 @@ window.DashboardService = {
 
             logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
 
-            // 自动化：如果发现物理硬件设备，直接默认选中第一台，免除手动选择
             let targetDevice = devs.find(d => !d.uri.includes("socket://") && !d.uri.includes("ipp://")) || devs[0];
             if (targetDevice) {
                 select.value = targetDevice.uri;
@@ -1016,7 +990,6 @@ window.DashboardService = {
         }
     },
 
-    // 重点优化 2：根据直连端口智能提炼型号，并自动在容器内检索驱动
     onDiscoveredDeviceSelect: function(selectEl) {
         const val = selectEl.value;
         if (!val) return;
@@ -1038,7 +1011,6 @@ window.DashboardService = {
 
         if (nameInput) nameInput.value = guess;
 
-        // 提取型号中的数字和核心系列（如 M126a, 1020, P1106, 1102 等）
         const match = searchKeyword.match(/\b([A-Za-z]+)?\s*([0-9]{3,4}[A-Za-z]*)\b/) || searchKeyword.match(/([0-9]{3,4})/);
         const kw = match ? match[0] : searchKeyword;
 
@@ -1047,12 +1019,11 @@ window.DashboardService = {
             if (kwInput) {
                 kwInput.value = kw.trim();
                 logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，正在容器内自动检索最佳驱动...`);
-                this.searchDrivers(true); // 传参 true 表示自动选择模式
+                this.searchDrivers(true);
             }
         }
     },
 
-    // 重点优化 3：检索容器内置驱动；若找到则自动填充；若未收录则自动提示并激活 PPD 上传选区
     searchDrivers: async function(autoPick = false) {
         const kw = document.getElementById("driver-search-kw")?.value.trim();
         const box = document.getElementById("driver-search-results");
@@ -1070,7 +1041,6 @@ window.DashboardService = {
             if (box) box.style.display = "block";
 
             if (drvs.length > 0) {
-                // 容器内自带驱动：自动匹配最佳的一项
                 const bestDrv = drvs.find(d => d.id.includes("foo2zjs") || d.id.includes("hplip") || d.id.includes("splix")) || drvs[0];
 
                 if (box) {
@@ -1089,7 +1059,6 @@ window.DashboardService = {
                     if (ppdBox) ppdBox.style.border = "1px dashed #cbd5e1";
                 }
             } else {
-                // 容器内未找到驱动：自动引导进入 PPD 上传
                 if (hiddenDriver) {
                     hiddenDriver.value = "";
                     hiddenDriver.placeholder = "未找到内置驱动，请在下方上传 PPD 驱动文件";
@@ -1099,7 +1068,6 @@ window.DashboardService = {
                 }
                 logToConsole(`⚠️ 容器内未匹配到 [${kw}] 的预置驱动，请直接上传 .ppd 驱动文件`, "warn");
 
-                // 视觉高亮 PPD 上传选区
                 if (ppdBox) {
                     ppdBox.style.border = "2px dashed #f59e0b";
                     ppdBox.style.backgroundColor = "#fffbeb";
