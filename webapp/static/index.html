@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
-    <!-- 引入样式表并附带版本戳，防止样式缓存 -->
-    <link rel="stylesheet" href="/static/css/style.css?v=20261018_05">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261019_01">
     
-    <!-- 内嵌高亮色彩规则：确保子标签切换选中时与打印参数一致呈现绿色高亮主题 -->
     <style>
         .sub-nav-tabs {
             display: flex;
@@ -42,11 +40,7 @@
     </style>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-    <!-- 替换为原生自带纯净非 SIMD wasm 核心的 1.17.3 兼容版，彻底破除 iOS Safari 报错 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.17.3/ort.min.js"></script>
-    <!-- 携带版本号参数，彻底破除 iOS Safari 304 强缓存 -->
-    <script src="/static/js/doc_ai.js?v=20261018_05"></script>
-    <script src="/static/js/app.js?v=20261018_05" defer></script>
+    <script src="/static/js/app.js?v=20261019_01" defer></script>
 </head>
 <body>
 
@@ -71,19 +65,17 @@
                 <button type="button" class="btn-icon-refresh" onclick="DashboardService.loadPrinters(false)" title="刷新状态">🔄</button>
             </div>
             <div class="printer-bar-right-tags">
-                <span id="ai-engine-pill" class="ai-engine-tag">⚡ 端侧 AI 就绪 (WASM 兼容模式)</span>
+                <span id="ai-engine-pill" class="ai-engine-tag" style="background:#e0f2fe; color:#0369a1;">⚡ OpenCV 工业引擎 (白底+净边)</span>
                 <span id="printer-status-tag" class="printer-status-badge badge-idle">打印机状态: 空闲</span>
             </div>
         </div>
 
-        <!-- 带有选中高亮色的子标签切换栏 -->
         <div class="sub-nav-tabs">
             <div class="sub-nav-item active" id="tab-sub-normal" onclick="PrintManager.switchSubTab('normal')">📄 标准文档/试卷</div>
             <div class="sub-nav-item" id="tab-sub-idcard" onclick="PrintManager.switchSubTab('idcard')">🪪 身份证专属打印</div>
         </div>
 
         <div class="pc-double-layout">
-            <!-- 左列：文件与参数配置 -->
             <div class="col-left">
                 <!-- 标准文档上传区 -->
                 <div class="card-box" id="sec-upload-normal">
@@ -299,7 +291,7 @@
         </div>
     </div>
 
-    <!-- 3. 设备管理面板 (已集成智能驱动检索、自定义 PPD 上传与 AI 模型参数调优中枢) -->
+    <!-- 3. 设备管理面板 -->
     <div id="panel-devices" class="tab-panel-container" style="display:none;">
         <div class="pc-double-layout">
             <div class="col-left">
@@ -344,7 +336,6 @@
                         <input type="text" id="driver-input-val" class="form-ctrl" readonly style="background:#f1f5f9;">
                     </div>
 
-                    <!-- 自定义 PPD 驱动上传 -->
                     <div style="margin-top:6px; margin-bottom:10px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:6px; padding:8px 10px;">
                         <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
                             💡 系统未收录此驱动？直接上传本地 PPD 驱动安装:
@@ -367,74 +358,36 @@
             </div>
 
             <div class="col-right">
-                <!-- 升级版：端侧 AI 模型中枢 (ONNX) - 增加可视化调优参数与引导 -->
-                <div class="card-box" style="border:1px solid #c7d2fe; background:#f8faff;">
-                    <div class="card-title" style="color:#3730a3;">
-                        <span>🧠 端侧 AI 模型中枢 (ONNX)</span>
-                        <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="DocAI.clearCacheAndReload()">🧹 清空缓存</button>
+                <!-- 纯净版：硬件图像引擎状态卡片 -->
+                <div class="card-box" style="border:1px solid #bae6fd; background:#f0f9ff;">
+                    <div class="card-title" style="color:#0369a1;">
+                        <span>⚡ 硬件级 OpenCV 图像增强引擎</span>
+                        <button type="button" class="nav-btn" style="padding:2px 8px; font-size:11px;" onclick="localStorage.clear(); sessionStorage.clear(); location.reload(true);">🧹 强制清缓存</button>
                     </div>
-                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; margin-bottom:10px;">
-                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
-                            <div style="font-size:10px; color:#6b7280;">运算后端</div>
-                            <b id="diag-metric-backend" style="font-size:11px;">检测中...</b>
+                    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; margin-bottom:10px;">
+                        <div style="background:#fff; border:1px solid #e0f2fe; padding:8px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#64748b;">驱动内核</div>
+                            <b style="font-size:11px; color:#0284c7;">原生 cv2.so</b>
                         </div>
-                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
-                            <div style="font-size:10px; color:#6b7280;">缓存介质</div>
-                            <b id="diag-metric-cache" style="font-size:11px;">-</b>
+                        <div style="background:#fff; border:1px solid #e0f2fe; padding:8px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#64748b;">透视拉平</div>
+                            <b style="font-size:11px; color:#10b981;">智能轮廓净边</b>
                         </div>
-                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
-                            <div style="font-size:10px; color:#6b7280;">当前模型</div>
-                            <b id="diag-metric-model" style="font-size:11px;">-</b>
-                        </div>
-                        <div style="background:#fff; border:1px solid #e0e7ff; padding:6px; border-radius:4px; text-align:center;">
-                            <div style="font-size:10px; color:#6b7280;">单次推理</div>
-                            <b id="diag-metric-speed" style="font-size:11px; color:#16a34a;">-</b>
+                        <div style="background:#fff; border:1px solid #e0f2fe; padding:8px; border-radius:4px; text-align:center;">
+                            <div style="font-size:10px; color:#64748b;">单张耗时</div>
+                            <b id="diag-metric-speed" style="font-size:11px; color:#16a34a;">~150ms</b>
                         </div>
                     </div>
-
-                    <!-- 模型高级适配参数（无需改代码，页面即调即用） -->
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:8px; margin-bottom:10px;">
-                        <div style="font-size:11px; font-weight:700; color:#334155; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
-                            <span>⚙️ 模型结构与适配参数 (免改代码调优)</span>
-                            <span style="font-size:10px; color:#10b981; font-weight:normal;">自动记忆到本地</span>
-                        </div>
-                        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:6px;">
-                            <div>
-                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">排布格式 (Layout)</label>
-                                <select id="ai-cfg-layout" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
-                                    <option value="auto">自动感知 (推荐)</option>
-                                    <option value="NHWC">NHWC (通道后置/TF)</option>
-                                    <option value="NCHW">NCHW (通道居前/Torch)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">输入尺寸 (Size)</label>
-                                <select id="ai-cfg-size" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
-                                    <option value="256">256 × 256 (轻量)</option>
-                                    <option value="512">512 × 512 (高清)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="font-size:10px; color:#64748b; display:block; margin-bottom:2px;">色彩归一 (Norm)</label>
-                                <select id="ai-cfg-norm" class="form-ctrl" style="font-size:11px; padding:3px;" onchange="DocAI.applyCustomConfig()">
-                                    <option value="div255">0.0 ~ 1.0 (标准)</option>
-                                    <option value="tanh">-1.0 ~ 1.0 (双极)</option>
-                                </select>
-                            </div>
-                        </div>
+                    <div style="font-size:11px; color:#475569; line-height:1.6; background:#fff; padding:8px; border-radius:4px; border:1px solid #e0f2fe;">
+                        ✔ <b>纯白底</b>：大核高斯照度除法，消除泛黄与光照阴影<br>
+                        ✔ <b>文字防发虚</b>：形态学闭运算加粗，保留浅红题号与细虚线<br>
+                        ✔ <b>无黑边撕裂</b>：自适应白纸主体裁切，绝无三角黑块
                     </div>
-
-                    <div style="display:flex; gap:6px; align-items:center;">
-                        <input type="file" id="onnx-model-file-input" accept=".onnx" class="form-ctrl" style="flex:1; font-size:11px;">
-                        <button type="button" class="btn-submit-green" style="width:auto; margin-top:0; padding:6px 12px; font-size:11px;" onclick="DocAI.inspectAndUploadModel('onnx-model-file-input')">上传部署</button>
-                    </div>
-                    <div id="model-alert" style="margin-top:6px; font-size:11px;"></div>
-                    <div id="deployed-models-container" style="margin-top:8px;"></div>
                 </div>
 
                 <div class="card-box" style="padding:0; overflow:hidden;">
                     <div style="background:#0f172a; padding:6px 10px; display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-size:12px; font-weight:700; color:#38bdf8;">📟 引擎诊断日志</span>
+                        <span style="font-size:12px; font-weight:700; color:#38bdf8;">📟 系统诊断日志</span>
                         <button type="button" style="background:none; border:none; color:#94a3b8; font-size:11px; cursor:pointer;" onclick="document.getElementById('ai-diag-console').innerHTML=''">清屏</button>
                     </div>
                     <div id="ai-diag-console"></div>
@@ -443,7 +396,7 @@
         </div>
     </div>
 
-    <!-- 4. 云邮箱设置面板（通栏平展） -->
+    <!-- 4. 云邮箱设置面板 -->
     <div id="panel-mail" class="tab-panel-container" style="display:none;">
         <div class="card-box">
             <div class="card-title">
