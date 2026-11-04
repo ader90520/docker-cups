@@ -132,7 +132,9 @@ SystemGroup root lpadmin
 FileDevice Yes
 EOF
 
-# ================= 7. 生成强制中文 + 极低内存开销的 cupsd.conf =================
+# ================= 7. 生成强制中文 + 极速通信 + 极低内存开销的 cupsd.conf =================
+# 【核心增强】：显式注入 HostNameLookups Off 彻底关闭反向解析，消除 15-30 秒延迟
+# 【存储保护】：开启 PreserveJobHistory Off 与 PreserveJobFiles Off，零堆积防爆闪存
 cat << 'EOF' > /etc/cups/cupsd.conf
 LogLevel warn
 PageLogFormat
@@ -143,7 +145,12 @@ RIPCache 4m
 MaxCopies 99
 Timeout 45
 KeepAlive Yes
-KeepAliveTimeout 15
+KeepAliveTimeout 30
+
+HostNameLookups Off
+PreserveJobHistory Off
+PreserveJobFiles Off
+MaxJobs 50
 
 Port 631
 Listen /run/cups/cups.sock
