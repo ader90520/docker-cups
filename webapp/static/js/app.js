@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式出纸、自动消费与无循环刷屏版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式、防并发过载、任务自动消费版
  */
 
 function logToConsole(msg, level = "info") {
@@ -31,7 +31,6 @@ function switchNavTab(tabName) {
 
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
-        // 彻底杜绝切换到此面板时自动静默探测端口，防止无端死循环
     } else if (tabName === "scan") {
         ScanService.loadScanDevices();
         ScanService.loadScanList();
@@ -258,7 +257,7 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互管理器 (流式即打即消版) ====================
+// ==================== 2. 打印交互管理器 (流式出纸与防并发拥堵版) ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
@@ -267,6 +266,7 @@ window.PrintManager = {
     currentActiveIndex: 0,
     currentSubTab: "normal",
     isPrinting: false,
+    _enhancingToken: 0,
 
     init: function() {
         const dropZone = document.getElementById("drag-drop-zone-normal");
@@ -311,6 +311,7 @@ window.PrintManager = {
         document.getElementById("btn-color-mono")?.classList.toggle("active", mode === "monochrome");
         document.getElementById("btn-color-rgb")?.classList.toggle("active", mode === "color");
         logToConsole(`颜色模式切换: ${mode === "monochrome" ? "黑白" : "彩色"}`);
+        this.triggerCurrentEnhance();
         EnhanceEngine.render();
     },
 
@@ -323,7 +324,10 @@ window.PrintManager = {
     },
 
     onPaperSizeChange: function() { EnhanceEngine.render(); },
-    onEnhanceChange: function() { EnhanceEngine.render(); },
+    onEnhanceChange: function() {
+        this.triggerCurrentEnhance();
+        EnhanceEngine.render();
+    },
     onMergeChange: function() {
         logToConsole(`多图同页拼版: ${this.isMultiMergeEnabled() ? "开启" : "关闭"}`);
         EnhanceEngine.render();
@@ -340,6 +344,7 @@ window.PrintManager = {
         });
 
         this.updateFileListUI();
+        // 关键：选完多张后，只装载最新的一张，杜绝多图同时并发打死 CPU！
         this.loadSelectedFile(this.selectedFiles.length - 1);
     },
 
@@ -358,6 +363,41 @@ window.PrintManager = {
         });
     },
 
+    // 核心优化：只对当前视窗内正在呈现的单张图片请求增强，且当前是什么模式就只算什么模式！
+    triggerCurrentEnhance: async function() {
+        const isEnhanceOn = (document.getElementById("p-enhance")?.value === "true");
+        if (!isEnhanceOn || !EnhanceEngine.currentRawImage) return;
+
+        const rawImg = EnhanceEngine.currentRawImage;
+        const file = this.selectedFiles[this.currentActiveIndex];
+        if (!file || file.name.toLowerCase().endsWith(".pdf")) return;
+
+        const currentMode = this.colorMode;
+        // 如果当前模式已经有缓存了，直接用，不重复发起网络请求
+        if (currentMode === "color" && rawImg._enhancedColor) return;
+        if (currentMode === "monochrome" && rawImg._enhancedMono) return;
+
+        const thisToken = ++this._enhancingToken;
+        try {
+            const t0 = performance.now();
+            const enhImg = await this.fetchEnhancedImage(file, currentMode);
+            if (thisToken !== this._enhancingToken) return; // 已切换到其他图，丢弃过期计算
+
+            if (currentMode === "color") {
+                rawImg._enhancedColor = enhImg;
+            } else {
+                rawImg._enhancedMono = enhImg;
+            }
+            const speed = Math.round(performance.now() - t0);
+            const speedTag = document.getElementById("diag-metric-speed");
+            if (speedTag) speedTag.innerText = `${speed}ms`;
+            logToConsole(`✔ 宿主 OpenCV 处理完成: 纯白底与净边就绪 (${speed}ms)`, "success");
+            EnhanceEngine.render();
+        } catch (err) {
+            logToConsole(`增强跳过: ${err.message}`, "warn");
+        }
+    },
+
     loadSelectedFile: function(idx) {
         if (idx < 0 || idx >= this.selectedFiles.length) return;
         this.currentActiveIndex = idx;
@@ -368,6 +408,7 @@ window.PrintManager = {
         logToConsole(`装载预览: ${file.name}`);
 
         if (ext === "pdf") {
+            EnhanceEngine.currentRawImage = null;
             const reader = new FileReader();
             reader.onload = function(e) {
                 const typedarray = new Uint8Array(e.target.result);
@@ -375,7 +416,6 @@ window.PrintManager = {
                     EnhanceEngine.pdfDoc = pdf;
                     EnhanceEngine.currentPage = 1;
                     EnhanceEngine.totalPages = pdf.numPages;
-                    EnhanceEngine.currentRawImage = null;
                     EnhanceEngine.renderPdfPage();
                 });
             };
@@ -383,37 +423,20 @@ window.PrintManager = {
         } else {
             EnhanceEngine.pdfDoc = null;
             const reader = new FileReader();
-            reader.onload = async (e) => {
+            reader.onload = (e) => {
                 const rawImg = new Image();
-                rawImg.onload = async () => {
+                rawImg.onload = () => {
                     EnhanceEngine.currentRawImage = rawImg;
                     EnhanceEngine.render();
-
-                    // 仅当明确开启去黑底增强时，才异步拉取预览，彻底消除冗余耗时
-                    const isEnhanceOn = (document.getElementById("p-enhance")?.value === "true");
-                    if (isEnhanceOn) {
-                        try {
-                            const t0 = performance.now();
-                            const [monoImg, colorImg] = await Promise.all([
-                                this.fetchEnhancedImage(file, "monochrome"),
-                                this.fetchEnhancedImage(file, "color")
-                            ]);
-                            rawImg._enhancedMono = monoImg;
-                            rawImg._enhancedColor = colorImg;
-                            const speed = Math.round(performance.now() - t0);
-                            const speedTag = document.getElementById("diag-metric-speed");
-                            if (speedTag) speedTag.innerText = `${speed}ms`;
-                            logToConsole(`✔ 白底净边就绪 (${speed}ms)`, "success");
-                            EnhanceEngine.render();
-                        } catch (err) {
-                            logToConsole(`增强跳过: ${err.message}`, "warn");
-                        }
-                    }
+                    this.triggerCurrentEnhance();
                 };
                 rawImg.src = e.target.result;
 
-                if (!this.loadedImages.some(item => item.name === file.name)) {
+                let existing = this.loadedImages.find(item => item.name === file.name);
+                if (!existing) {
                     this.loadedImages.push({ name: file.name, img: rawImg });
+                } else {
+                    existing.img = rawImg;
                 }
             };
             reader.readAsDataURL(file);
@@ -443,8 +466,10 @@ window.PrintManager = {
         if (idx < 0 || idx >= this.selectedFiles.length) return;
         const removed = this.selectedFiles.splice(idx, 1)[0];
         this.loadedImages = this.loadedImages.filter(item => item.name !== removed.name);
+        this.updateFileListUI();
+
         if (this.selectedFiles.length > 0) {
-            const nextIdx = Math.min(this.selectedFiles.length - 1, idx);
+            const nextIdx = Math.max(0, Math.min(this.selectedFiles.length - 1, idx));
             this.loadSelectedFile(nextIdx);
         } else {
             this.clearFiles();
@@ -465,7 +490,7 @@ window.PrintManager = {
         if (tip) tip.style.display = "block";
     },
 
-    // 流式出纸队列 + 实时进度反馈 + 自动消费消除
+    // 核心重构：流式逐张派发出纸，打一张消一张，按钮实时反馈进度类似 [1/4]
     submitJob: async function() {
         if (this.isPrinting) return;
 
@@ -486,7 +511,6 @@ window.PrintManager = {
         const isMultiMerge = this.isMultiMergeEnabled();
         const rotation = EnhanceEngine.rotationDeg;
 
-        // 1. 身份证专属模式
         if (this.currentSubTab === "idcard") {
             const blob = await IdCardManager.getMergedBlob();
             if (!blob) {
@@ -518,7 +542,6 @@ window.PrintManager = {
             return;
         }
 
-        // 2. 标准多文件流式逐张派发出纸
         if (this.selectedFiles.length === 0) {
             alertBox.innerHTML = '<span style="color:#ef4444;">请选取待打印文档或图片</span>';
             return;
@@ -528,7 +551,7 @@ window.PrintManager = {
         btn.disabled = true;
         alertBox.innerHTML = "";
 
-        // 模式 A: 多图拼版合为单张输出
+        // 模式 A: 多图同页拼版
         if (isMultiMerge && this.selectedFiles.length > 1) {
             const total = this.selectedFiles.length;
             btn.innerText = `⏳ 正在拼版单页 (${total}张)...`;
@@ -565,7 +588,7 @@ window.PrintManager = {
             return;
         }
 
-        // 模式 B: 独立多图流式出纸 (打一张消一张，按钮实时反馈进度类似 5/8)
+        // 模式 B: 独立多图流式出纸 (打印成功一张，立即从任务列表删除一张！)
         const total = this.selectedFiles.length;
         let successCount = 0;
         let errorCount = 0;
@@ -595,7 +618,8 @@ window.PrintManager = {
                 if (res.success) {
                     successCount++;
                     logToConsole(`✔ 第 ${currentDisplayIndex} 张出纸成功: ${currentFile.name}`, "success");
-                    this.removeFile(0); // 打印成功，立即消费消除！
+                    // 核心关键：成功打印一张，立即从待打印列表删除消除一张！
+                    this.removeFile(0);
                 } else {
                     errorCount++;
                     logToConsole(`❌ 第 ${currentDisplayIndex} 张出纸失败: ${res.msg}`, "error");
@@ -607,7 +631,7 @@ window.PrintManager = {
                 this.removeFile(0);
             }
 
-            await new Promise(r => setTimeout(r, 150));
+            await new Promise(r => setTimeout(r, 200));
         }
 
         this.isPrinting = false;
@@ -615,7 +639,7 @@ window.PrintManager = {
         btn.innerText = "🖨️ 提交打印";
 
         if (errorCount === 0) {
-            alertBox.innerHTML = `<span style="color:#10b981;">✔ 全部 ${successCount} 份文件已下发完毕！列表已自动重置</span>`;
+            alertBox.innerHTML = `<span style="color:#10b981;">✔ 全部 ${successCount} 份文件已打印下发，任务列表已自动清空！</span>`;
             logToConsole(`✔ 批量打印圆满完成！共 ${successCount} 张`, "success");
             this.clearFiles();
         } else {
@@ -1054,10 +1078,9 @@ window.DashboardService = {
         }
     },
 
-    // 核心优化：只在用户主动点击时才进行硬件扫描，禁止后台自动触发
+    // 核心保护：严格限制为必须用户手动点击才执行扫描
     loadDiscoveredDevices: async function(isManual = false) {
-        // 非手动触发时彻底阻断，不让任何定时器或界面切换悄悄调用它
-        if (!isManual) return;
+        if (isManual !== true) return;
 
         logToConsole("正在扫描硬件物理端口与 USB 直通设备...");
         const select = document.getElementById("discovered-device-select");
@@ -1082,20 +1105,20 @@ window.DashboardService = {
 
             logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
 
-            // 仅在未选择端口时辅助选定，严禁级联执行驱动大搜索
             let targetDevice = devs.find(d => !d.uri.includes("socket://") && !d.uri.includes("ipp://")) || devs[0];
             if (targetDevice && !select.value) {
                 select.value = targetDevice.uri;
                 logToConsole(`✔ 已选定物理打印机端口: ${targetDevice.name || targetDevice.info}`);
-                this.onDiscoveredDeviceSelect(select, false); // 传 false 彻底阻断自动检索驱动
+                this.onDiscoveredDeviceSelect(select);
             }
         } catch (e) {
             logToConsole(`扫描端口失败: ${e.message}`, "error");
         }
     },
 
-    // 严禁自动 searchDrivers 导致 CPU 100% 刷屏
-    onDiscoveredDeviceSelect: function(selectEl, autoSearch = false) {
+    // 彻底切断任何调用 searchDrivers 的代码，彻底根治死循环刷屏！
+    onDiscoveredDeviceSelect: function(selectEl) {
+        if (!selectEl) return;
         const val = selectEl.value;
         if (!val) return;
         const nameInput = document.getElementById("add-printer-name");
@@ -1123,23 +1146,22 @@ window.DashboardService = {
             const kwInput = document.getElementById("driver-search-kw");
             if (kwInput) {
                 kwInput.value = kw.trim();
-                // 核心修复：永远不自动触发 searchDrivers！只把型号填进输入框
-                // 只有用户手动点击旁边的【搜】按钮，才允许去搜驱动，彻底杜绝死循环！
-                if (autoSearch) {
-                    logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，检索最佳驱动...`);
-                    this.searchDrivers(true);
-                }
+                // 仅填入输入框，绝不自动调用 searchDrivers！
             }
         }
     },
 
+    _isSearchingDriver: false,
     searchDrivers: async function(autoPick = false) {
+        if (this._isSearchingDriver) return;
+
         const kw = document.getElementById("driver-search-kw")?.value.trim();
         const box = document.getElementById("driver-search-results");
         const hiddenDriver = document.getElementById("driver-input-val");
         const ppdBox = document.querySelector("#panel-devices .ppd-upload-box") || document.getElementById("ppd-file-input")?.parentElement;
 
         if (!kw) return;
+        this._isSearchingDriver = true;
         logToConsole(`正在检索容器内驱动: ${kw}...`);
 
         try {
@@ -1185,6 +1207,8 @@ window.DashboardService = {
             }
         } catch (e) {
             logToConsole(`驱动搜索失败: ${e.message}`, "error");
+        } finally {
+            this._isSearchingDriver = false;
         }
     },
 
