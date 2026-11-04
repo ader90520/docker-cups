@@ -15,16 +15,11 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
-def apply_usm_sharpen(img, amount=1.35, radius=1):
-    """
-    USM (Unsharp Masking) 动态高反差锐化：
-    专门针对试卷打印的文字边缘强化，防止小字号、题号、括号笔画发虚发飘
-    """
+def apply_usm_sharpen(img, amount=1.2, radius=1):
+    """USM 动态高反差锐化：强化文字笔画边缘反差"""
     if img is None:
         return img
-    # 采用高斯模糊提取低频轮廓
     blurred = cv2.GaussianBlur(img, (0, 0), radius)
-    # 高反差融合加权，锐化文字骨架与边缘
     sharpened = cv2.addWeighted(img, 1.0 + amount, blurred, -amount, 0)
     return sharpened
 
@@ -62,8 +57,8 @@ def smart_clean_page_borders_fast(img):
 
 def camscanner_core_render(img, is_color=False):
     """
-    双尺度极速除法归一化：
-    在 320px 尺度上计算全局光照底色，耗时从 35000ms 降至 400ms，同时强化输出锐度
+    极清饱满除法归一化：
+    彻底摒弃丢边缘的粗暴硬二值化，采用与彩色一致的非线性色阶拉伸与抗锯齿保护
     """
     if img is None:
         return None
@@ -72,55 +67,46 @@ def camscanner_core_render(img, is_color=False):
     img = smart_clean_page_borders_fast(img)
     h, w = img.shape[:2]
 
-    # 2. 双尺度光照估计：在超轻量图上做平缓高斯模糊，瞬间完成
+    # 2. 双尺度全局光照底色分离 (微缩图 320px 算底，速度 < 400ms)
     tiny_scale = 320.0 / max(h, w)
     tiny_img = cv2.resize(img, (int(w * tiny_scale), int(h * tiny_scale)), interpolation=cv2.INTER_NEAREST)
     bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
     bg = cv2.resize(bg_tiny, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    # 3. 照度除法归一化，彻底消除泛黄与不均匀阴影
+    # 3. 照度除法归一化，彻底消除泛黄与光照阴影
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        # ================= 极清黑白模式 (文字饱满、红字保留、防虚化) =================
-        # 取 BGR 各通道最小值：使红色批改、浅蓝题号在通道中均呈现深色，防止被直接抹除
-        min_gray = np.min(norm, axis=2)
+        # ================= 极清饱满黑白模式 (保留抗锯齿灰阶，字骨黑亮粗壮) =================
+        # 取三通道最小值：确保红笔批改、淡蓝题号深色沉淀，绝不被抹白
+        min_gray = np.min(norm, axis=2).astype(np.float32)
 
-        # 自适应局部对比度保护：白底更白、黑字更黑
-        # 195 阈值彻底抹除灰底，保留虚线和题号
-        _, thresh = cv2.threshold(min_gray, 195, 255, cv2.THRESH_BINARY)
+        # 非线性色阶拉伸：黑场下压至 40，白场截断在 200
+        # 既将底色杂色全部推向纯白 255，又将浅灰文字深沉压黑，且完整保留边缘半透明抗锯齿像素
+        v_stretched = np.clip((min_gray - 40.0) / (200.0 - 40.0) * 255.0, 0, 255).astype(np.uint8)
 
-        # 闭运算紧致笔画，修复因手机翻拍抖动造成的微小断线
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        # 残留浅底噪点直接锁定为纯白
+        v_stretched[v_stretched >= 235] = 255
 
-        # 叠加 USM 锐化层，强化文字边缘反差
-        sharpened_mono = apply_usm_sharpen(closed, amount=0.8, radius=1)
+        # 叠加 USM 动态锐化层，强化文字微边缘反差，达到与彩色模式相同的饱满清晰度
+        sharpened_mono = apply_usm_sharpen(v_stretched, amount=1.2, radius=1)
         return cv2.cvtColor(sharpened_mono, cv2.COLOR_GRAY2BGR)
 
-    # ================= 纯正彩色模式 (保留红笔批注与插画色彩) =================
+    # ================= 纯正彩色模式 =================
     hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
 
-    # 色彩感知掩模：降低饱和度门槛，使浅红题号、淡橙虚线与浅彩插图均能被锁定
     color_mask = (s > 18) & (v > 38)
-
-    # 彩色区域饱和度增益 30%，红笔批改鲜亮醒目
     s_boost = np.clip(s * 1.30, 0, 255)
     hsv[:, :, 1] = np.where(color_mask, s_boost, s)
-
-    # 黑白底色区域做色阶拉伸，把微灰底直接推向纯白
     v_stretched = np.clip((v - 30.0) / (220.0 - 30.0) * 255.0, 0, 255)
     hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
 
     result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-
-    # 残留浅灰底（灰度 >= 235）直接锁定为纯白 #FFFFFF
     gray_check = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
     result[gray_check >= 235] = [255, 255, 255]
 
-    # 彩色图像整体做一次轻微边缘保真锐化
     return apply_usm_sharpen(result, amount=1.1, radius=1)
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
@@ -133,7 +119,6 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             return raw_bytes
 
         h, w = img.shape[:2]
-        # 降采样保护：最大边限制在 1280px，既兼顾屏幕清晰度，又绝不拖慢 ARM 算力
         if max(h, w) > 1280:
             scale = 1280.0 / max(h, w)
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -143,7 +128,6 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
         if result is None:
             result = img
 
-        # 采用高保真 JPEG 质量输出，保留边缘细节
         _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         return enc.tobytes()
     except Exception:
