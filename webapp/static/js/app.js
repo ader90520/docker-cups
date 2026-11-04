@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 纯 OpenCV 高清闭环版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式出纸与自动消费版
  */
 
 function logToConsole(msg, level = "info") {
@@ -135,7 +135,6 @@ window.EnhanceEngine = {
             return;
         }
 
-        // 选择当前模式下对应的图像源
         let img = this.currentRawImage;
         if (enhance) {
             if (colorMode === "color" && img._enhancedColor) {
@@ -175,7 +174,6 @@ window.EnhanceEngine = {
         ctx.save();
         ctx.translate(targetW / 2, targetH / 2);
         ctx.rotate(rad);
-        // 直接将清晰位图渲染在画板上，避免前端低质滤镜重擦
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
     },
@@ -260,7 +258,7 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互管理器 ====================
+// ==================== 2. 打印交互管理器 (流式即打即消版) ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
@@ -268,6 +266,7 @@ window.PrintManager = {
     loadedImages: [],
     currentActiveIndex: 0,
     currentSubTab: "normal",
+    isPrinting: false,
 
     init: function() {
         const dropZone = document.getElementById("drag-drop-zone-normal");
@@ -323,14 +322,8 @@ window.PrintManager = {
         EnhanceEngine.render();
     },
 
-    onPaperSizeChange: function() {
-        EnhanceEngine.render();
-    },
-
-    onEnhanceChange: function() {
-        EnhanceEngine.render();
-    },
-
+    onPaperSizeChange: function() { EnhanceEngine.render(); },
+    onEnhanceChange: function() { EnhanceEngine.render(); },
     onMergeChange: function() {
         logToConsole(`多图同页拼版: ${this.isMultiMergeEnabled() ? "开启" : "关闭"}`);
         EnhanceEngine.render();
@@ -350,7 +343,6 @@ window.PrintManager = {
         this.loadSelectedFile(this.selectedFiles.length - 1);
     },
 
-    // 核心网络请求：从后端 Tornado OpenCV 获取高清增强位图
     fetchEnhancedImage: async function(file, mode) {
         const fd = new FormData();
         fd.append("file", file);
@@ -397,24 +389,25 @@ window.PrintManager = {
                     EnhanceEngine.currentRawImage = rawImg;
                     EnhanceEngine.render();
 
-                    // 异步调用后端原生 OpenCV 处理
-                    try {
-                        const t0 = performance.now();
-                        const [monoImg, colorImg] = await Promise.all([
-                            this.fetchEnhancedImage(file, "monochrome"),
-                            this.fetchEnhancedImage(file, "color")
-                        ]);
-                        rawImg._enhancedMono = monoImg;
-                        rawImg._enhancedColor = colorImg;
-
-                        const speed = Math.round(performance.now() - t0);
-                        const speedTag = document.getElementById("diag-metric-speed");
-                        if (speedTag) speedTag.innerText = `${speed}ms`;
-
-                        logToConsole(`✔ 宿主 OpenCV 处理完成: 纯白底与净边就绪 (${speed}ms)`, "success");
-                        EnhanceEngine.render();
-                    } catch (err) {
-                        logToConsole(`后端图像增强跳过: ${err.message}`, "warn");
+                    // 仅当开启了去黑底增强时，才异步拉取预览，否则绝不拖慢界面！
+                    const isEnhanceOn = (document.getElementById("p-enhance")?.value === "true");
+                    if (isEnhanceOn) {
+                        try {
+                            const t0 = performance.now();
+                            const [monoImg, colorImg] = await Promise.all([
+                                this.fetchEnhancedImage(file, "monochrome"),
+                                this.fetchEnhancedImage(file, "color")
+                            ]);
+                            rawImg._enhancedMono = monoImg;
+                            rawImg._enhancedColor = colorImg;
+                            const speed = Math.round(performance.now() - t0);
+                            const speedTag = document.getElementById("diag-metric-speed");
+                            if (speedTag) speedTag.innerText = `${speed}ms`;
+                            logToConsole(`✔ 白底净边就绪 (${speed}ms)`, "success");
+                            EnhanceEngine.render();
+                        } catch (err) {
+                            logToConsole(`增强跳过: ${err.message}`, "warn");
+                        }
                     }
                 };
                 rawImg.src = e.target.result;
@@ -447,6 +440,7 @@ window.PrintManager = {
     },
 
     removeFile: function(idx) {
+        if (idx < 0 || idx >= this.selectedFiles.length) return;
         const removed = this.selectedFiles.splice(idx, 1)[0];
         this.loadedImages = this.loadedImages.filter(item => item.name !== removed.name);
         if (this.selectedFiles.length > 0) {
@@ -464,11 +458,17 @@ window.PrintManager = {
         EnhanceEngine.currentRawImage = null;
         EnhanceEngine.pdfDoc = null;
         const ctx = EnhanceEngine.ctx;
-        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
-        document.getElementById("viewport-empty-tip").style.display = "block";
+        if (ctx && EnhanceEngine.canvas) {
+            ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+        }
+        const tip = document.getElementById("viewport-empty-tip");
+        if (tip) tip.style.display = "block";
     },
 
+    // 核心重构：流式出纸队列 + 实时进度反馈 + 自动消费消除
     submitJob: async function() {
+        if (this.isPrinting) return;
+
         const printer = document.getElementById("printer-select")?.value;
         const alertBox = document.getElementById("print-alert");
         const btn = document.getElementById("btn-submit");
@@ -478,53 +478,151 @@ window.PrintManager = {
             return;
         }
 
-        const fd = new FormData();
-        fd.append("printer", printer);
-        fd.append("copies", document.getElementById("p-copies")?.value || "1");
-        fd.append("duplex", document.getElementById("p-duplex")?.value || "none");
-        fd.append("color_mode", this.colorMode);
-        fd.append("media", document.getElementById("p-media")?.value || "A4");
-        fd.append("enhance", document.getElementById("p-enhance")?.value || "true");
-        fd.append("page_ranges", document.getElementById("p-page-ranges")?.value || "");
-        fd.append("multi_merge", this.isMultiMergeEnabled() ? "true" : "false");
-        fd.append("rotation", EnhanceEngine.rotationDeg);
+        const copies = document.getElementById("p-copies")?.value || "1";
+        const duplex = document.getElementById("p-duplex")?.value || "none";
+        const media = document.getElementById("p-media")?.value || "A4";
+        const enhance = document.getElementById("p-enhance")?.value || "false";
+        const pageRanges = document.getElementById("p-page-ranges")?.value || "";
+        const isMultiMerge = this.isMultiMergeEnabled();
+        const rotation = EnhanceEngine.rotationDeg;
 
-        if (this.currentSubTab === "normal") {
-            if (this.selectedFiles.length === 0) {
-                alertBox.innerHTML = '<span style="color:#ef4444;">请选取待打印文档或图片</span>';
-                return;
-            }
-            this.selectedFiles.forEach(f => fd.append("file", f));
-        } else {
+        // 1. 身份证专属模式出纸
+        if (this.currentSubTab === "idcard") {
             const blob = await IdCardManager.getMergedBlob();
             if (!blob) {
-                alertBox.innerHTML = '<span style="color:#ef4444;">身份证正反面尚未准备齐全</span>';
+                alertBox.innerHTML = '<span style="color:#ef4444;">身份证照片尚未排版完整</span>';
                 return;
             }
+            const fd = new FormData();
+            fd.append("printer", printer);
+            fd.append("copies", copies);
             fd.append("file", blob, "idcard_merged.jpg");
+            btn.disabled = true;
+            btn.innerText = "⏳ 正在出纸中...";
+            try {
+                const resp = await fetch("/api/print", { method: "POST", body: fd });
+                const res = await resp.json();
+                if (res.success) {
+                    alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
+                    logToConsole(`✔ 身份证下发成功: ${res.job || ''}`, "success");
+                    IdCardManager.clearAll();
+                } else {
+                    alertBox.innerHTML = `<span style="color:#ef4444;">❌ 失败: ${res.msg}</span>`;
+                }
+            } catch (err) {
+                alertBox.innerHTML = `<span style="color:#ef4444;">网络异常: ${err.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "🖨️ 提交打印";
+            }
+            return;
         }
 
-        btn.disabled = true;
-        btn.innerText = "⏳ 正在传输打印作业...";
-        alertBox.innerHTML = "";
-        logToConsole("正在下发打印作业到 CUPS 管道...");
+        // 2. 标准多文件流式逐张派发出纸
+        if (this.selectedFiles.length === 0) {
+            alertBox.innerHTML = '<span style="color:#ef4444;">请选取待打印文档或图片</span>';
+            return;
+        }
 
-        try {
-            const resp = await fetch("/api/print", { method: "POST", body: fd });
-            const res = await resp.json();
-            if (res.success) {
-                alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
-                logToConsole(`✔ 作业派发成功: ${res.job || res.msg}`, "success");
-            } else {
-                alertBox.innerHTML = `<span style="color:#ef4444;">❌ 失败: ${res.msg}</span>`;
-                logToConsole(`❌ CUPS 拒绝: ${res.msg}`, "error");
+        this.isPrinting = true;
+        btn.disabled = true;
+        alertBox.innerHTML = "";
+
+        // 情况 A: 开启了多图拼版（必须合为单张）
+        if (isMultiMerge && this.selectedFiles.length > 1) {
+            const total = this.selectedFiles.length;
+            btn.innerText = `⏳ 正在拼版单页 (${total}张)...`;
+            logToConsole(`正在拼版 ${total} 张图片至单张 A4...`);
+            const fd = new FormData();
+            fd.append("printer", printer);
+            fd.append("copies", copies);
+            fd.append("duplex", duplex);
+            fd.append("color_mode", this.colorMode);
+            fd.append("media", media);
+            fd.append("enhance", enhance);
+            fd.append("page_ranges", pageRanges);
+            fd.append("multi_merge", "true");
+            fd.append("rotation", rotation);
+            this.selectedFiles.forEach(f => fd.append("file", f));
+
+            try {
+                const resp = await fetch("/api/print", { method: "POST", body: fd });
+                const res = await resp.json();
+                if (res.success) {
+                    alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
+                    logToConsole(`✔ 拼版打印成功派发`, "success");
+                    this.clearFiles(); // 打印完成自动清空
+                } else {
+                    alertBox.innerHTML = `<span style="color:#ef4444;">❌ 失败: ${res.msg}</span>`;
+                }
+            } catch (err) {
+                alertBox.innerHTML = `<span style="color:#ef4444;">网络异常: ${err.message}</span>`;
+            } finally {
+                this.isPrinting = false;
+                btn.disabled = false;
+                btn.innerText = "🖨️ 提交打印";
             }
-        } catch (e) {
-            alertBox.innerHTML = `<span style="color:#ef4444;">网络异常: ${e.message}</span>`;
-            logToConsole(`通讯异常: ${e.message}`, "error");
-        } finally {
-            btn.disabled = false;
-            btn.innerText = "🖨️ 提交打印";
+            return;
+        }
+
+        // 情况 B: 独立多图流式出纸 (打印一张消除一张，按钮实时显示进度)
+        const total = this.selectedFiles.length;
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (let i = 0; i < total; i++) {
+            const currentFile = this.selectedFiles[0];
+            const currentDisplayIndex = i + 1;
+
+            // 核心：实时显示打印第几张 (类似 5/8)
+            btn.innerText = `⏳ 正在打印 [${currentDisplayIndex}/${total}]...`;
+            logToConsole(`正在派发出纸 (${currentDisplayIndex}/${total}): ${currentFile.name}...`);
+
+            const fd = new FormData();
+            fd.append("printer", printer);
+            fd.append("copies", copies);
+            fd.append("duplex", duplex);
+            fd.append("color_mode", this.colorMode);
+            fd.append("media", media);
+            fd.append("enhance", enhance);
+            fd.append("page_ranges", pageRanges);
+            fd.append("multi_merge", "false");
+            fd.append("rotation", rotation);
+            fd.append("file", currentFile);
+
+            try {
+                const resp = await fetch("/api/print", { method: "POST", body: fd });
+                const res = await resp.json();
+                if (res.success) {
+                    successCount++;
+                    logToConsole(`✔ 第 ${currentDisplayIndex} 张出纸成功: ${currentFile.name}`, "success");
+                    // 打印成功一张，立刻从待打印列表与预览数组中消除！
+                    this.removeFile(0);
+                } else {
+                    errorCount++;
+                    logToConsole(`❌ 第 ${currentDisplayIndex} 张出纸失败: ${res.msg}`, "error");
+                    this.removeFile(0);
+                }
+            } catch (e) {
+                errorCount++;
+                logToConsole(`❌ 传输异常: ${e.message}`, "error");
+                this.removeFile(0);
+            }
+
+            // 间隔 150ms 缓冲，防止高频并发占死底层 socket
+            await new Promise(r => setTimeout(r, 150));
+        }
+
+        this.isPrinting = false;
+        btn.disabled = false;
+        btn.innerText = "🖨️ 提交打印";
+
+        if (errorCount === 0) {
+            alertBox.innerHTML = `<span style="color:#10b981;">✔ 全部 ${successCount} 份文件已下发完毕！列表已自动重置</span>`;
+            logToConsole(`✔ 批量打印圆满完成！共 ${successCount} 张`, "success");
+            this.clearFiles();
+        } else {
+            alertBox.innerHTML = `<span style="color:#eab308;">⚠️ 打印完成: 成功 ${successCount} 张，失败 ${errorCount} 张</span>`;
         }
     }
 };
@@ -601,8 +699,11 @@ window.IdCardManager = {
             if (prev) prev.style.display = "none";
         });
         const ctx = EnhanceEngine.ctx;
-        if (ctx) ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
-        document.getElementById("viewport-empty-tip").style.display = "block";
+        if (ctx && EnhanceEngine.canvas) {
+            ctx.clearRect(0, 0, EnhanceEngine.canvas.width, EnhanceEngine.canvas.height);
+        }
+        const tip = document.getElementById("viewport-empty-tip");
+        if (tip) tip.style.display = "block";
     },
 
     bindBoxEvents: function(idx) {
@@ -643,7 +744,8 @@ window.IdCardManager = {
         const ctx = EnhanceEngine.ctx;
         if (!canvas || !ctx) return;
 
-        document.getElementById("viewport-empty-tip").style.display = "none";
+        const tip = document.getElementById("viewport-empty-tip");
+        if (tip) tip.style.display = "none";
 
         canvas.width = 1654;
         canvas.height = 2338;
@@ -696,7 +798,7 @@ window.IdCardManager = {
 
     getMergedBlob: function() {
         return new Promise(resolve => {
-            EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.95);
+            EnhanceEngine.canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.92);
         });
     }
 };
