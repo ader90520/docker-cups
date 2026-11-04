@@ -1055,7 +1055,10 @@ window.DashboardService = {
     },
 
     // 核心优化：只在用户主动点击时才进行硬件扫描，禁止后台自动触发
-    loadDiscoveredDevices: async function(isManual = true) {
+    loadDiscoveredDevices: async function(isManual = false) {
+        // 非手动触发时彻底阻断，不让任何定时器或界面切换悄悄调用它
+        if (!isManual) return;
+
         logToConsole("正在扫描硬件物理端口与 USB 直通设备...");
         const select = document.getElementById("discovered-device-select");
         if (!select) return;
@@ -1079,7 +1082,7 @@ window.DashboardService = {
 
             logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
 
-            // 仅在首次未选择端口时辅助选定，严禁级联执行驱动大搜索
+            // 仅在未选择端口时辅助选定，严禁级联执行驱动大搜索
             let targetDevice = devs.find(d => !d.uri.includes("socket://") && !d.uri.includes("ipp://")) || devs[0];
             if (targetDevice && !select.value) {
                 select.value = targetDevice.uri;
@@ -1120,7 +1123,8 @@ window.DashboardService = {
             const kwInput = document.getElementById("driver-search-kw");
             if (kwInput) {
                 kwInput.value = kw.trim();
-                // 只有明确为 true 时才搜索，默认绝对不调 searchDrivers
+                // 核心修复：永远不自动触发 searchDrivers！只把型号填进输入框
+                // 只有用户手动点击旁边的【搜】按钮，才允许去搜驱动，彻底杜绝死循环！
                 if (autoSearch) {
                     logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，检索最佳驱动...`);
                     this.searchDrivers(true);
