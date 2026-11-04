@@ -20,8 +20,8 @@ except Exception:
 
 def process_image_fast_enhance(in_path, out_path, color_mode="monochrome"):
     """
-    算力受限 ARM32 专属极速增强：
-    限制计算分辨率至 1600px 以内，处理速度提升 30 倍，从 35秒 缩短到 0.8秒！
+    高保真出纸增强算法：
+    既保证运算速度控制在 1 秒以内，又保证输出给物理打印机的文字饱满厚重、笔划不发虚
     """
     if not HAVE_OPENCV:
         return False
@@ -34,47 +34,56 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome"):
         h, w = img.shape[:2]
         max_dim = max(h, w)
         scale = 1.0
-        # 降采样保护：大于 1600px 必须按比例缩小运算，防止 ARM CPU 锁死 30 秒
-        if max_dim > 1600:
-            scale = 1600.0 / max_dim
+        # 打印分辨率保护：出纸保留 1800px 级精度，兼顾 ARM 性能与 A4 纸文字清晰度
+        if max_dim > 1800:
+            scale = 1800.0 / max_dim
             calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
         else:
             calc_img = img
 
-        # 切边与平缓光照底色消除 (小图计算光照图，耗时从 20s 降至 0.2s)
-        bg = cv2.GaussianBlur(calc_img, (0, 0), sigmaX=25, sigmaY=25)
+        ch, cw = calc_img.shape[:2]
+
+        # 1. 微缩提取光照底色 (320px 尺度)，极速运算
+        tiny_scale = 320.0 / max(ch, cw)
+        tiny_img = cv2.resize(calc_img, (int(cw * tiny_scale), int(ch * tiny_scale)), interpolation=cv2.INTER_NEAREST)
+        bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
+        bg = cv2.resize(bg_tiny, (cw, ch), interpolation=cv2.INTER_LINEAR)
+
+        # 2. 照度除法归一
         norm = cv2.divide(calc_img, bg, scale=255)
 
         is_color = (str(color_mode).strip().lower() == "color")
 
         if not is_color:
-            # 极清黑白：最小通道提取防虚化
-            min_gray = np.min(norm, axis=2)
-            _, thresh = cv2.threshold(min_gray, 190, 255, cv2.THRESH_BINARY)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-            closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-            result = closed
+            # 灰阶抗锯齿白底拉伸（不丢边缘）
+            min_gray = np.min(norm, axis=2).astype(np.float32)
+            v_stretched = np.clip((min_gray - 40.0) / (200.0 - 40.0) * 255.0, 0, 255).astype(np.uint8)
+            v_stretched[v_stretched >= 235] = 255
+
+            # USM 锐化文字骨架
+            blurred = cv2.GaussianBlur(v_stretched, (0, 0), 1)
+            result = cv2.addWeighted(v_stretched, 2.2, blurred, -1.2, 0)
         else:
-            # 纯正彩色
             hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
-            h_c, s_c, v_c = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-            color_mask = (s_c > 20) & (v_c > 40)
+            s_c = hsv[:, :, 1]
+            v_c = hsv[:, :, 2]
+            color_mask = (s_c > 18) & (v_c > 38)
             s_c = np.where(color_mask, np.clip(s_c * 1.3, 0, 255), s_c)
-            v_c = np.where(color_mask, v_c, np.clip((v_c - 35.0) / (225.0 - 35.0) * 255.0, 0, 255))
+            v_c = np.where(color_mask, v_c, np.clip((v_c - 30.0) / (220.0 - 30.0) * 255.0, 0, 255))
             hsv[:, :, 1] = s_c
             hsv[:, :, 2] = v_c
             result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
             gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-            result[gray_chk >= 238] = [255, 255, 255]
+            result[gray_chk >= 235] = [255, 255, 255]
 
-        # 尺寸恢复至原图打印分辨率
+        # 还原回高解析原图尺寸输出
         if scale != 1.0:
             result = cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
 
-        cv2.imwrite(out_path, result, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        cv2.imwrite(out_path, result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return True
     except Exception as e:
-        print(f"[FastEnhance] 增强失败，跳过: {e}", flush=True)
+        print(f"[FastEnhance] 出纸增强异常: {e}", flush=True)
         return False
 
 def clean_old_tmp_files(upload_dir, max_age=60):
@@ -103,7 +112,6 @@ class PrintHandler(BaseHandler):
             multi_merge = self.get_argument("multi_merge", "false").strip().lower() == "true"
             rotation = int(self.get_argument("rotation", "0").strip() or 0)
 
-            # 核心开关：只有明确为 true 时才开启增强，否则彻底跳过 OpenCV 运算！
             need_enhance = (enhance_val in ["true", "1", "yes", "on"])
 
             if not printer:
@@ -171,7 +179,7 @@ class PrintHandler(BaseHandler):
                         pos_y = r * cellH + (cellH - im.height) // 2
                         canvas.paste(im, (pos_x, pos_y))
 
-                    canvas.save(merged_path, format="JPEG", quality=92, dpi=(300, 300))
+                    canvas.save(merged_path, format="JPEG", quality=95, dpi=(300, 300))
                     ok, jid = self.execute_lp(printer, copies, merged_path, extra_opts=extra_opts, timeout=20, auto_unlink=True)
                     if ok:
                         self.write_json(True, f"多图拼版已下发打印！", job=jid)
@@ -179,7 +187,7 @@ class PrintHandler(BaseHandler):
                         self.write_json(False, f"CUPS拒绝: {jid}")
                     return
 
-            # 模式 B: 独立多图流式出纸
+            # 模式 B: 独立多图流式出纸 (PDF直接放行，图片根据开关极速增强)
             for f_item in files:
                 fname = f_item["filename"]
                 ext = os.path.splitext(fname)[-1].lower()
@@ -191,7 +199,6 @@ class PrintHandler(BaseHandler):
 
                 target_to_print = tmp_src
 
-                # 只有明确开启且为图片时才调用 OpenCV，彻底杜绝无端拖慢
                 if need_enhance and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
                     tmp_enhanced = os.path.join(UPLOAD_DIR, f"task_{token}_enh_{fname}.jpg")
                     saved_files.append(tmp_enhanced)
