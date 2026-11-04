@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261019_01">
+    <!-- 更新版本号强制刷新客户端与移动端缓存 -->
+    <link rel="stylesheet" href="/static/css/style.css?v=20261105_01">
     
     <style>
         .sub-nav-tabs {
@@ -40,7 +41,8 @@
     </style>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-    <script src="/static/js/app.js?v=20261019_01" defer></script>
+    <!-- 更新版本号，强制 iPhone Safari 重新下载新逻辑，废除旧版打包提交缓存 -->
+    <script src="/static/js/app.js?v=20261105_01" defer></script>
 </head>
 <body>
 
@@ -308,7 +310,8 @@
                 <div class="card-box">
                     <div class="card-title">
                         <span>➕ 检索硬件与添加打印机</span>
-                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.loadDiscoveredDevices()">🔍 扫描端口</button>
+                        <!-- 显式传参 true，只有手动点击才执行扫描，彻底掐死自动/静默调用 -->
+                        <button type="button" class="nav-btn" style="border:1px solid #cbd5e1; padding:2px 8px; font-size:11px;" onclick="DashboardService.loadDiscoveredDevices(true)">🔍 扫描端口</button>
                     </div>
                     <div class="form-item" style="margin-bottom:8px;">
                         <label>选择物理直连端口 / 设备 URI</label>
@@ -358,7 +361,7 @@
             </div>
 
             <div class="col-right">
-                <!-- 纯净版：硬件图像引擎状态卡片 -->
+                <!-- 硬件图像引擎状态卡片 -->
                 <div class="card-box" style="border:1px solid #bae6fd; background:#f0f9ff;">
                     <div class="card-title" style="color:#0369a1;">
                         <span>⚡ 硬件级 OpenCV 图像增强引擎</span>
@@ -431,7 +434,8 @@
                         <label>邮箱账号</label>
                         <input type="text" id="mail-user" name="user" class="form-ctrl" placeholder="example@qq.com">
                     </div>
-                    <div class="param-item">
+                    <!-- 修复此处原本误写的 class="param-item" 为 class="form-item" -->
+                    <div class="form-item">
                         <label>授权码 / 专用密码</label>
                         <input type="password" id="mail-pwd" name="password" class="form-ctrl" placeholder="16位授权码">
                     </div>
