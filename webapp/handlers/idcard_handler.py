@@ -7,8 +7,7 @@ import re
 import uuid
 import subprocess
 from PIL import Image
-from handlers.base_handler import BaseHandler, UPLOAD_DIR
-from handlers.print_handler import clean_old_tmp_files
+from handlers.base_handler import BaseHandler, UPLOAD_DIR, get_cups_env
 
 def crop_to_idcard_ratio(img):
     w, h = img.size
@@ -25,6 +24,7 @@ def crop_to_idcard_ratio(img):
 
 class IDCardHandler(BaseHandler):
     def post(self):
+        merged_path = None
         try:
             printer = self.get_argument("printer", "").strip()
             copies = self.get_argument("copies", "1").strip()
@@ -72,12 +72,9 @@ class IDCardHandler(BaseHandler):
                     canvas.paste(rb, (1340, pos_y))
 
             merged_path = os.path.join(UPLOAD_DIR, f"idcard_{token}.jpg")
-            canvas.save(merged_path, format="JPEG", quality=95, dpi=(300, 300))
+            canvas.save(merged_path, format="JPEG", quality=90, dpi=(300, 300))
 
-            env = os.environ.copy()
-            env["CUPS_SERVER"] = "/run/cups/cups.sock"
-            env["LANG"] = "C"
-
+            env = get_cups_env()
             cmd = [
                 "lp",
                 "-d", printer,
@@ -90,8 +87,7 @@ class IDCardHandler(BaseHandler):
                 "-o", "print-color-mode=monochrome",
                 merged_path
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            clean_old_tmp_files(UPLOAD_DIR)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=15)
 
             if res.returncode == 0:
                 self.write_json(True, f"已将 {total_persons} 人身份证拼版下发打印！", job=res.stdout.strip())
@@ -99,3 +95,10 @@ class IDCardHandler(BaseHandler):
                 self.write_json(False, f"CUPS 拒绝: {res.stderr.strip()}")
         except Exception as e:
             self.write_json(False, f"拼版异常: {str(e)}")
+        finally:
+            if merged_path and os.path.exists(merged_path):
+                try:
+                    os.remove(merged_path)
+                except Exception:
+                    pass
+            self.clean_old_files()
