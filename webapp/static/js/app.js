@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式出纸与自动消费版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式出纸、自动消费与无循环刷屏版
  */
 
 function logToConsole(msg, level = "info") {
@@ -31,7 +31,7 @@ function switchNavTab(tabName) {
 
     if (tabName === "devices") {
         DashboardService.loadPrinters(false);
-        DashboardService.loadDiscoveredDevices();
+        // 彻底杜绝切换到此面板时自动静默探测端口，防止无端死循环
     } else if (tabName === "scan") {
         ScanService.loadScanDevices();
         ScanService.loadScanList();
@@ -389,7 +389,7 @@ window.PrintManager = {
                     EnhanceEngine.currentRawImage = rawImg;
                     EnhanceEngine.render();
 
-                    // 仅当开启了去黑底增强时，才异步拉取预览，否则绝不拖慢界面！
+                    // 仅当明确开启去黑底增强时，才异步拉取预览，彻底消除冗余耗时
                     const isEnhanceOn = (document.getElementById("p-enhance")?.value === "true");
                     if (isEnhanceOn) {
                         try {
@@ -465,7 +465,7 @@ window.PrintManager = {
         if (tip) tip.style.display = "block";
     },
 
-    // 核心重构：流式出纸队列 + 实时进度反馈 + 自动消费消除
+    // 流式出纸队列 + 实时进度反馈 + 自动消费消除
     submitJob: async function() {
         if (this.isPrinting) return;
 
@@ -486,7 +486,7 @@ window.PrintManager = {
         const isMultiMerge = this.isMultiMergeEnabled();
         const rotation = EnhanceEngine.rotationDeg;
 
-        // 1. 身份证专属模式出纸
+        // 1. 身份证专属模式
         if (this.currentSubTab === "idcard") {
             const blob = await IdCardManager.getMergedBlob();
             if (!blob) {
@@ -528,7 +528,7 @@ window.PrintManager = {
         btn.disabled = true;
         alertBox.innerHTML = "";
 
-        // 情况 A: 开启了多图拼版（必须合为单张）
+        // 模式 A: 多图拼版合为单张输出
         if (isMultiMerge && this.selectedFiles.length > 1) {
             const total = this.selectedFiles.length;
             btn.innerText = `⏳ 正在拼版单页 (${total}张)...`;
@@ -551,7 +551,7 @@ window.PrintManager = {
                 if (res.success) {
                     alertBox.innerHTML = `<span style="color:#10b981;">✔ ${res.msg}</span>`;
                     logToConsole(`✔ 拼版打印成功派发`, "success");
-                    this.clearFiles(); // 打印完成自动清空
+                    this.clearFiles();
                 } else {
                     alertBox.innerHTML = `<span style="color:#ef4444;">❌ 失败: ${res.msg}</span>`;
                 }
@@ -565,7 +565,7 @@ window.PrintManager = {
             return;
         }
 
-        // 情况 B: 独立多图流式出纸 (打印一张消除一张，按钮实时显示进度)
+        // 模式 B: 独立多图流式出纸 (打一张消一张，按钮实时反馈进度类似 5/8)
         const total = this.selectedFiles.length;
         let successCount = 0;
         let errorCount = 0;
@@ -574,7 +574,6 @@ window.PrintManager = {
             const currentFile = this.selectedFiles[0];
             const currentDisplayIndex = i + 1;
 
-            // 核心：实时显示打印第几张 (类似 5/8)
             btn.innerText = `⏳ 正在打印 [${currentDisplayIndex}/${total}]...`;
             logToConsole(`正在派发出纸 (${currentDisplayIndex}/${total}): ${currentFile.name}...`);
 
@@ -596,8 +595,7 @@ window.PrintManager = {
                 if (res.success) {
                     successCount++;
                     logToConsole(`✔ 第 ${currentDisplayIndex} 张出纸成功: ${currentFile.name}`, "success");
-                    // 打印成功一张，立刻从待打印列表与预览数组中消除！
-                    this.removeFile(0);
+                    this.removeFile(0); // 打印成功，立即消费消除！
                 } else {
                     errorCount++;
                     logToConsole(`❌ 第 ${currentDisplayIndex} 张出纸失败: ${res.msg}`, "error");
@@ -609,7 +607,6 @@ window.PrintManager = {
                 this.removeFile(0);
             }
 
-            // 间隔 150ms 缓冲，防止高频并发占死底层 socket
             await new Promise(r => setTimeout(r, 150));
         }
 
@@ -1057,7 +1054,8 @@ window.DashboardService = {
         }
     },
 
-    loadDiscoveredDevices: async function() {
+    // 核心优化：只在用户主动点击时才进行硬件扫描，禁止后台自动触发
+    loadDiscoveredDevices: async function(isManual = true) {
         logToConsole("正在扫描硬件物理端口与 USB 直通设备...");
         const select = document.getElementById("discovered-device-select");
         if (!select) return;
@@ -1081,18 +1079,20 @@ window.DashboardService = {
 
             logToConsole(`发现 ${devs.length} 个物理硬件端口`, "success");
 
+            // 仅在首次未选择端口时辅助选定，严禁级联执行驱动大搜索
             let targetDevice = devs.find(d => !d.uri.includes("socket://") && !d.uri.includes("ipp://")) || devs[0];
-            if (targetDevice) {
+            if (targetDevice && !select.value) {
                 select.value = targetDevice.uri;
-                logToConsole(`✔ 已自动选定物理打印机: ${targetDevice.name || targetDevice.info}`, "success");
-                this.onDiscoveredDeviceSelect(select);
+                logToConsole(`✔ 已选定物理打印机端口: ${targetDevice.name || targetDevice.info}`);
+                this.onDiscoveredDeviceSelect(select, false); // 传 false 彻底阻断自动检索驱动
             }
         } catch (e) {
             logToConsole(`扫描端口失败: ${e.message}`, "error");
         }
     },
 
-    onDiscoveredDeviceSelect: function(selectEl) {
+    // 严禁自动 searchDrivers 导致 CPU 100% 刷屏
+    onDiscoveredDeviceSelect: function(selectEl, autoSearch = false) {
         const val = selectEl.value;
         if (!val) return;
         const nameInput = document.getElementById("add-printer-name");
@@ -1120,8 +1120,11 @@ window.DashboardService = {
             const kwInput = document.getElementById("driver-search-kw");
             if (kwInput) {
                 kwInput.value = kw.trim();
-                logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，正在容器内自动检索最佳驱动...`);
-                this.searchDrivers(true);
+                // 只有明确为 true 时才搜索，默认绝对不调 searchDrivers
+                if (autoSearch) {
+                    logToConsole(`💡 识别到打印机型号: [${kw.trim()}]，检索最佳驱动...`);
+                    this.searchDrivers(true);
+                }
             }
         }
     },
@@ -1156,7 +1159,7 @@ window.DashboardService = {
 
                 if (autoPick && bestDrv) {
                     this.pickDriver(bestDrv.id);
-                    logToConsole(`✔ 已自动选定容器内置最佳驱动: ${bestDrv.id}`, "success");
+                    logToConsole(`✔ 已自动选定最佳驱动: ${bestDrv.id}`, "success");
                     if (box) box.style.display = "none";
                     if (ppdBox) ppdBox.style.border = "1px dashed #cbd5e1";
                 }
@@ -1168,7 +1171,7 @@ window.DashboardService = {
                 if (box) {
                     box.innerHTML = '<div style="padding:8px; color:#ef4444; font-size:11px;">⚠️ 容器未收录该型号驱动，已自动切换为【上传本地 PPD 驱动安装】</div>';
                 }
-                logToConsole(`⚠️ 容器内未匹配到 [${kw}] 的预置驱动，请直接上传 .ppd 驱动文件`, "warn");
+                logToConsole(`⚠️ 未匹配到 [${kw}] 预置驱动，请上传 .ppd 驱动文件`, "warn");
 
                 if (ppdBox) {
                     ppdBox.style.border = "2px dashed #f59e0b";
