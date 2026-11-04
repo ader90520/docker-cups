@@ -16,8 +16,8 @@ from email.utils import parseaddr
 import imaplib
 import urllib.request
 import urllib.parse
-from handlers.base_handler import BaseHandler, UPLOAD_DIR
-from handlers.print_handler import process_image_for_print, clean_old_tmp_files
+from handlers.base_handler import BaseHandler, UPLOAD_DIR, get_cups_env
+from handlers.print_handler import process_image_fast_enhance
 
 DATA_DIR = "/opt/webapp/data"
 CONFIG_FILE = os.path.join(DATA_DIR, "mail_config.json")
@@ -91,10 +91,7 @@ def push_wechat_notice(token, title, content):
         print(f"[PushPlus] 微信通知推送异常: {e}", flush=True)
 
 def get_target_printer(preferred_printer=""):
-    env = os.environ.copy()
-    env["CUPS_SERVER"] = "/run/cups/cups.sock"
-    env["LANG"] = "C"
-
+    env = get_cups_env()
     if preferred_printer:
         check = subprocess.run(["lpstat", "-p", preferred_printer], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         if check.returncode == 0:
@@ -162,6 +159,8 @@ def extract_safe_filename(part):
     return re.sub(r'[\r\n\t]', '', clean_name)
 
 def async_print_attachment_task(file_path, printer_name="", skip_filter=False, token=""):
+    target_file = file_path
+    enhanced_path = None
     try:
         printer = get_target_printer(printer_name)
         filename = os.path.basename(file_path)
@@ -171,20 +170,16 @@ def async_print_attachment_task(file_path, printer_name="", skip_filter=False, t
             push_wechat_notice(token, "⚠️ 云打印失败", f"未发现物理打印机队列，附件 <b>{filename}</b> 未能出纸。")
             return
 
-        target_file = file_path
         ext = os.path.splitext(file_path)[-1].lower()
-
         if not skip_filter and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic"]:
             enhanced_path = file_path + f"_{time.time_ns()}_enhanced.jpg"
             try:
-                if process_image_for_print(file_path, enhanced_path, media="A4"):
+                if process_image_fast_enhance(file_path, enhanced_path, color_mode="monochrome"):
                     target_file = enhanced_path
             except Exception as e:
                 print(f"[MailWorker] 增强处理受阻，回退原图: {e}", flush=True)
 
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
+        env = get_cups_env()
 
         cmd = [
             "lp",
@@ -193,20 +188,18 @@ def async_print_attachment_task(file_path, printer_name="", skip_filter=False, t
             "-o", "media=A4",
             "-o", "PageSize=A4",
             "-o", "fit-to-page",
-            "-o", "scaling=100",
             "-o", "position=center",
             "-o", "ColorModel=K",
-            "-o", "print-color-mode=monochrome"
+            "-o", "print-color-mode=monochrome",
+            target_file
         ]
-        cmd.append(target_file)
 
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=40)
-        clean_old_tmp_files(UPLOAD_DIR)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, timeout=20)
 
         if res.returncode == 0:
             job_info = res.stdout.strip()
             print(f"[MailWorker] ✔ 附件成功出纸: {target_file} ({job_info})", flush=True)
-            push_wechat_notice(token, "🖨️ 邮件附件打印成功", f"文件 <b>{filename}</b> 已成功送达打印机【{printer}】！<br>任务信息: {job_info}")
+            push_wechat_notice(token, "🖨️ 邮件附件打印成功", f"文件 <b>{filename}</b> 已送达打印机【{printer}】！<br>任务信息: {job_info}")
         else:
             err = res.stderr.strip()
             print(f"[MailWorker] ❌ CUPS 拒绝打印: {err}", flush=True)
@@ -214,9 +207,16 @@ def async_print_attachment_task(file_path, printer_name="", skip_filter=False, t
 
     except subprocess.TimeoutExpired:
         print("[MailWorker] ❌ 打印管道超时，可能出现卡纸或端口锁死", flush=True)
-        push_wechat_notice(token, "⚠️ 打印超时告警", f"文件 <b>{os.path.basename(file_path)}</b> 打印超时，请检查硬件通信。")
+        push_wechat_notice(token, "⚠️ 打印超时告警", f"文件 <b>{os.path.basename(file_path)}</b> 打印超时。")
     except Exception as e:
         print(f"[MailWorker] ❌ 邮件异步出纸进程异常: {e}", flush=True)
+    finally:
+        for p in [file_path, enhanced_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 def mail_polling_worker():
     print(">>> [MailWorker] 云邮箱常驻守护线程已就绪...", flush=True)
@@ -235,10 +235,8 @@ def mail_polling_worker():
 
                 if conn is None or cur_user != last_user or cur_pwd != last_pwd:
                     if conn:
-                        try:
-                            conn.logout()
-                        except Exception:
-                            pass
+                        try: conn.logout()
+                        except Exception: pass
                     try:
                         conn = imaplib.IMAP4_SSL(server_host, server_port, timeout=15)
                         conn.login(cur_user, cur_pwd)
@@ -256,10 +254,8 @@ def mail_polling_worker():
                     if status != "OK":
                         raise IOError("Select INBOX failed")
                 except Exception:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                    try: conn.close()
+                    except Exception: pass
                     conn = None
                     time.sleep(3)
                     continue
@@ -336,10 +332,8 @@ def mail_polling_worker():
 
             else:
                 if conn:
-                    try:
-                        conn.logout()
-                    except Exception:
-                        pass
+                    try: conn.logout()
+                    except Exception: pass
                     conn = None
 
         except Exception as e:
@@ -375,16 +369,10 @@ class MailConfigHandler(BaseHandler):
                 return self.get_argument(key, default)
 
             raw_enable = fetch("enable", "false")
-            if isinstance(raw_enable, bool):
-                enable = raw_enable
-            else:
-                enable = str(raw_enable).lower() in ["true", "1", "on"]
-
+            enable = raw_enable if isinstance(raw_enable, bool) else (str(raw_enable).lower() in ["true", "1", "on"])
             server = str(fetch("server", "imap.qq.com")).strip()
-            try:
-                port = int(fetch("port", 993))
-            except Exception:
-                port = 993
+            try: port = int(fetch("port", 993))
+            except Exception: port = 993
 
             user = str(fetch("user", "")).strip()
             password = str(fetch("password", "")).strip()
