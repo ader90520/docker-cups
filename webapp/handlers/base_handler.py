@@ -15,6 +15,14 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # 限制工作线程池并发数为 2，防止 ARM 4 核设备由于密集调度引发高负载
 THREAD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="CupsWorker")
 
+def get_cups_env():
+    env = os.environ.copy()
+    # 彻底杜绝 Unix Domain Socket 权限阻断与死锁，统一走回环 TCP 端口 631
+    env["CUPS_SERVER"] = "127.0.0.1:631"
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
+
 class BaseHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
         self.set_header("Content-Type", "application/json; charset=UTF-8")
@@ -37,13 +45,11 @@ class BaseHandler(tornado.web.RequestHandler):
         resp.update(kwargs)
         self.write(resp)
 
-    def clean_old_files(self, max_age_seconds=300):
+    def clean_old_files(self, max_age_seconds=60):
+        """后台低频兜底清理 (缩减至 60 秒)"""
         def _cleanup():
             try:
                 now = time.time()
-                if not os.path.exists(UPLOAD_DIR):
-                    os.makedirs(UPLOAD_DIR, exist_ok=True)
-                    return
                 for f in glob.glob(os.path.join(UPLOAD_DIR, "*")):
                     try:
                         if os.path.isfile(f) and (now - os.path.getmtime(f) > max_age_seconds):
@@ -54,7 +60,7 @@ class BaseHandler(tornado.web.RequestHandler):
                 pass
         THREAD_POOL.submit(_cleanup)
 
-    def execute_lp(self, printer, copies, file_path, extra_opts=None, timeout=20):
+    def execute_lp(self, printer, copies, file_path, extra_opts=None, timeout=20, auto_unlink=True):
         clean_printer = str(printer).strip() if printer else ""
         if clean_printer and (clean_printer.startswith("-") or not re.match(r'^[a-zA-Z0-9_.\-:+]+$', clean_printer)):
             return False, "非法打印机设备名称"
@@ -69,9 +75,7 @@ class BaseHandler(tornado.web.RequestHandler):
         if not file_path or not os.path.exists(file_path):
             return False, "待打印文件不存在"
 
-        env = os.environ.copy()
-        env["CUPS_SERVER"] = "/run/cups/cups.sock"
-        env["LANG"] = "C"
+        env = get_cups_env()
 
         cmd = ["lp"]
         if clean_printer:
@@ -79,8 +83,6 @@ class BaseHandler(tornado.web.RequestHandler):
         cmd.extend([
             "-n", str(copies_int),
             "-o", "fit-to-page",
-            "-o", "scaling=100",
-            "-o", "natural-scaling=100",
             "-o", "position=center"
         ])
 
@@ -101,8 +103,6 @@ class BaseHandler(tornado.web.RequestHandler):
                 env=env,
                 timeout=timeout
             )
-            self.clean_old_files()
-
             if res.returncode == 0:
                 job_id = res.stdout.strip()
                 return True, job_id
@@ -112,3 +112,11 @@ class BaseHandler(tornado.web.RequestHandler):
             return False, "打印机通信超时"
         except Exception as e:
             return False, f"调度进程异常: {str(e)}"
+        finally:
+            # 核心改进：即发即删，彻底杜绝闪存与磁盘文件泄漏
+            if auto_unlink and file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+            self.clean_old_files()
