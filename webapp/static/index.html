@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>在线打印 - CUPS 智能工作台</title>
     <!-- 更新版本号强制刷新客户端与移动端缓存 -->
-    <link rel="stylesheet" href="/static/css/style.css?v=20261105_01">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261105_02">
     
     <style>
         .sub-nav-tabs {
@@ -41,8 +41,8 @@
     </style>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-    <!-- 更新版本号，强制 iPhone Safari 重新下载新逻辑，废除旧版打包提交缓存 -->
-    <script src="/static/js/app.js?v=20261105_01" defer></script>
+    <!-- 更新版本号，强制客户端重新下载新逻辑，彻底废弃旧版缓存 -->
+    <script src="/static/js/app.js?v=20261105_02" defer></script>
 </head>
 <body>
 
@@ -183,8 +183,17 @@
                                 <option value="false">关闭 (原图直打)</option>
                             </select>
                         </div>
-                        <div class="form-item" id="item-page-ranges-box" style="grid-column: span 2;">
-                            <label>页面范围 (如: 1-5 8，留空打全部)</label>
+                        <!-- 文字浓黑与清晰度档位控制 -->
+                        <div class="form-item" id="item-density-box">
+                            <label>文字浓黑度 (防发虚)</label>
+                            <select id="p-density" class="form-ctrl" onchange="PrintManager.onDensityChange()">
+                                <option value="normal">标准清晰 (适中)</option>
+                                <option value="dark" selected>浓黑加粗 (推荐・字迹饱满)</option>
+                                <option value="ultra">极度深黑 (强力消除透印)</option>
+                            </select>
+                        </div>
+                        <div class="form-item" id="item-page-ranges-box">
+                            <label>页面范围 (如: 1-5 8)</label>
                             <input type="text" id="p-page-ranges" class="form-ctrl" placeholder="留空 = 全部">
                         </div>
                     </div>
