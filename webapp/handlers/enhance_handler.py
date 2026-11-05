@@ -55,10 +55,50 @@ def smart_clean_page_borders_fast(img):
     cropped = img[py:h-py, px:w-px]
     return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
-def camscanner_core_render(img, is_color=False):
+def enhance_text_density(gray_img, density="dark"):
+    """
+    根据前端档位动态调节文字浓黑度与抗透背阈值:
+    normal: 标准清晰 (适中)
+    dark:   浓黑加粗 (默认推荐・字迹饱满浓黑)
+    ultra:  极度深黑 (强力消除薄纸反面透印)
+    """
+    if density == "ultra":
+        invGamma = 0.60
+        black_cut = 10.0
+        white_cut = 220.0
+        sharp_amt = 1.45
+    elif density == "normal":
+        invGamma = 0.85
+        black_cut = 25.0
+        white_cut = 210.0
+        sharp_amt = 1.10
+    else:  # dark (推荐)
+        invGamma = 0.70
+        black_cut = 15.0
+        white_cut = 215.0
+        sharp_amt = 1.30
+
+    # 1. 查找表执行伽马非线性文字加黑 (让中浅灰字骨沉黑，不伤白底)
+    table = np.array([((i / 255.0) ** (1.0 / invGamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    darkened = cv2.LUT(gray_img, table).astype(np.float32)
+
+    # 2. 动态色阶拉伸与透背印杂色滤除
+    v_out = np.clip((darkened - black_cut) / (white_cut - black_cut) * 255.0, 0, 255).astype(np.uint8)
+    v_out[v_out >= (white_cut + 10)] = 255
+
+    # 3. 闭运算紧致笔画，修复宋体细横折与括号断笔
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    dense = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel)
+
+    # 4. 高频边缘锐化反差增益
+    blur = cv2.GaussianBlur(dense, (0, 0), 1.0)
+    crisp = cv2.addWeighted(dense, 1.0 + sharp_amt, blur, -sharp_amt, 0)
+    return crisp
+
+def camscanner_core_render(img, is_color=False, density="dark"):
     """
     极清饱满除法归一化：
-    彻底摒弃丢边缘的粗暴硬二值化，采用与彩色一致的非线性色阶拉伸与抗锯齿保护
+    支持浓黑度档位与彩色保真增益
     """
     if img is None:
         return None
@@ -77,39 +117,31 @@ def camscanner_core_render(img, is_color=False):
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        # ================= 极清饱满黑白模式 (保留抗锯齿灰阶，字骨黑亮粗壮) =================
-        # 取三通道最小值：确保红笔批改、淡蓝题号深色沉淀，绝不被抹白
-        min_gray = np.min(norm, axis=2).astype(np.float32)
+        # ================= 极清饱满黑白模式 (动态文字浓黑加粗 + 抗透背) =================
+        # 取通道最小值锁定淡色彩色题号与红墨水批改
+        min_gray = np.min(norm, axis=2)
+        result = enhance_text_density(min_gray, density=density)
+        return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
 
-        # 非线性色阶拉伸：黑场下压至 40，白场截断在 200
-        # 既将底色杂色全部推向纯白 255，又将浅灰文字深沉压黑，且完整保留边缘半透明抗锯齿像素
-        v_stretched = np.clip((min_gray - 40.0) / (200.0 - 40.0) * 255.0, 0, 255).astype(np.uint8)
-
-        # 残留浅底噪点直接锁定为纯白
-        v_stretched[v_stretched >= 235] = 255
-
-        # 叠加 USM 动态锐化层，强化文字微边缘反差，达到与彩色模式相同的饱满清晰度
-        sharpened_mono = apply_usm_sharpen(v_stretched, amount=1.2, radius=1)
-        return cv2.cvtColor(sharpened_mono, cv2.COLOR_GRAY2BGR)
-
-    # ================= 纯正彩色模式 =================
+    # ================= 纯正彩色模式 (红笔批注更鲜艳，微灰底推纯白) =================
     hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
 
     color_mask = (s > 18) & (v > 38)
+    # 彩色区域饱和度增益 30%
     s_boost = np.clip(s * 1.30, 0, 255)
     hsv[:, :, 1] = np.where(color_mask, s_boost, s)
-    v_stretched = np.clip((v - 30.0) / (220.0 - 30.0) * 255.0, 0, 255)
+    v_stretched = np.clip((v - 25.0) / (215.0 - 25.0) * 255.0, 0, 255)
     hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
 
     result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
     gray_check = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-    result[gray_check >= 235] = [255, 255, 255]
+    result[gray_check >= 230] = [255, 255, 255]
 
     return apply_usm_sharpen(result, amount=1.1, radius=1)
 
-def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
+def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", density="dark"):
     try:
         if not HAVE_OPENCV:
             return raw_bytes
@@ -124,11 +156,11 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome"):
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
         is_color = (str(color_mode).strip().lower() == "color")
-        result = camscanner_core_render(img, is_color=is_color)
+        result = camscanner_core_render(img, is_color=is_color, density=density)
         if result is None:
             result = img
 
-        _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        _, enc = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return enc.tobytes()
     except Exception:
         return raw_bytes
@@ -138,13 +170,16 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
+            # 接收前端传递的浓黑度档位 (normal / dark / ultra)
+            density = self.get_argument("density", "dark").strip().lower()
+
             if not files:
                 self.set_status(400)
                 self.write("未收到预览数据")
                 return
 
             raw_bytes = files[0]["body"]
-            processed_bytes = enhance_camscanner_precise(raw_bytes, color_mode=color_mode)
+            processed_bytes = enhance_camscanner_precise(raw_bytes, color_mode=color_mode, density=density)
             self.set_header("Content-Type", "image/jpeg")
             self.set_header("Content-Length", str(len(processed_bytes)))
             self.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
