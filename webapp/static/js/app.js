@@ -1,5 +1,5 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式、防并发过载、任务自动消费版
+ * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式、防并发过载、支持浓黑度与黑白灰度修复版
  */
 
 function logToConsole(msg, level = "info") {
@@ -135,11 +135,15 @@ window.EnhanceEngine = {
         }
 
         let img = this.currentRawImage;
+        let isEnhancedLoaded = false;
+
         if (enhance) {
             if (colorMode === "color" && img._enhancedColor) {
                 img = img._enhancedColor;
+                isEnhancedLoaded = true;
             } else if (colorMode === "monochrome" && img._enhancedMono) {
                 img = img._enhancedMono;
+                isEnhancedLoaded = true;
             }
         }
 
@@ -175,6 +179,19 @@ window.EnhanceEngine = {
         ctx.rotate(rad);
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
+
+        // 核心修复：未开启增强(或增强图尚未加载完成)且处于“黑白模式”时，主动将绘制内容转换为灰度，防止显示彩色
+        if (colorMode === "monochrome" && (!enhance || !isEnhancedLoaded)) {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+                data[i] = gray;
+                data[i + 1] = gray;
+                data[i + 2] = gray;
+            }
+            ctx.putImageData(imgData, 0, 0);
+        }
     },
 
     renderMultiImagesGrid: function() {
@@ -294,13 +311,16 @@ window.PrintManager = {
         document.getElementById("sec-upload-idcard").style.display = (tab === "idcard" ? "block" : "none");
 
         const enhanceBox = document.getElementById("item-enhance-box");
+        const densityBox = document.getElementById("item-density-box");
         const pageRangesBox = document.getElementById("item-page-ranges-box");
         if (tab === "idcard") {
             if (enhanceBox) enhanceBox.style.display = "none";
+            if (densityBox) densityBox.style.display = "none";
             if (pageRangesBox) pageRangesBox.style.display = "none";
             IdCardManager.updateCanvasPreview();
         } else {
             if (enhanceBox) enhanceBox.style.display = "block";
+            if (densityBox) densityBox.style.display = "block";
             if (pageRangesBox) pageRangesBox.style.display = "block";
             EnhanceEngine.render();
         }
@@ -328,6 +348,16 @@ window.PrintManager = {
         this.triggerCurrentEnhance();
         EnhanceEngine.render();
     },
+    onDensityChange: function() {
+        const d = document.getElementById("p-density")?.value || "dark";
+        logToConsole(`文字浓黑度切换为: ${d === 'ultra' ? '极度深黑' : (d === 'dark' ? '浓黑加粗' : '标准清晰')}`);
+        // 档位发生变更时，清除已有缓存，重新向后端发起增强请求
+        if (EnhanceEngine.currentRawImage) {
+            delete EnhanceEngine.currentRawImage._enhancedMono;
+            delete EnhanceEngine.currentRawImage._enhancedColor;
+        }
+        this.triggerCurrentEnhance();
+    },
     onMergeChange: function() {
         logToConsole(`多图同页拼版: ${this.isMultiMergeEnabled() ? "开启" : "关闭"}`);
         EnhanceEngine.render();
@@ -352,6 +382,9 @@ window.PrintManager = {
         const fd = new FormData();
         fd.append("file", file);
         fd.append("color_mode", mode);
+        const density = document.getElementById("p-density")?.value || "dark";
+        fd.append("density", density);
+
         const resp = await fetch("/api/preview/enhance?t=" + Date.now(), { method: "POST", body: fd });
         if (!resp.ok) throw new Error("处理错误: " + resp.status);
         const blob = await resp.blob();
@@ -373,7 +406,7 @@ window.PrintManager = {
         if (!file || file.name.toLowerCase().endsWith(".pdf")) return;
 
         const currentMode = this.colorMode;
-        // 如果当前模式已经有缓存了，直接用，不重复发起网络请求
+        // 如果当前模式已经有缓存，直接用，不重复发起网络请求
         if (currentMode === "color" && rawImg._enhancedColor) return;
         if (currentMode === "monochrome" && rawImg._enhancedMono) return;
 
@@ -490,7 +523,7 @@ window.PrintManager = {
         if (tip) tip.style.display = "block";
     },
 
-    // 核心重构：流式逐张派发出纸，打一张消一张，按钮实时反馈进度类似 [1/4]
+    // 核心：流式逐张派发出纸，打一张消一张，按钮实时反馈进度类似 [1/4]
     submitJob: async function() {
         if (this.isPrinting) return;
 
@@ -507,6 +540,7 @@ window.PrintManager = {
         const duplex = document.getElementById("p-duplex")?.value || "none";
         const media = document.getElementById("p-media")?.value || "A4";
         const enhance = document.getElementById("p-enhance")?.value || "false";
+        const density = document.getElementById("p-density")?.value || "dark";
         const pageRanges = document.getElementById("p-page-ranges")?.value || "";
         const isMultiMerge = this.isMultiMergeEnabled();
         const rotation = EnhanceEngine.rotationDeg;
@@ -563,6 +597,7 @@ window.PrintManager = {
             fd.append("color_mode", this.colorMode);
             fd.append("media", media);
             fd.append("enhance", enhance);
+            fd.append("density", density);
             fd.append("page_ranges", pageRanges);
             fd.append("multi_merge", "true");
             fd.append("rotation", rotation);
@@ -588,7 +623,7 @@ window.PrintManager = {
             return;
         }
 
-        // 模式 B: 独立多图流式出纸 (打印成功一张，立即从任务列表删除一张！)
+        // 模式 B: 独立多图流式出纸 (打印成功一张，立即从任务列表删除一张)
         const total = this.selectedFiles.length;
         let successCount = 0;
         let errorCount = 0;
@@ -607,6 +642,7 @@ window.PrintManager = {
             fd.append("color_mode", this.colorMode);
             fd.append("media", media);
             fd.append("enhance", enhance);
+            fd.append("density", density);
             fd.append("page_ranges", pageRanges);
             fd.append("multi_merge", "false");
             fd.append("rotation", rotation);
@@ -618,7 +654,6 @@ window.PrintManager = {
                 if (res.success) {
                     successCount++;
                     logToConsole(`✔ 第 ${currentDisplayIndex} 张出纸成功: ${currentFile.name}`, "success");
-                    // 核心关键：成功打印一张，立即从待打印列表删除消除一张！
                     this.removeFile(0);
                 } else {
                     errorCount++;
@@ -1116,7 +1151,7 @@ window.DashboardService = {
         }
     },
 
-    // 彻底切断任何调用 searchDrivers 的代码，彻底根治死循环刷屏！
+    // 彻底切断任何调用 searchDrivers 的代码，根除死循环刷屏
     onDiscoveredDeviceSelect: function(selectEl) {
         if (!selectEl) return;
         const val = selectEl.value;
@@ -1146,7 +1181,6 @@ window.DashboardService = {
             const kwInput = document.getElementById("driver-search-kw");
             if (kwInput) {
                 kwInput.value = kw.trim();
-                // 仅填入输入框，绝不自动调用 searchDrivers！
             }
         }
     },
