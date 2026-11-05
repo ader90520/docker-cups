@@ -18,23 +18,67 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
+def smart_clean_page_borders_print(img):
+    """打印端专属切边：消除周围桌角、装订黑线与黑底边框"""
+    if img is None:
+        return img
+    h, w = img.shape[:2]
+    # 在 300px 微缩图上迅速定位纸张边缘轮廓
+    scale = 300.0 / max(h, w)
+    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST)
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        x, y, cw, ch = cv2.boundingRect(c)
+        if cw > small.shape[1] * 0.45 and ch > small.shape[0] * 0.45:
+            rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
+            # 安全微切 2% 去除残留毛边
+            pad_x = int(rcw * 0.02)
+            pad_y = int(rch * 0.02)
+            x1 = max(0, rx + pad_x)
+            y1 = max(0, ry + pad_y)
+            x2 = min(w, rx + rcw - pad_x)
+            y2 = min(h, ry + rch - pad_y)
+            cropped = img[y1:y2, x1:x2]
+            return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+    # 兜底裁切 1.5%
+    px, py = int(w * 0.015), int(h * 0.015)
+    cropped = img[py:h-py, px:w-px]
+    return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+def apply_gentle_usm(img, amount=1.2, radius=1):
+    """温和 USM 锐化：强化文字反差，杜绝白边撕裂与毛刺"""
+    blurred = cv2.GaussianBlur(img, (0, 0), radius)
+    return cv2.addWeighted(img, 1.0 + amount, blurred, -amount, 0)
+
 def process_image_fast_enhance(in_path, out_path, color_mode="monochrome"):
     """
-    高保真出纸增强算法：
-    既保证运算速度控制在 1 秒以内，又保证输出给物理打印机的文字饱满厚重、笔划不发虚
+    极速出纸增强引擎 (切边对齐 + 笔画圆润加粗保真)：
+    运算保持在 1 秒以内，出纸效果字体黑亮饱满，无断线、不发虚
     """
     if not HAVE_OPENCV:
         return False
 
     try:
-        img = cv2.imread(in_path, cv2.IMREAD_COLOR)
-        if img is None:
+        raw_img = cv2.imread(in_path, cv2.IMREAD_COLOR)
+        if raw_img is None:
             return False
 
+        # 1. 核心修复：同步执行文档边缘裁切，杜绝打印出黑框杂边
+        img = smart_clean_page_borders_print(raw_img)
         h, w = img.shape[:2]
+
         max_dim = max(h, w)
         scale = 1.0
-        # 打印分辨率保护：出纸保留 1800px 级精度，兼顾 ARM 性能与 A4 纸文字清晰度
+        # 出纸运算分辨率控制在 1800px（既不拖慢 ARM32，又保全 300DPI 打印细节）
         if max_dim > 1800:
             scale = 1800.0 / max_dim
             calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -43,51 +87,58 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome"):
 
         ch, cw = calc_img.shape[:2]
 
-        # 1. 微缩提取光照底色 (320px 尺度)，极速运算
+        # 2. 双尺度全局漫反射光照估计 (320px 微缩图毫秒级运算)
         tiny_scale = 320.0 / max(ch, cw)
         tiny_img = cv2.resize(calc_img, (int(cw * tiny_scale), int(ch * tiny_scale)), interpolation=cv2.INTER_NEAREST)
         bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
         bg = cv2.resize(bg_tiny, (cw, ch), interpolation=cv2.INTER_LINEAR)
 
-        # 2. 照度除法归一
+        # 3. 照度除法归一，消除阴影与泛黄
         norm = cv2.divide(calc_img, bg, scale=255)
 
         is_color = (str(color_mode).strip().lower() == "color")
 
         if not is_color:
-            # 灰阶抗锯齿白底拉伸（不丢边缘）
+            # ================= 极清圆润饱满黑白出纸 =================
+            # 取通道最小值锁定淡色彩色题号与红墨水批改
             min_gray = np.min(norm, axis=2).astype(np.float32)
-            v_stretched = np.clip((min_gray - 40.0) / (200.0 - 40.0) * 255.0, 0, 255).astype(np.uint8)
+
+            # 非线性动态色阶：黑场下压至 30（让文字极度黑沉饱满），白场收在 210（推平微灰）
+            v_stretched = np.clip((min_gray - 30.0) / (210.0 - 30.0) * 255.0, 0, 255).astype(np.uint8)
             v_stretched[v_stretched >= 235] = 255
 
-            # USM 锐化文字骨架
-            blurred = cv2.GaussianBlur(v_stretched, (0, 0), 1)
-            result = cv2.addWeighted(v_stretched, 2.2, blurred, -1.2, 0)
+            # 闭运算微紧致：连接微小发虚断点，加固文字骨架
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            closed = cv2.morphologyEx(v_stretched, cv2.MORPH_CLOSE, kernel)
+
+            # 温和锐化保真，杜绝发虚
+            result = apply_gentle_usm(closed, amount=0.9, radius=1)
         else:
+            # ================= 纯正彩色出纸 =================
             hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
             s_c = hsv[:, :, 1]
             v_c = hsv[:, :, 2]
             color_mask = (s_c > 18) & (v_c > 38)
-            s_c = np.where(color_mask, np.clip(s_c * 1.3, 0, 255), s_c)
+            s_c = np.where(color_mask, np.clip(s_c * 1.30, 0, 255), s_c)
             v_c = np.where(color_mask, v_c, np.clip((v_c - 30.0) / (220.0 - 30.0) * 255.0, 0, 255))
             hsv[:, :, 1] = s_c
             hsv[:, :, 2] = v_c
             result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
             gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
             result[gray_chk >= 235] = [255, 255, 255]
+            result = apply_gentle_usm(result, amount=1.0, radius=1)
 
-        # 还原回高解析原图尺寸输出
+        # 尺寸恢复至原图输出分辨率（采用 INTER_CUBIC 双三次插值，确保笔锋圆润无锯齿）
         if scale != 1.0:
-            result = cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
+            result = cv2.resize(result, (w, h), interpolation=cv2.INTER_CUBIC)
 
-        cv2.imwrite(out_path, result, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        cv2.imwrite(out_path, result, [int(cv2.IMWRITE_JPEG_QUALITY), 96])
         return True
     except Exception as e:
         print(f"[FastEnhance] 出纸增强异常: {e}", flush=True)
         return False
 
 def clean_old_tmp_files(upload_dir, max_age=60):
-    """即时清理辅助"""
     try:
         now = time.time()
         for f in os.listdir(upload_dir):
@@ -187,7 +238,7 @@ class PrintHandler(BaseHandler):
                         self.write_json(False, f"CUPS拒绝: {jid}")
                     return
 
-            # 模式 B: 独立多图流式出纸 (PDF直接放行，图片根据开关极速增强)
+            # 模式 B: 独立多图流式出纸 (PDF直接放行，图片根据开关极速增强并自动切边)
             for f_item in files:
                 fname = f_item["filename"]
                 ext = os.path.splitext(fname)[-1].lower()
@@ -205,7 +256,7 @@ class PrintHandler(BaseHandler):
                     t0 = time.time()
                     if process_image_fast_enhance(tmp_src, tmp_enhanced, color_mode=color_mode):
                         target_to_print = tmp_enhanced
-                        print(f"[FastEnhance] 去黑底完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
+                        print(f"[FastEnhance] 出纸切边与增强完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
 
                 ok, jid = self.execute_lp(printer, copies, target_to_print, extra_opts=extra_opts, timeout=20, auto_unlink=False)
                 if ok:
