@@ -442,19 +442,18 @@ body {
     color: #166534;
 }
 
-/* 视窗容器：采用 440px 黄金高度并兼顾 Flex 居中，比例紧凑精致，消除巨大空旷黑框 */
+/* 视窗容器：PC 端大比例高清呈现，彻底解决小视窗看不起字的问题 */
 .viewport-wrapper {
     position: relative;
     background: #1e293b;
     border-radius: 6px;
-    height: 440px;
-    max-height: 440px;
+    min-height: 520px;
     width: 100%;
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 12px;
+    padding: 14px;
     box-sizing: border-box;
 }
 
@@ -462,9 +461,9 @@ body {
     background: #ffffff;
     width: auto;
     height: 100%;
-    max-height: 416px;
+    max-height: 580px;
     aspect-ratio: 210 / 297;
-    box-shadow: 0 4px 18px rgba(0,0,0,0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
     position: relative;
     display: flex;
     align-items: center;
@@ -477,9 +476,9 @@ body {
 .sheet-a4-viewport.landscape {
     aspect-ratio: 297 / 210 !important;
     width: 100%;
-    max-width: 580px;
+    max-width: 680px;
     height: auto;
-    max-height: 380px;
+    max-height: 480px;
 }
 
 .sheet-a4-viewport.media-a5 { aspect-ratio: 148 / 210; }
@@ -487,6 +486,7 @@ body {
 .sheet-a4-viewport.media-b5 { aspect-ratio: 176 / 250; }
 .sheet-a4-viewport.media-b5.landscape { aspect-ratio: 250 / 176 !important; }
 
+/* Canvas 亚像素平滑渲染，确保大屏下文字笔画清晰锐利 */
 #canvas-preview {
     width: 100% !important;
     height: 100% !important;
@@ -494,6 +494,9 @@ body {
     max-height: 100% !important;
     object-fit: contain;
     display: block;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+    image-rendering: auto;
 }
 
 /* 底部队列任务数条 */
@@ -518,6 +521,17 @@ body {
     padding: 8px;
     height: 250px;
     overflow-y: auto;
+}
+
+/* PC 宽屏专属自适应增强：放大 A4 纸视窗 */
+@media (min-width: 901px) {
+    .viewport-wrapper {
+        min-height: 640px !important;
+        height: calc(100vh - 280px);
+    }
+    .sheet-a4-viewport {
+        max-height: calc(100% - 10px) !important;
+    }
 }
 
 /* 移动端紧凑自适应 */
@@ -548,6 +562,7 @@ body {
     }
 
     .viewport-wrapper {
+        min-height: 360px !important;
         height: 360px !important;
         max-height: 360px !important;
         padding: 8px;
