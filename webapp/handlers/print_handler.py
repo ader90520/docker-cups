@@ -18,87 +18,90 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
+def ensure_upload_dir():
+    try:
+        if not os.path.exists(UPLOAD_DIR):
+            os.makedirs(UPLOAD_DIR, mode=0o777, exist_ok=True)
+    except Exception as e:
+        print(f"[UploadDir] 创建目录失败: {e}", flush=True)
+
 def smart_clean_page_borders_print(img):
-    """打印端专属切边：消除周围桌角、装订黑线与黑底边框"""
+    """打印端切边：强力消除顶部黑折痕、外露桌面与暗角"""
     if img is None:
         return img
     h, w = img.shape[:2]
-    # 在 320px 微缩图上迅速定位纸张边缘轮廓
-    scale = 320.0 / max(h, w)
-    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST)
+    scale = 360.0 / max(h, w)
+    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 40, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    dilated = cv2.dilate(edged, kernel, iterations=2)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    crop_x1, crop_y1, crop_x2, crop_y2 = 0, 0, w, h
+    found = False
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
-        c = max(contours, key=cv2.contourArea)
-        x, y, cw, ch = cv2.boundingRect(c)
-        if cw > small.shape[1] * 0.45 and ch > small.shape[0] * 0.45:
-            rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
-            # 安全微切 2% 去除残留毛边
-            pad_x = int(rcw * 0.02)
-            pad_y = int(rch * 0.02)
-            x1 = max(0, rx + pad_x)
-            y1 = max(0, ry + pad_y)
-            x2 = min(w, rx + rcw - pad_x)
-            y2 = min(h, ry + rch - pad_y)
-            cropped = img[y1:y2, x1:x2]
-            return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+        cnts = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
+        for c in cnts:
+            x, y, cw, ch = cv2.boundingRect(c)
+            if cw > small.shape[1] * 0.40 and ch > small.shape[0] * 0.40:
+                rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
+                pad_x = int(rcw * 0.035)
+                pad_y = int(rch * 0.035)
+                crop_x1 = max(0, rx + pad_x)
+                crop_y1 = max(0, ry + pad_y)
+                crop_x2 = min(w, rx + rcw - pad_x)
+                crop_y2 = min(h, ry + rch - pad_y)
+                found = True
+                break
 
-    # 兜底裁切 1.5%
-    px, py = int(w * 0.015), int(h * 0.015)
-    cropped = img[py:h-py, px:w-px]
-    return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+    if not found:
+        pad_x, pad_y = int(w * 0.03), int(h * 0.03)
+        crop_x1, crop_y1 = pad_x, pad_y
+        crop_x2, crop_y2 = w - pad_x, h - pad_y
 
-def enhance_text_density(gray_img, density="dark"):
-    """
-    出纸专属：文字深沉加黑、增厚与去透背印
-    normal: 标准清晰 (适中)
-    dark:   浓黑加粗 (默认推荐・字迹饱满浓黑)
-    ultra:  极度深黑 (强力消除薄纸反面透印)
-    """
+    cropped = img[crop_y1:crop_y2, crop_x1:crop_x2]
+    return cv2.copyMakeBorder(cropped, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+def render_crisp_monochrome(norm_img, density="dark"):
+    min_gray = np.min(norm_img, axis=2)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced_gray = clahe.apply(min_gray)
+
     if density == "ultra":
-        invGamma = 0.60
+        gamma = 0.55
         black_cut = 10.0
-        white_cut = 220.0
-        sharp_amt = 1.45
-    elif density == "normal":
-        invGamma = 0.85
-        black_cut = 25.0
-        white_cut = 210.0
-        sharp_amt = 1.10
-    else:  # dark (推荐)
-        invGamma = 0.70
-        black_cut = 15.0
         white_cut = 215.0
-        sharp_amt = 1.30
+    elif density == "normal":
+        gamma = 0.80
+        black_cut = 25.0
+        white_cut = 205.0
+    else:  # dark
+        gamma = 0.65
+        black_cut = 15.0
+        white_cut = 210.0
 
-    # 1. 查找表执行伽马非线性文字加黑 (让中浅灰字骨沉黑，不伤白底)
-    table = np.array([((i / 255.0) ** (1.0 / invGamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
-    darkened = cv2.LUT(gray_img, table).astype(np.float32)
+    table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    darkened = cv2.LUT(enhanced_gray, table).astype(np.float32)
 
-    # 2. 动态色阶拉伸与透背印杂色滤除
     v_out = np.clip((darkened - black_cut) / (white_cut - black_cut) * 255.0, 0, 255).astype(np.uint8)
-    v_out[v_out >= (white_cut + 10)] = 255
+    v_out[v_out >= 225] = 255
 
-    # 3. 闭运算紧致笔画，修复细小发虚断点，保持字形圆润饱满
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    dense = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    closed = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel_close)
 
-    # 4. 温和 USM 锐化增益，提升反差且杜绝边缘毛刺白边
-    blur = cv2.GaussianBlur(dense, (0, 0), 1.0)
-    crisp = cv2.addWeighted(dense, 1.0 + sharp_amt, blur, -sharp_amt, 0)
-    return crisp
+    kernel_thicken = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+    eroded = cv2.erode(closed, kernel_thicken, iterations=1)
+    result = cv2.addWeighted(closed, 0.45, eroded, 0.55, 0)
+
+    return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
 
 def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", density="dark"):
-    """
-    极速出纸增强引擎 (切边对齐 + 笔画圆润加粗保真 + 动态档位联动)：
-    运算保持在 1 秒以内，出纸效果字体黑亮饱满，无断线、不发虚
-    """
     if not HAVE_OPENCV:
         return False
 
@@ -107,40 +110,37 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
         if raw_img is None:
             return False
 
-        # 1. 核心修复：同步执行文档边缘裁切，杜绝打印出黑框杂边
+        # 1. 强力切边，彻底切除非纸面黑区
         img = smart_clean_page_borders_print(raw_img)
         h, w = img.shape[:2]
 
+        # 2. 一步到位缩放到出纸清晰度（2600px），避免二次放大
         max_dim = max(h, w)
-        scale = 1.0
-        # 出纸运算分辨率放宽至 2600px，保证 300DPI 打印细节饱满
         if max_dim > 2600:
             scale = 2600.0 / max_dim
             calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        elif max_dim < 1800:
+            scale = 2200.0 / max_dim
+            calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         else:
             calc_img = img
 
         ch, cw = calc_img.shape[:2]
 
-        # 2. 双尺度全局漫反射光照估计 (320px 微缩图毫秒级运算)
+        # 3. 320px 背景光照估计
         tiny_scale = 320.0 / max(ch, cw)
         tiny_img = cv2.resize(calc_img, (int(cw * tiny_scale), int(ch * tiny_scale)), interpolation=cv2.INTER_NEAREST)
         bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
         bg = cv2.resize(bg_tiny, (cw, ch), interpolation=cv2.INTER_LINEAR)
 
-        # 3. 照度除法归一，消除阴影与泛黄
+        # 4. 照度除法归一
         norm = cv2.divide(calc_img, bg, scale=255)
 
         is_color = (str(color_mode).strip().lower() == "color")
 
         if not is_color:
-            # ================= 极清圆润饱满黑白出纸 =================
-            # 取通道最小值锁定淡色彩色题号与红墨水批改
-            min_gray = np.min(norm, axis=2)
-            result = enhance_text_density(min_gray, density=density)
-            result = cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+            result = render_crisp_monochrome(norm, density=density)
         else:
-            # ================= 纯正彩色出纸 (红笔批注更鲜艳，微灰底推纯白) =================
             hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
             s_c = hsv[:, :, 1]
             v_c = hsv[:, :, 2]
@@ -153,11 +153,8 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
             gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
             result[gray_chk >= 230] = [255, 255, 255]
 
-        # 尺寸恢复至原图输出分辨率（采用 INTER_CUBIC 双三次插值，确保笔锋圆润无锯齿）
-        if scale != 1.0:
-            result = cv2.resize(result, (w, h), interpolation=cv2.INTER_CUBIC)
-
-        cv2.imwrite(out_path, result, [int(cv2.IMWRITE_JPEG_QUALITY), 98])
+        # 无损写入临时文件，交给 CUPS
+        cv2.imwrite(out_path, result)
         return True
     except Exception as e:
         print(f"[FastEnhance] 出纸增强异常: {e}", flush=True)
@@ -165,12 +162,16 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
 
 def clean_old_tmp_files(upload_dir, max_age=60):
     try:
+        if not os.path.exists(upload_dir):
+            return
         now = time.time()
         for f in os.listdir(upload_dir):
             p = os.path.join(upload_dir, f)
             if os.path.isfile(p) and (now - os.path.getmtime(p) > max_age):
-                try: os.remove(p)
-                except Exception: pass
+                try: 
+                    os.remove(p)
+                except Exception: 
+                    pass
     except Exception:
         pass
 
@@ -178,13 +179,14 @@ class PrintHandler(BaseHandler):
     def post(self):
         saved_files = []
         try:
+            ensure_upload_dir()
+
             printer = self.get_argument("printer", "").strip()
             copies = self.get_argument("copies", "1").strip()
             duplex = self.get_argument("duplex", "none").strip()
             color_mode = self.get_argument("color_mode", "monochrome").strip().lower()
             media = self.get_argument("media", "A4").strip().upper()
             enhance_val = self.get_argument("enhance", "false").strip().lower()
-            # 核心接收前端传递的清晰度档位 (normal / dark / ultra)
             density = self.get_argument("density", "dark").strip().lower()
             page_ranges = self.get_argument("page_ranges", "").strip()
             multi_merge = self.get_argument("multi_merge", "false").strip().lower() == "true"
@@ -228,7 +230,7 @@ class PrintHandler(BaseHandler):
             # 模式 A: 多图拼版合为单张输出
             if multi_merge and len(files) > 1:
                 token = uuid.uuid4().hex[:8]
-                merged_path = os.path.join(UPLOAD_DIR, f"merged_{token}.jpg")
+                merged_path = os.path.join(UPLOAD_DIR, f"merged_{token}.png")
                 saved_files.append(merged_path)
 
                 imgs = []
@@ -257,7 +259,7 @@ class PrintHandler(BaseHandler):
                         pos_y = r * cellH + (cellH - im.height) // 2
                         canvas.paste(im, (pos_x, pos_y))
 
-                    canvas.save(merged_path, format="JPEG", quality=98, dpi=(300, 300))
+                    canvas.save(merged_path, format="PNG", dpi=(300, 300))
                     ok, jid = self.execute_lp(printer, copies, merged_path, extra_opts=extra_opts, timeout=20, auto_unlink=True)
                     if ok:
                         self.write_json(True, f"多图拼版已下发打印！", job=jid)
@@ -265,12 +267,14 @@ class PrintHandler(BaseHandler):
                         self.write_json(False, f"CUPS拒绝: {jid}")
                     return
 
-            # 模式 B: 独立多图流式出纸 (PDF直接放行，图片切边+文字增厚增强)
+            # 模式 B: 独立多图流式出纸 (无损 PNG 提交)
             for f_item in files:
                 fname = f_item["filename"]
                 ext = os.path.splitext(fname)[-1].lower()
                 token = uuid.uuid4().hex[:6]
-                tmp_src = os.path.join(UPLOAD_DIR, f"task_{token}_{fname}")
+                safe_fname = re.sub(r'[^a-zA-Z0-9_\.-]', '_', fname)
+                tmp_src = os.path.join(UPLOAD_DIR, f"task_{token}_{safe_fname}")
+                
                 with open(tmp_src, "wb") as f_out:
                     f_out.write(f_item["body"])
                 saved_files.append(tmp_src)
@@ -278,7 +282,7 @@ class PrintHandler(BaseHandler):
                 target_to_print = tmp_src
 
                 if need_enhance and ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
-                    tmp_enhanced = os.path.join(UPLOAD_DIR, f"task_{token}_enh_{fname}.jpg")
+                    tmp_enhanced = os.path.join(UPLOAD_DIR, f"task_{token}_enh_{safe_fname}.png")
                     saved_files.append(tmp_enhanced)
                     t0 = time.time()
                     if process_image_fast_enhance(tmp_src, tmp_enhanced, color_mode=color_mode, density=density):
@@ -302,4 +306,4 @@ class PrintHandler(BaseHandler):
                         os.remove(p)
                     except Exception:
                         pass
-            self.clean_old_files()
+            clean_old_tmp_files(UPLOAD_DIR)
