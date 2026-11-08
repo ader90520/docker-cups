@@ -15,121 +15,126 @@ try:
 except Exception:
     HAVE_OPENCV = False
 
-def apply_usm_sharpen(img, amount=1.2, radius=1):
-    """USM 动态高反差锐化：强化文字笔画边缘反差"""
+def smart_clean_page_borders_fast(img):
+    """
+    对标全能王的自适应文档切边：
+    消除顶部黑缝、外露木桌面与翻页弯曲阴影
+    """
     if img is None:
         return img
-    blurred = cv2.GaussianBlur(img, (0, 0), radius)
-    sharpened = cv2.addWeighted(img, 1.0 + amount, blurred, -amount, 0)
-    return sharpened
-
-def smart_clean_page_borders_fast(img):
-    """自适应快速边框清理 (280px 超轻量图快速定位文档，消除黑边)"""
     h, w = img.shape[:2]
-    scale = 280.0 / max(h, w)
-    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_NEAREST)
+    scale = 360.0 / max(h, w)
+    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # 采用 Canny 边缘结合形态学膨胀锁定真正纸张边缘
+    edged = cv2.Canny(blurred, 40, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    dilated = cv2.dilate(edged, kernel, iterations=2)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    crop_x1, crop_y1, crop_x2, crop_y2 = 0, 0, w, h
+    found = False
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
-        c = max(contours, key=cv2.contourArea)
-        x, y, cw, ch = cv2.boundingRect(c)
-        if cw > small.shape[1] * 0.45 and ch > small.shape[0] * 0.45:
-            rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
-            pad_x = int(rcw * 0.02)
-            pad_y = int(rch * 0.02)
-            x1 = max(0, rx + pad_x)
-            y1 = max(0, ry + pad_y)
-            x2 = min(w, rx + rcw - pad_x)
-            y2 = min(h, ry + rch - pad_y)
-            cropped = img[y1:y2, x1:x2]
-            return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+        # 取面积前三的大轮廓
+        cnts = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
+        for c in cnts:
+            x, y, cw, ch = cv2.boundingRect(c)
+            # 纸张主体覆盖超过 40%
+            if cw > small.shape[1] * 0.40 and ch > small.shape[0] * 0.40:
+                rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
+                # 安全内收 3.5%：彻底斩断顶部黑折痕、边缘装订暗影
+                pad_x = int(rcw * 0.035)
+                pad_y = int(rch * 0.035)
+                crop_x1 = max(0, rx + pad_x)
+                crop_y1 = max(0, ry + pad_y)
+                crop_x2 = min(w, rx + rcw - pad_x)
+                crop_y2 = min(h, ry + rch - pad_y)
+                found = True
+                break
 
-    # 兜底裁切 1.5%
-    px, py = int(w * 0.015), int(h * 0.015)
-    cropped = img[py:h-py, px:w-px]
-    return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+    if not found:
+        # 兜底裁切 3%
+        pad_x, pad_y = int(w * 0.03), int(h * 0.03)
+        crop_x1, crop_y1 = pad_x, pad_y
+        crop_x2, crop_y2 = w - pad_x, h - pad_y
 
-def enhance_text_density(gray_img, density="dark"):
+    cropped = img[crop_y1:crop_y2, crop_x1:crop_x2]
+    # 外围补白边防贴边
+    return cv2.copyMakeBorder(cropped, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+def render_camscanner_black_and_white(norm_img, density="dark"):
     """
-    根据前端档位动态调节文字浓黑度与抗透背阈值:
-    normal: 标准清晰 (适中)
-    dark:   浓黑加粗 (默认推荐・字迹饱满浓黑)
-    ultra:  极度深黑 (强力消除薄纸反面透印)
+    全能王级黑白滤镜：CLAHE 局部对比度增强 + 伽马非线性压黑 + 抗透印
     """
+    min_gray = np.min(norm_img, axis=2)
+
+    # 1. 引入 CLAHE 限制对比度自适应直方图均衡，让每一行文字无论处于阴影还是强光区都浓黑一致
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced_gray = clahe.apply(min_gray)
+
+    # 2. 档位动态曲线
     if density == "ultra":
-        invGamma = 0.60
+        gamma = 0.55
         black_cut = 10.0
-        white_cut = 220.0
-        sharp_amt = 1.45
-    elif density == "normal":
-        invGamma = 0.85
-        black_cut = 25.0
-        white_cut = 210.0
-        sharp_amt = 1.10
-    else:  # dark (推荐)
-        invGamma = 0.70
-        black_cut = 15.0
         white_cut = 215.0
-        sharp_amt = 1.30
+    elif density == "normal":
+        gamma = 0.80
+        black_cut = 25.0
+        white_cut = 205.0
+    else:  # dark (推荐)
+        gamma = 0.65
+        black_cut = 15.0
+        white_cut = 210.0
 
-    # 1. 查找表执行伽马非线性文字加黑 (让中浅灰字骨沉黑，不伤白底)
-    table = np.array([((i / 255.0) ** (1.0 / invGamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
-    darkened = cv2.LUT(gray_img, table).astype(np.float32)
+    # 3. 查表非线性压黑
+    table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    darkened = cv2.LUT(enhanced_gray, table).astype(np.float32)
 
-    # 2. 动态色阶拉伸与透背印杂色滤除
+    # 4. 白场推平（透背印痕推到纯白 255，字骨压到 0）
     v_out = np.clip((darkened - black_cut) / (white_cut - black_cut) * 255.0, 0, 255).astype(np.uint8)
-    v_out[v_out >= (white_cut + 10)] = 255
+    v_out[v_out >= 225] = 255
 
-    # 3. 闭运算紧致笔画，修复宋体细横折与括号断笔
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    dense = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel)
+    # 5. 微闭运算修复发虚笔画，消除断笔
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    closed = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel)
 
-    # 4. 高频边缘锐化反差增益
-    blur = cv2.GaussianBlur(dense, (0, 0), 1.0)
-    crisp = cv2.addWeighted(dense, 1.0 + sharp_amt, blur, -sharp_amt, 0)
-    return crisp
+    # 6. 微膨胀（白底腐蚀）0.4 个像素，文字饱满圆润、不发虚
+    kernel_thicken = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+    eroded = cv2.erode(closed, kernel_thicken, iterations=1)
+    result = cv2.addWeighted(closed, 0.5, eroded, 0.5, 0)
+
+    return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
 
 def camscanner_core_render(img, is_color=False, density="dark"):
-    """
-    极清饱满除法归一化：
-    支持浓黑度档位与彩色保真增益
-    """
     if img is None:
         return None
 
-    # 1. 快速切除黑边与外围杂质
+    # 1. 切边与清除四周黑块
     img = smart_clean_page_borders_fast(img)
     h, w = img.shape[:2]
 
-    # 2. 双尺度全局光照底色分离 (微缩图 320px 算底，速度 < 400ms)
+    # 2. 320px 超轻量尺度计算背景照度图
     tiny_scale = 320.0 / max(h, w)
     tiny_img = cv2.resize(img, (int(w * tiny_scale), int(h * tiny_scale)), interpolation=cv2.INTER_NEAREST)
     bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
     bg = cv2.resize(bg_tiny, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    # 3. 照度除法归一化，彻底消除泛黄与光照阴影
+    # 3. 照度除法归一，抹平黄色纸底与背光
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        # ================= 极清饱满黑白模式 (动态文字浓黑加粗 + 抗透背) =================
-        # 取通道最小值锁定淡色彩色题号与红墨水批改
-        min_gray = np.min(norm, axis=2)
-        result = enhance_text_density(min_gray, density=density)
-        return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+        return render_camscanner_black_and_white(norm, density=density)
 
-    # ================= 纯正彩色模式 (红笔批注更鲜艳，微灰底推纯白) =================
+    # 彩色模式：保护色彩饱和度
     hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
-
     color_mask = (s > 18) & (v > 38)
-    # 彩色区域饱和度增益 30%
     s_boost = np.clip(s * 1.30, 0, 255)
     hsv[:, :, 1] = np.where(color_mask, s_boost, s)
     v_stretched = np.clip((v - 25.0) / (215.0 - 25.0) * 255.0, 0, 255)
@@ -138,8 +143,7 @@ def camscanner_core_render(img, is_color=False, density="dark"):
     result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
     gray_check = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
     result[gray_check >= 230] = [255, 255, 255]
-
-    return apply_usm_sharpen(result, amount=1.1, radius=1)
+    return result
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", density="dark"):
     try:
@@ -151,8 +155,9 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", density="dark
             return raw_bytes
 
         h, w = img.shape[:2]
-        if max(h, w) > 1280:
-            scale = 1280.0 / max(h, w)
+        # 提高预览分辨率上限至 1440px，确保 PC 端视窗缩放时字迹锐利
+        if max(h, w) > 1440:
+            scale = 1440.0 / max(h, w)
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
         is_color = (str(color_mode).strip().lower() == "color")
@@ -170,7 +175,6 @@ class EnhancePreviewHandler(BaseHandler):
         try:
             files = self.request.files.get("file", [])
             color_mode = self.get_argument("color_mode", "monochrome").strip()
-            # 接收前端传递的浓黑度档位 (normal / dark / ultra)
             density = self.get_argument("density", "dark").strip().lower()
 
             if not files:
