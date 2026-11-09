@@ -1,5 +1,6 @@
 /**
- * CUPS 智能工作台前端核心驱动 (app.js) - 极速流式、防并发过载、支持浓黑度与黑白灰度修复版
+ * CUPS 智能工作台前端核心驱动 (app.js)
+ * 具备功能：灰度实时修复、强力清除缓存档位切换、流式出纸、大屏自适应渲染
  */
 
 function logToConsole(msg, level = "info") {
@@ -180,7 +181,7 @@ window.EnhanceEngine = {
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
 
-        // 核心修复：未开启增强(或增强图尚未加载完成)且处于“黑白模式”时，主动将绘制内容转换为灰度，防止显示彩色
+        // 核心修复：未开启增强或增强未载入时，黑白模式下将画布转为纯正灰度，绝不显现彩色原底
         if (colorMode === "monochrome" && (!enhance || !isEnhancedLoaded)) {
             const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imgData.data;
@@ -274,7 +275,7 @@ window.EnhanceEngine = {
     }
 };
 
-// ==================== 2. 打印交互管理器 (流式出纸与防并发拥堵版) ====================
+// ==================== 2. 打印交互管理器 ====================
 window.PrintManager = {
     colorMode: "monochrome",
     orientation: "portrait",
@@ -348,16 +349,27 @@ window.PrintManager = {
         this.triggerCurrentEnhance();
         EnhanceEngine.render();
     },
+
+    // 核心修复：浓黑度变更时彻底粉碎缓存，实现瞬时重新请求与刷新
     onDensityChange: function() {
         const d = document.getElementById("p-density")?.value || "dark";
         logToConsole(`文字浓黑度切换为: ${d === 'ultra' ? '极度深黑' : (d === 'dark' ? '浓黑加粗' : '标准清晰')}`);
-        // 档位发生变更时，清除已有缓存，重新向后端发起增强请求
+        
         if (EnhanceEngine.currentRawImage) {
             delete EnhanceEngine.currentRawImage._enhancedMono;
             delete EnhanceEngine.currentRawImage._enhancedColor;
         }
+        this.loadedImages.forEach(item => {
+            if (item.img) {
+                delete item.img._enhancedMono;
+                delete item.img._enhancedColor;
+            }
+        });
+
+        this._enhancingToken++;
         this.triggerCurrentEnhance();
     },
+
     onMergeChange: function() {
         logToConsole(`多图同页拼版: ${this.isMultiMergeEnabled() ? "开启" : "关闭"}`);
         EnhanceEngine.render();
@@ -374,7 +386,6 @@ window.PrintManager = {
         });
 
         this.updateFileListUI();
-        // 关键：选完多张后，只装载最新的一张，杜绝多图同时并发打死 CPU！
         this.loadSelectedFile(this.selectedFiles.length - 1);
     },
 
@@ -396,7 +407,6 @@ window.PrintManager = {
         });
     },
 
-    // 核心优化：只对当前视窗内正在呈现的单张图片请求增强，且当前是什么模式就只算什么模式！
     triggerCurrentEnhance: async function() {
         const isEnhanceOn = (document.getElementById("p-enhance")?.value === "true");
         if (!isEnhanceOn || !EnhanceEngine.currentRawImage) return;
@@ -406,7 +416,6 @@ window.PrintManager = {
         if (!file || file.name.toLowerCase().endsWith(".pdf")) return;
 
         const currentMode = this.colorMode;
-        // 如果当前模式已经有缓存，直接用，不重复发起网络请求
         if (currentMode === "color" && rawImg._enhancedColor) return;
         if (currentMode === "monochrome" && rawImg._enhancedMono) return;
 
@@ -414,7 +423,7 @@ window.PrintManager = {
         try {
             const t0 = performance.now();
             const enhImg = await this.fetchEnhancedImage(file, currentMode);
-            if (thisToken !== this._enhancingToken) return; // 已切换到其他图，丢弃过期计算
+            if (thisToken !== this._enhancingToken) return;
 
             if (currentMode === "color") {
                 rawImg._enhancedColor = enhImg;
@@ -523,7 +532,6 @@ window.PrintManager = {
         if (tip) tip.style.display = "block";
     },
 
-    // 核心：流式逐张派发出纸，打一张消一张，按钮实时反馈进度类似 [1/4]
     submitJob: async function() {
         if (this.isPrinting) return;
 
@@ -585,7 +593,6 @@ window.PrintManager = {
         btn.disabled = true;
         alertBox.innerHTML = "";
 
-        // 模式 A: 多图同页拼版
         if (isMultiMerge && this.selectedFiles.length > 1) {
             const total = this.selectedFiles.length;
             btn.innerText = `⏳ 正在拼版单页 (${total}张)...`;
@@ -623,7 +630,7 @@ window.PrintManager = {
             return;
         }
 
-        // 模式 B: 独立多图流式出纸 (打印成功一张，立即从任务列表删除一张)
+        // 独立多图流式出纸 (打一张消一张)
         const total = this.selectedFiles.length;
         let successCount = 0;
         let errorCount = 0;
@@ -1113,7 +1120,6 @@ window.DashboardService = {
         }
     },
 
-    // 核心保护：严格限制为必须用户手动点击才执行扫描
     loadDiscoveredDevices: async function(isManual = false) {
         if (isManual !== true) return;
 
@@ -1151,7 +1157,6 @@ window.DashboardService = {
         }
     },
 
-    // 彻底切断任何调用 searchDrivers 的代码，根除死循环刷屏
     onDiscoveredDeviceSelect: function(selectEl) {
         if (!selectEl) return;
         const val = selectEl.value;
