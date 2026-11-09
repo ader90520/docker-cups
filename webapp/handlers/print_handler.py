@@ -25,81 +25,55 @@ def ensure_upload_dir():
     except Exception as e:
         print(f"[UploadDir] 创建目录失败: {e}", flush=True)
 
-def smart_clean_page_borders_print(img):
-    """打印端切边：强力消除顶部黑折痕、外露桌面与暗角"""
+def safe_clean_page_borders(img):
+    """打印端安全边缘清理：仅内裁 0.5%，绝对保全题号与标题"""
     if img is None:
         return img
     h, w = img.shape[:2]
-    scale = 360.0 / max(h, w)
-    small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    px = max(1, int(w * 0.005))
+    py = max(1, int(h * 0.005))
+    cropped = img[py:h-py, px:w-px]
+    return cv2.copyMakeBorder(cropped, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(blurred, 40, 150)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    dilated = cv2.dilate(edged, kernel, iterations=2)
+def render_natural_pure_white(norm_img, is_color=False, density="dark"):
+    """
+    打印端高保真去底：
+    保留抗锯齿平滑边缘，杜绝毛刺、断笔和干瘪发虚
+    """
+    if not is_color:
+        gray = np.min(norm_img, axis=2).astype(np.float32)
+        
+        if density == "ultra":
+            white_thresh = 195.0
+            gamma = 0.80
+        elif density == "normal":
+            white_thresh = 215.0
+            gamma = 0.95
+        else: # dark (推荐)
+            white_thresh = 205.0
+            gamma = 0.88
 
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    crop_x1, crop_y1, crop_x2, crop_y2 = 0, 0, w, h
-    found = False
+        gray = np.clip(gray, 0, 255)
+        darkened = np.power(gray / 255.0, 1.0 / gamma) * 255.0
 
-    if contours:
-        cnts = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
-        for c in cnts:
-            x, y, cw, ch = cv2.boundingRect(c)
-            if cw > small.shape[1] * 0.40 and ch > small.shape[0] * 0.40:
-                rx, ry, rcw, rch = int(x / scale), int(y / scale), int(cw / scale), int(ch / scale)
-                pad_x = int(rcw * 0.035)
-                pad_y = int(rch * 0.035)
-                crop_x1 = max(0, rx + pad_x)
-                crop_y1 = max(0, ry + pad_y)
-                crop_x2 = min(w, rx + rcw - pad_x)
-                crop_y2 = min(h, ry + rch - pad_y)
-                found = True
-                break
+        v_out = np.where(darkened >= white_thresh, 255.0, darkened * (255.0 / white_thresh))
+        result = np.clip(v_out, 0, 255).astype(np.uint8)
+        result[result >= 238] = 255
 
-    if not found:
-        pad_x, pad_y = int(w * 0.03), int(h * 0.03)
-        crop_x1, crop_y1 = pad_x, pad_y
-        crop_x2, crop_y2 = w - pad_x, h - pad_y
+        return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+    else:
+        hsv = cv2.cvtColor(norm_img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        s = hsv[:, :, 1]
+        v = hsv[:, :, 2]
 
-    cropped = img[crop_y1:crop_y2, crop_x1:crop_x2]
-    return cv2.copyMakeBorder(cropped, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-
-def render_crisp_monochrome(norm_img, density="dark"):
-    min_gray = np.min(norm_img, axis=2)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced_gray = clahe.apply(min_gray)
-
-    if density == "ultra":
-        gamma = 0.55
-        black_cut = 10.0
-        white_cut = 215.0
-    elif density == "normal":
-        gamma = 0.80
-        black_cut = 25.0
-        white_cut = 205.0
-    else:  # dark
-        gamma = 0.65
-        black_cut = 15.0
-        white_cut = 210.0
-
-    table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
-    darkened = cv2.LUT(enhanced_gray, table).astype(np.float32)
-
-    v_out = np.clip((darkened - black_cut) / (white_cut - black_cut) * 255.0, 0, 255).astype(np.uint8)
-    v_out[v_out >= 225] = 255
-
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    closed = cv2.morphologyEx(v_out, cv2.MORPH_CLOSE, kernel_close)
-
-    kernel_thicken = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
-    eroded = cv2.erode(closed, kernel_thicken, iterations=1)
-    result = cv2.addWeighted(closed, 0.45, eroded, 0.55, 0)
-
-    return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
+        color_mask = (s > 15) & (v > 35)
+        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.20, 0, 255), s)
+        hsv[:, :, 2] = np.where(color_mask, v, np.where(v >= 205.0, 255.0, v * (255.0 / 205.0)))
+        
+        result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        result[gray_chk >= 238] = [255, 255, 255]
+        return result
 
 def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", density="dark"):
     if not HAVE_OPENCV:
@@ -110,50 +84,33 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
         if raw_img is None:
             return False
 
-        # 1. 强力切边，彻底切除非纸面黑区
-        img = smart_clean_page_borders_print(raw_img)
+        # 1. 安全边框处理（彻底解决标题和题号被削掉的问题）
+        img = safe_clean_page_borders(raw_img)
         h, w = img.shape[:2]
 
-        # 2. 一步到位缩放到出纸清晰度（2600px），避免二次放大
+        # 2. 控制在 2600px 最佳物理印刷分辨率
         max_dim = max(h, w)
         if max_dim > 2600:
             scale = 2600.0 / max_dim
             calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-        elif max_dim < 1800:
-            scale = 2200.0 / max_dim
-            calc_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         else:
             calc_img = img
 
         ch, cw = calc_img.shape[:2]
 
-        # 3. 320px 背景光照估计
+        # 3. 双尺度光照分离
         tiny_scale = 320.0 / max(ch, cw)
         tiny_img = cv2.resize(calc_img, (int(cw * tiny_scale), int(ch * tiny_scale)), interpolation=cv2.INTER_NEAREST)
         bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
         bg = cv2.resize(bg_tiny, (cw, ch), interpolation=cv2.INTER_LINEAR)
 
-        # 4. 照度除法归一
+        # 4. 照度除法
         norm = cv2.divide(calc_img, bg, scale=255)
 
         is_color = (str(color_mode).strip().lower() == "color")
+        result = render_natural_pure_white(norm, is_color=is_color, density=density)
 
-        if not is_color:
-            result = render_crisp_monochrome(norm, density=density)
-        else:
-            hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
-            s_c = hsv[:, :, 1]
-            v_c = hsv[:, :, 2]
-            color_mask = (s_c > 18) & (v_c > 38)
-            s_c = np.where(color_mask, np.clip(s_c * 1.30, 0, 255), s_c)
-            v_c = np.where(color_mask, v_c, np.clip((v_c - 25.0) / (215.0 - 25.0) * 255.0, 0, 255))
-            hsv[:, :, 1] = s_c
-            hsv[:, :, 2] = v_c
-            result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-            gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-            result[gray_chk >= 230] = [255, 255, 255]
-
-        # 无损写入临时文件，交给 CUPS
+        # 5. 无损格式送给 CUPS，确保打印字体与原图一样圆润饱满
         cv2.imwrite(out_path, result)
         return True
     except Exception as e:
@@ -287,7 +244,7 @@ class PrintHandler(BaseHandler):
                     t0 = time.time()
                     if process_image_fast_enhance(tmp_src, tmp_enhanced, color_mode=color_mode, density=density):
                         target_to_print = tmp_enhanced
-                        print(f"[FastEnhance] 出纸切边与文字增厚完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
+                        print(f"[FastEnhance] 出纸保真去底完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
 
                 ok, jid = self.execute_lp(printer, copies, target_to_print, extra_opts=extra_opts, timeout=20, auto_unlink=False)
                 if ok:
