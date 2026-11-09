@@ -26,7 +26,7 @@ def ensure_upload_dir():
         print(f"[UploadDir] 创建目录失败: {e}", flush=True)
 
 def detect_and_crop_paper_content(img):
-    """打印端切边：基于亮度投影彻底切除非纸面杂质（桌角、暗边、多余杂物）"""
+    """打印端切边：基于亮度投影彻底切除非纸面杂质"""
     if img is None:
         return img
 
@@ -92,22 +92,34 @@ def render_crisp_pure_document(img, is_color=False, density="dark"):
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        min_gray = np.min(norm, axis=2).astype(np.float32)
+        gray = np.min(norm, axis=2).astype(np.float32)
 
+        # 显著拉开档位反差，使肉眼及出纸对比极其明显
         if density == "ultra":
-            gamma = 0.70
-            cutoff = 210.0
+            black_point = 55.0
+            white_point = 195.0
+            gamma = 0.65
+            extra_erode = True
         elif density == "normal":
-            gamma = 0.90
-            cutoff = 225.0
-        else: # dark (推荐)
+            black_point = 10.0
+            white_point = 220.0
+            gamma = 0.95
+            extra_erode = False
+        else:  # dark (推荐)
+            black_point = 35.0
+            white_point = 210.0
             gamma = 0.80
-            cutoff = 218.0
+            extra_erode = False
 
-        darkened = np.power(np.clip(min_gray, 0, 255) / 255.0, 1.0 / gamma) * 255.0
-        v_out = np.where(darkened >= cutoff, 255.0, darkened * (255.0 / cutoff))
+        scaled = np.clip((gray - black_point) / (white_point - black_point), 0.0, 1.0)
+        v_out = np.power(scaled, gamma) * 255.0
         result = np.clip(v_out, 0, 255).astype(np.uint8)
-        result[result >= 238] = 255
+        result[result >= 235] = 255
+
+        if extra_erode:
+            kernel = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+            eroded = cv2.erode(result, kernel, iterations=1)
+            result = cv2.addWeighted(result, 0.4, eroded, 0.6, 0)
 
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     else:
@@ -116,12 +128,13 @@ def render_crisp_pure_document(img, is_color=False, density="dark"):
         v = hsv[:, :, 2]
 
         color_mask = (s > 15) & (v > 35)
-        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.25, 0, 255), s)
-        hsv[:, :, 2] = np.where(color_mask, v, np.where(v >= 210.0, 255.0, v * (255.0 / 210.0)))
+        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.30, 0, 255), s)
+        v_stretched = np.clip((v - 25.0) / (215.0 - 25.0) * 255.0, 0, 255)
+        hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
 
         result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
         gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        result[gray_chk >= 238] = [255, 255, 255]
+        result[gray_chk >= 235] = [255, 255, 255]
         return result
 
 def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", density="dark"):
@@ -133,7 +146,7 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
         if raw_img is None:
             return False
 
-        # 1. 亮度投影切边，彻底清除多余桌面
+        # 1. 投影切边彻底清除多余桌面
         img = detect_and_crop_paper_content(raw_img)
         h, w = img.shape[:2]
 
@@ -146,7 +159,7 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
         is_color = (str(color_mode).strip().lower() == "color")
         result = render_crisp_pure_document(img, is_color=is_color, density=density)
 
-        # 3. 无损 PNG 输出送给 CUPS，确保笔画圆润深沉
+        # 3. 无损 PNG 输出，送给 CUPS
         cv2.imwrite(out_path, result)
         return True
     except Exception as e:
