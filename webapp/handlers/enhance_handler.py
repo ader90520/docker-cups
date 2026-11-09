@@ -86,8 +86,10 @@ def detect_and_crop_paper_content(img):
 
 def render_crisp_pure_document(img, is_color=False, density="dark"):
     """
-    全能王级自然保真白底算法：
-    将泛黄、灰底完全漂白为 #FFFFFF，同时将文字骨架下沉加深，比原图更黑更圆润
+    全能王级自然保真白底算法（深度加黑与笔骨饱满优化）：
+    1. 彻底解决文字被除法冲淡泛白的问题
+    2. 显著拉开三档文字浓黑度差异，所选即所见
+    3. 保留抗锯齿平滑边缘，文字圆润饱满绝不断笔
     """
     h, w = img.shape[:2]
 
@@ -101,41 +103,52 @@ def render_crisp_pure_document(img, is_color=False, density="dark"):
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        min_gray = np.min(norm, axis=2).astype(np.float32)
+        gray = np.min(norm, axis=2).astype(np.float32)
 
-        # 浓黑度调节档位
+        # 显著拉大档位反差与黑场沉降点，确保切换档位时肉眼变化极其明显
         if density == "ultra":
-            gamma = 0.70
-            cutoff = 210.0
+            black_point = 55.0      # 大幅下沉黑场，浅灰字直接变纯黑
+            white_point = 195.0     # 强力阻断透背印痕
+            gamma = 0.65            # 显著加深
+            extra_thicken = True    # 笔划物理增粗 0.5 像素
         elif density == "normal":
-            gamma = 0.90
-            cutoff = 225.0
-        else: # dark (推荐)
+            black_point = 10.0      # 温和自然
+            white_point = 220.0
+            gamma = 0.95
+            extra_thicken = False
+        else:  # dark (推荐档)
+            black_point = 35.0      # 适中浓黑饱满
+            white_point = 210.0
             gamma = 0.80
-            cutoff = 218.0
+            extra_thicken = False
 
-        # 3. 伽马非线性文字加黑（字骨沉黑，不伤白底）
-        darkened = np.power(np.clip(min_gray, 0, 255) / 255.0, 1.0 / gamma) * 255.0
-
-        # 4. 软色阶推白：高于 cutoff 的灰底直接推至 255 纯白，深色笔画保持完整灰阶
-        v_out = np.where(darkened >= cutoff, 255.0, darkened * (255.0 / cutoff))
+        # 3. 非线性自适应色阶映射：黑场强力下压，白场推平，杜绝文字整体提亮泛白
+        scaled = np.clip((gray - black_point) / (white_point - black_point), 0.0, 1.0)
+        v_out = np.power(scaled, gamma) * 255.0
         result = np.clip(v_out, 0, 255).astype(np.uint8)
-        result[result >= 238] = 255
+        result[result >= 235] = 255
+
+        # 4. 极度深黑档位：对字骨进行物理增粗，彻底根治断笔与发虚
+        if extra_thicken:
+            kernel = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
+            eroded = cv2.erode(result, kernel, iterations=1)
+            result = cv2.addWeighted(result, 0.4, eroded, 0.6, 0)
 
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     else:
-        # 彩色模式：色彩饱和度保真
+        # 彩色模式：色彩饱和度保真 + 底色漂白
         hsv = cv2.cvtColor(norm, cv2.COLOR_BGR2HSV).astype(np.float32)
         s = hsv[:, :, 1]
         v = hsv[:, :, 2]
 
         color_mask = (s > 15) & (v > 35)
-        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.25, 0, 255), s)
-        hsv[:, :, 2] = np.where(color_mask, v, np.where(v >= 210.0, 255.0, v * (255.0 / 210.0)))
+        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.30, 0, 255), s)
+        v_stretched = np.clip((v - 25.0) / (215.0 - 25.0) * 255.0, 0, 255)
+        hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
 
         result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
         gray_chk = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        result[gray_chk >= 238] = [255, 255, 255]
+        result[gray_chk >= 235] = [255, 255, 255]
         return result
 
 def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", density="dark"):
@@ -150,7 +163,7 @@ def enhance_camscanner_precise(raw_bytes, color_mode="monochrome", density="dark
         # 1. 先进行亮度投影切边，彻底切除上下的桌面和杂物
         img = detect_and_crop_paper_content(img)
 
-        # 2. 预览分辨率控制在 1600px，保证 PC 端视窗清晰
+        # 2. 预览分辨率控制在 1600px，保证 PC 端视窗清晰锐利
         h, w = img.shape[:2]
         if max(h, w) > 1600:
             scale = 1600.0 / max(h, w)
