@@ -81,6 +81,24 @@ def detect_and_crop_paper_content(img):
     cropped = img[y1:y2, x1:x2]
     return cv2.copyMakeBorder(cropped, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
+def heal_broken_strokes_and_sharpen(gray_u8, density="dark"):
+    """
+    出纸端断笔桥接发实与反虚锐化：
+    横纵微线性闭运算修补断线，不加粗字形，保持苗条清晰
+    """
+    k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1))
+    k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
+    healed_h = cv2.morphologyEx(gray_u8, cv2.MORPH_CLOSE, k_h)
+    healed_v = cv2.morphologyEx(gray_u8, cv2.MORPH_CLOSE, k_v)
+    healed = np.minimum(healed_h, healed_v)
+
+    blend_ratio = 0.75 if density == "ultra" else (0.55 if density == "dark" else 0.30)
+    merged = cv2.addWeighted(healed, blend_ratio, gray_u8, 1.0 - blend_ratio, 0)
+
+    blur = cv2.GaussianBlur(merged, (0, 0), 1.0)
+    crisp = cv2.addWeighted(merged, 1.25, blur, -0.25, 0)
+    return crisp
+
 def render_vector_like_document(img, is_color=False, density="dark"):
     h, w = img.shape[:2]
 
@@ -92,28 +110,26 @@ def render_vector_like_document(img, is_color=False, density="dark"):
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        gray = np.min(norm, axis=2).astype(np.float32)
+        gray = np.min(norm, axis=2)
+        healed_gray = heal_broken_strokes_and_sharpen(gray, density=density).astype(np.float32)
 
         if density == "ultra":
-            bp = 45.0
+            bp = 50.0
             wp = 195.0
-            gamma = 0.85
+            gamma = 0.78
         elif density == "normal":
             bp = 20.0
             wp = 215.0
-            gamma = 1.05
-        else: # dark (推荐)
-            bp = 32.0
+            gamma = 1.00
+        else:  # dark (推荐)
+            bp = 35.0
             wp = 205.0
-            gamma = 0.95
+            gamma = 0.88
 
-        stretched = np.clip((gray - bp) / (wp - bp), 0.0, 1.0)
+        stretched = np.clip((healed_gray - bp) / (wp - bp), 0.0, 1.0)
         v_out = np.power(stretched, gamma) * 255.0
         result = np.clip(v_out, 0, 255).astype(np.uint8)
         result[result >= 235] = 255
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        result = cv2.morphologyEx(result, cv2.MORPH_CLOSE, kernel)
 
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     else:
@@ -287,7 +303,7 @@ class PrintHandler(BaseHandler):
                     t0 = time.time()
                     if process_image_fast_enhance(tmp_src, tmp_enhanced, color_mode=color_mode, density=density):
                         target_to_print = tmp_enhanced
-                        print(f"[FastEnhance] 出纸矢量化黑化完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
+                        print(f"[FastEnhance] 出纸断笔桥接发实完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
 
                 ok, jid = self.execute_lp(printer, copies, target_to_print, extra_opts=extra_opts, timeout=20, auto_unlink=False)
                 if ok:
