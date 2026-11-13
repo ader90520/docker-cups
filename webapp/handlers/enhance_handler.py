@@ -71,10 +71,33 @@ def detect_and_crop_paper_content(img):
     cropped = img[y1:y2, x1:x2]
     return cv2.copyMakeBorder(cropped, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
+def heal_broken_strokes_and_sharpen(gray_u8, density="dark"):
+    """
+    专治原图发虚、断笔、浅灰断线：
+    1. 横纵微线性闭运算，把发虚断口自动桥接发实，且不让字体变胖
+    2. 局部反差压黑，让淡字骨沉黑清晰
+    """
+    # 1. 在白底黑字中，灰度闭运算（MORPH_CLOSE）会将夹在深色笔画之间的浅灰断缝填充为深色
+    # 使用极细的 1x2 纵向核与 2x1 横向核，只修补断笔，绝不增加笔画整体宽度
+    k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1))
+    k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
+    healed_h = cv2.morphologyEx(gray_u8, cv2.MORPH_CLOSE, k_h)
+    healed_v = cv2.morphologyEx(gray_u8, cv2.MORPH_CLOSE, k_v)
+    # 取两者最小值（最黑实的部分），把横竖断线全部连上
+    healed = np.minimum(healed_h, healed_v)
+
+    # 2. 与原图按比例融合，保留圆润自然的抗锯齿边
+    blend_ratio = 0.75 if density == "ultra" else (0.55 if density == "dark" else 0.30)
+    merged = cv2.addWeighted(healed, blend_ratio, gray_u8, 1.0 - blend_ratio, 0)
+
+    # 3. 轻度高频边缘收紧（Unsharp Mask），消除拍摄失焦带来的发虚雾感
+    blur = cv2.GaussianBlur(merged, (0, 0), 1.0)
+    crisp = cv2.addWeighted(merged, 1.25, blur, -0.25, 0)
+    return crisp
+
 def render_vector_like_document(img, is_color=False, density="dark"):
     """
-    矢量级纤细高清文本引擎：
-    不加粗笔画，保持字体苗条骨感；高反差锁定笔锋黑度，线条连续不断
+    矢量级纤细高清文本引擎（含原图发虚断线发实修复）
     """
     h, w = img.shape[:2]
 
@@ -84,37 +107,33 @@ def render_vector_like_document(img, is_color=False, density="dark"):
     bg_tiny = cv2.GaussianBlur(tiny_img, (0, 0), sigmaX=8, sigmaY=8)
     bg = cv2.resize(bg_tiny, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    # 2. 照度归一消除纸张泛黄
+    # 2. 照度归一消除纸张泛黄与阴影
     norm = cv2.divide(img, bg, scale=255)
 
     if not is_color:
-        gray = np.min(norm, axis=2).astype(np.float32)
+        gray = np.min(norm, axis=2)
 
-        # 档位精细控制（调整的是反差锐度，绝不加粗字体）
+        # 3. 针对原图发虚断线进行方向性桥接发实
+        healed_gray = heal_broken_strokes_and_sharpen(gray, density=density).astype(np.float32)
+
+        # 4. 档位阶调控制（拉黑浅灰字骨，推平白底，保持字体苗条）
         if density == "ultra":
-            bp = 45.0   # 黑场截断点
-            wp = 195.0  # 白场截断点
-            gamma = 0.85
+            bp = 50.0   # 强力压黑浅灰断字
+            wp = 195.0  # 推平透背
+            gamma = 0.78
         elif density == "normal":
             bp = 20.0
             wp = 215.0
-            gamma = 1.05
-        else: # dark (推荐)
-            bp = 32.0
+            gamma = 1.00
+        else:  # dark (推荐)
+            bp = 35.0
             wp = 205.0
-            gamma = 0.95
+            gamma = 0.88
 
-        # 3. 线性下沉黑场与白场推平
-        stretched = np.clip((gray - bp) / (wp - bp), 0.0, 1.0)
-
-        # 4. S 型高反差阶调曲线：字骨直接归零沉黑，背景推白，仅留极薄边缘抗锯齿（字体纤细锐利）
+        stretched = np.clip((healed_gray - bp) / (wp - bp), 0.0, 1.0)
         v_out = np.power(stretched, gamma) * 255.0
         result = np.clip(v_out, 0, 255).astype(np.uint8)
         result[result >= 235] = 255
-
-        # 5. 1像素微弱结构微闭运算：仅用于修复 0.5px 极小断线，绝不产生物理粗化
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        result = cv2.morphologyEx(result, cv2.MORPH_CLOSE, kernel)
 
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     else:
