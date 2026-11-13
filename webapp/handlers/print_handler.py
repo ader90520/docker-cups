@@ -81,7 +81,7 @@ def detect_and_crop_paper_content(img):
     cropped = img[y1:y2, x1:x2]
     return cv2.copyMakeBorder(cropped, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
-def render_crisp_pure_document(img, is_color=False, density="dark"):
+def render_vector_like_document(img, is_color=False, density="dark"):
     h, w = img.shape[:2]
 
     tiny_scale = 320.0 / max(h, w)
@@ -94,32 +94,26 @@ def render_crisp_pure_document(img, is_color=False, density="dark"):
     if not is_color:
         gray = np.min(norm, axis=2).astype(np.float32)
 
-        # 显著拉开档位反差，使肉眼及出纸对比极其明显
         if density == "ultra":
-            black_point = 55.0
-            white_point = 195.0
-            gamma = 0.65
-            extra_erode = True
+            bp = 45.0
+            wp = 195.0
+            gamma = 0.85
         elif density == "normal":
-            black_point = 10.0
-            white_point = 220.0
+            bp = 20.0
+            wp = 215.0
+            gamma = 1.05
+        else: # dark (推荐)
+            bp = 32.0
+            wp = 205.0
             gamma = 0.95
-            extra_erode = False
-        else:  # dark (推荐)
-            black_point = 35.0
-            white_point = 210.0
-            gamma = 0.80
-            extra_erode = False
 
-        scaled = np.clip((gray - black_point) / (white_point - black_point), 0.0, 1.0)
-        v_out = np.power(scaled, gamma) * 255.0
+        stretched = np.clip((gray - bp) / (wp - bp), 0.0, 1.0)
+        v_out = np.power(stretched, gamma) * 255.0
         result = np.clip(v_out, 0, 255).astype(np.uint8)
         result[result >= 235] = 255
 
-        if extra_erode:
-            kernel = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.uint8)
-            eroded = cv2.erode(result, kernel, iterations=1)
-            result = cv2.addWeighted(result, 0.4, eroded, 0.6, 0)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        result = cv2.morphologyEx(result, cv2.MORPH_CLOSE, kernel)
 
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     else:
@@ -128,8 +122,8 @@ def render_crisp_pure_document(img, is_color=False, density="dark"):
         v = hsv[:, :, 2]
 
         color_mask = (s > 15) & (v > 35)
-        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.30, 0, 255), s)
-        v_stretched = np.clip((v - 25.0) / (215.0 - 25.0) * 255.0, 0, 255)
+        hsv[:, :, 1] = np.where(color_mask, np.clip(s * 1.25, 0, 255), s)
+        v_stretched = np.clip((v - 25.0) / (210.0 - 25.0) * 255.0, 0, 255)
         hsv[:, :, 2] = np.where(color_mask, v, v_stretched)
 
         result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
@@ -146,20 +140,20 @@ def process_image_fast_enhance(in_path, out_path, color_mode="monochrome", densi
         if raw_img is None:
             return False
 
-        # 1. 投影切边彻底清除多余桌面
+        # 1. 投影切边消除暗边
         img = detect_and_crop_paper_content(raw_img)
         h, w = img.shape[:2]
 
-        # 2. 一次性保持 2600px 高分辨率输出
+        # 2. 原生保持 2600px 渲染尺寸，不额外缩放
         max_dim = max(h, w)
         if max_dim > 2600:
             scale = 2600.0 / max_dim
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
         is_color = (str(color_mode).strip().lower() == "color")
-        result = render_crisp_pure_document(img, is_color=is_color, density=density)
+        result = render_vector_like_document(img, is_color=is_color, density=density)
 
-        # 3. 无损 PNG 输出，送给 CUPS
+        # 3. 无损 PNG 交付 CUPS
         cv2.imwrite(out_path, result)
         return True
     except Exception as e:
@@ -293,7 +287,7 @@ class PrintHandler(BaseHandler):
                     t0 = time.time()
                     if process_image_fast_enhance(tmp_src, tmp_enhanced, color_mode=color_mode, density=density):
                         target_to_print = tmp_enhanced
-                        print(f"[FastEnhance] 出纸投影切边与文字保真完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
+                        print(f"[FastEnhance] 出纸矢量化黑化完成，耗时: {round((time.time()-t0)*1000, 1)}ms", flush=True)
 
                 ok, jid = self.execute_lp(printer, copies, target_to_print, extra_opts=extra_opts, timeout=20, auto_unlink=False)
                 if ok:
